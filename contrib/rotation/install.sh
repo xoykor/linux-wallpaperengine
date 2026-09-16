@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+BIN_DIR="${HOME}/.local/bin"
+DATA_DIR="${HOME}/.local/share/linux-wallpaperengine"
+SYSTEMD_DIR="${HOME}/.config/systemd/user"
+
+install -Dm755 "${ROOT}/contrib/rotation/wallpaper-engine-rotate.py" \
+    "${BIN_DIR}/wallpaper-engine-rotate.py"
+install -Dm644 "${ROOT}/contrib/rotation/wallpaper_pause.py" \
+    "${BIN_DIR}/wallpaper_pause.py"
+install -Dm644 "${ROOT}/contrib/rotation/pause.js" \
+    "${DATA_DIR}/pause.js"
+install -Dm644 "${ROOT}/contrib/rotation/linux-wallpaperengine-rotation.service" \
+    "${SYSTEMD_DIR}/linux-wallpaperengine-rotation.service"
+
+systemctl --user daemon-reload
+systemctl --user enable --now linux-wallpaperengine-rotation.service
+echo "Wallpaper rotation enabled: one Workshop wallpaper every 10 minutes."

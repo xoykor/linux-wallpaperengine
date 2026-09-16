@@ -155,6 +155,30 @@ You can use either:
 - A Steam Workshop ID (e.g. `1845706469`)
 - A path to a background folder
 
+### Automatic Steam Workshop rotation
+
+This fork includes an optional user-level systemd service that automatically
+detects supported `scene` and `video` wallpapers in the Steam Workshop and
+changes them every ten minutes. It also pauses the renderer when KDE detects a
+maximized or fullscreen window.
+
+On KDE Plasma, install and enable it from the repository root with:
+
+```bash
+./contrib/rotation/install.sh
+```
+
+The helper checks the standard Steam locations, applies the first wallpaper
+as soon as a connected screen is available, and keeps rotating at the ten
+minute cadence. Stop it with:
+
+```bash
+systemctl --user disable --now linux-wallpaperengine-rotation.service
+```
+
+The pause bridge requires the Python `dbus` and `gi` modules. The renderer
+itself can still be used normally without this optional service.
+
 ---
 
 ### What about a GUI?
