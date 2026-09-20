@@ -198,6 +198,7 @@ try:
         cmd = [
             "/usr/bin/linux-wallpaperengine",
             "--silent",
+            "--no-audio-processing",
             "--disable-mouse",
             "--fps",
             "30",
@@ -219,7 +220,13 @@ try:
 
         advance = False
         started = time.monotonic()
-        child = subprocess.Popen(cmd, start_new_session=True)
+        wp_env = dict(
+            os.environ,
+            SDL_AUDIODRIVER="dummy",
+            PULSE_SERVER="none",
+            PIPEWIRE_REMOTE="none",
+        )
+        child = subprocess.Popen(cmd, start_new_session=True, env=wp_env)
         started_at = time.time()
         save(
             "pause.json",
