@@ -14,6 +14,16 @@
 
 # 🖼️ Linux Wallpaper Engine
 
+> **Fork notice:** this repository is a fork of [Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine). The project, documentation and original implementation come from upstream unless a change is explicitly identified as fork-specific.
+
+## About this fork
+
+This fork is maintained under the GitHub fork relationship so upstream history and attribution remain visible. For upstream issues, releases, documentation changes and broad compatibility questions, check the original project first. Fork-specific changes should be evaluated against this repository's commit history before being proposed upstream.
+
+The code is distributed under **GNU General Public License v3.0**; see [LICENSE](LICENSE).
+
+
+
 Bring **Wallpaper Engine**-style live wallpapers to Linux! This project allows you to run animated wallpapers from Steam’s Wallpaper Engine right on your desktop.
 
 > ⚠️ This is an educational project that evolved into a functional OpenGL-based wallpaper engine for Linux. Expect some limitations and quirks!
