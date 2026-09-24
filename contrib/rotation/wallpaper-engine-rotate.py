@@ -198,6 +198,8 @@ try:
         cmd = [
             "/usr/bin/linux-wallpaperengine",
             "--silent",
+            # Avoid waiting for PulseAudio when PULSE_SERVER is disabled below.
+            "--noautomute",
             "--no-audio-processing",
             "--disable-mouse",
             "--fps",
