@@ -11,10 +11,11 @@ using namespace WallpaperEngine::Render;
 
 CWallpaper::CWallpaper (
     const Wallpaper& wallpaperData, RenderContext& context, AudioContext& audioContext,
-    const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
+    const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode, const glm::vec2& uvOffset,
+    const PostProcessSettings& postProcess
 ) :
     ContextAware (context), FBOProvider (nullptr), m_wallpaperData (wallpaperData), m_audioContext (audioContext),
-    m_state (scalingMode, clampMode) {
+    m_state (scalingMode, clampMode, uvOffset), m_postProcess (postProcess) {
     // generate the VAO to stop opengl from complaining
     glGenVertexArrays (1, &this->m_vaoBuffer);
     glBindVertexArray (this->m_vaoBuffer);
@@ -110,10 +111,18 @@ void CWallpaper::setupShaders () {
     sourcePointer = "#version 330\n"
 		    "precision highp float;\n"
 		    "uniform sampler2D g_Texture0;\n"
+		    "uniform float u_Saturation;\n"
+		    "uniform float u_Contrast;\n"
+		    "uniform vec3 u_BorderColour;\n"
 		    "in vec2 v_TexCoord;\n"
 		    "out vec4 out_FragColor;\n"
 		    "void main () {\n"
-		    "out_FragColor = texture (g_Texture0, v_TexCoord);\n"
+		    "vec4 tex = texture (g_Texture0, v_TexCoord);\n"
+		    "if (tex.a < 0.01) { out_FragColor = vec4 (u_BorderColour, 1.0); return; }\n"
+		    "float lum = dot (tex.rgb, vec3 (0.2126, 0.7152, 0.0722));\n"
+		    "vec3 colour = mix (vec3 (lum), tex.rgb, u_Saturation);\n"
+		    "colour = (colour - 0.5) * u_Contrast + 0.5;\n"
+		    "out_FragColor = vec4 (colour, tex.a);\n"
 		    "}";
 
     glShaderSource (fragmentShaderID, 1, &sourcePointer, nullptr);
@@ -178,6 +187,13 @@ void CWallpaper::setupShaders () {
     this->g_Texture0 = glGetUniformLocation (this->m_shader, "g_Texture0");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
+    glUseProgram (this->m_shader);
+    glUniform1f (glGetUniformLocation (this->m_shader, "u_Saturation"), this->m_postProcess.saturation);
+    glUniform1f (glGetUniformLocation (this->m_shader, "u_Contrast"), this->m_postProcess.contrast);
+    glUniform3f (
+	glGetUniformLocation (this->m_shader, "u_BorderColour"), this->m_postProcess.borderColour.r,
+	this->m_postProcess.borderColour.g, this->m_postProcess.borderColour.b
+    );
 }
 
 void CWallpaper::setDestinationFramebuffer (GLuint framebuffer) { this->m_destFramebuffer = framebuffer; }
@@ -341,23 +357,23 @@ std::shared_ptr<const CFBO> CWallpaper::getFBO () const { return this->m_sceneFB
 std::unique_ptr<CWallpaper> CWallpaper::fromWallpaper (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
     WebBrowser::WebBrowserContext* browserContext, const WallpaperState::TextureUVsScaling& scalingMode,
-    const uint32_t& clampMode
+    const uint32_t& clampMode, const glm::vec2& uvOffset, const PostProcessSettings& postProcess
 ) {
     if (wallpaper.is<Scene> ()) {
 	return std::make_unique<WallpaperEngine::Render::Wallpapers::CScene> (
-	    wallpaper, context, audioContext, scalingMode, clampMode
+	    wallpaper, context, audioContext, scalingMode, clampMode, uvOffset, postProcess
 	);
     }
 
     if (wallpaper.is<Video> ()) {
 	return std::make_unique<WallpaperEngine::Render::Wallpapers::CVideo> (
-	    wallpaper, context, audioContext, scalingMode, clampMode
+	    wallpaper, context, audioContext, scalingMode, clampMode, uvOffset, postProcess
 	);
     }
 
     if (wallpaper.is<Web> ()) {
 	return std::make_unique<WallpaperEngine::Render::Wallpapers::CWeb> (
-	    wallpaper, context, audioContext, *browserContext, scalingMode, clampMode
+	    wallpaper, context, audioContext, *browserContext, scalingMode, clampMode, uvOffset, postProcess
 	);
     }
 
