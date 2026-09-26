@@ -234,9 +234,265 @@ def _libraryfolders_paths(steamapps: Path) -> list[Path]:
     except OSError:
         return []
 
-    raw_paths = re.findall(r'"path"\\s*"([^"]+)"', text, flags=re.IGNORECASE)
+    raw_paths = re.findall(r'"path"[ \t]*"([^"]+)"', text, flags=re.IGNORECASE)
     # Older VDF files used numeric keys directly for library paths.
-    legacy_pattern = r'^\\s*"\\d+"\\s*"([^"]+)"\\s*$'
+    legacy_pattern = r'^[ \t]*"[0-9]+"[ \t]*"([^"]+)"[ \t]*
+    raw_paths.extend(re.findall(legacy_pattern, text, flags=re.MULTILINE))
+
+    result: list[Path] = []
+    for raw in raw_paths:
+        value = raw.replace("\\\\", "\\").replace('\\"', '"')
+        if not value:
+            continue
+        library = Path(value).expanduser()
+        if not library.is_absolute():
+            continue
+        result.append(library / "steamapps")
+    return result
+
+
+def steamapps_roots() -> list[Path]:
+    home = Path.home()
+    data_home = _xdg_dir("XDG_DATA_HOME", home / ".local/share")
+    primary = [
+        data_home / "Steam/steamapps",
+        home / ".steam/steam/steamapps",
+        home / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps",
+        home / "snap/steam/common/.local/share/Steam/steamapps",
+    ]
+    candidates = list(primary)
+    for steamapps in primary:
+        candidates.extend(_libraryfolders_paths(steamapps))
+    return list(dict.fromkeys(candidates))
+
+def _preview_for(project_dir: Path, raw: Any) -> str | None:
+    candidates = [raw] if isinstance(raw, str) else []
+    candidates.extend(("preview.jpg", "preview.jpeg", "preview.png", "preview.gif"))
+    directory = project_dir.resolve()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = (directory / candidate).resolve()
+        if path.is_relative_to(directory) and path.is_file():
+            return str(path)
+    return None
+
+
+def _tags_for(raw: Any) -> list[str]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, str) and item]
+    if isinstance(raw, str):
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    return []
+
+
+def scan_catalog() -> dict[str, dict[str, Any]]:
+    """Find installed scene/video Workshop projects without modifying Steam data."""
+    result: dict[str, dict[str, Any]] = {}
+    for steamapps in steamapps_roots():
+        workshop = steamapps / "workshop/content" / WORKSHOP_APP_ID
+        if not workshop.is_dir():
+            continue
+        assets = steamapps / "common/wallpaper_engine/assets"
+        try:
+            projects = sorted(workshop.glob("*/project.json"))
+        except OSError:
+            continue
+        for project in projects:
+            wallpaper_id = project.parent.name
+            if not _ID_PATTERN.fullmatch(wallpaper_id) or wallpaper_id in result:
+                continue
+            try:
+                data = json.loads(project.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            kind = str(data.get("type", "")).lower()
+            if kind not in {"scene", "video"}:
+                continue
+            raw_title = data.get("title")
+            title = raw_title.strip() if isinstance(raw_title, str) and raw_title.strip() else wallpaper_id
+            result[wallpaper_id] = {
+                "title": title,
+                "type": kind,
+                "path": str(project.parent),
+                "assets": str(assets),
+                "preview": _preview_for(project.parent, data.get("preview")),
+                "tags": _tags_for(data.get("tags")),
+            }
+    return result
+
+
+def detect_outputs() -> list[str]:
+    """Discover active outputs using an available desktop/session backend."""
+    if shutil.which("kscreen-doctor"):
+        try:
+            result = subprocess.run(
+                ["kscreen-doctor", "-j"], capture_output=True, text=True,
+                timeout=5, check=True,
+            )
+            data = json.loads(result.stdout)
+            names = [
+                output["name"] for output in data.get("outputs", [])
+                if isinstance(output, dict) and output.get("enabled")
+                and output.get("connected") and isinstance(output.get("name"), str)
+            ]
+            if names:
+                return list(dict.fromkeys(names))
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+            pass
+
+    session_type = os.environ.get("XDG_SESSION_TYPE")
+    if session_type == "wayland" or (
+        session_type != "x11"
+        and (not os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    ):
+        return []
+    if not shutil.which("xrandr"):
+        return []
+    try:
+        result = subprocess.run(
+            ["xrandr", "--query"], capture_output=True, text=True,
+            timeout=5, check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    names = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "connected":
+            names.append(parts[0])
+    return list(dict.fromkeys(names))
+, text, flags=re.MULTILINE))
+
+    result: list[Path] = []
+    for raw in raw_paths:
+        value = raw.replace(r"\\", "\\").replace(r'\"', '"')
+        if not value:
+            continue
+        library = Path(value).expanduser()
+        if not library.is_absolute():
+            continue
+        result.append(library / "steamapps")
+    return result
+
+
+def steamapps_roots() -> list[Path]:
+    home = Path.home()
+    data_home = _xdg_dir("XDG_DATA_HOME", home / ".local/share")
+    primary = [
+        data_home / "Steam/steamapps",
+        home / ".steam/steam/steamapps",
+        home / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps",
+        home / "snap/steam/common/.local/share/Steam/steamapps",
+    ]
+    candidates = list(primary)
+    for steamapps in primary:
+        candidates.extend(_libraryfolders_paths(steamapps))
+    return list(dict.fromkeys(candidates))
+
+
+def _preview_for(project_dir: Path, raw: Any) -> str | None:
+    candidates = [raw] if isinstance(raw, str) else []
+    candidates.extend(("preview.jpg", "preview.jpeg", "preview.png", "preview.gif"))
+    directory = project_dir.resolve()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = (directory / candidate).resolve()
+        if path.is_relative_to(directory) and path.is_file():
+            return str(path)
+    return None
+
+
+def _tags_for(raw: Any) -> list[str]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, str) and item]
+    if isinstance(raw, str):
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    return []
+
+
+def scan_catalog() -> dict[str, dict[str, Any]]:
+    """Find installed scene/video Workshop projects without modifying Steam data."""
+    result: dict[str, dict[str, Any]] = {}
+    for steamapps in steamapps_roots():
+        workshop = steamapps / "workshop/content" / WORKSHOP_APP_ID
+        if not workshop.is_dir():
+            continue
+        assets = steamapps / "common/wallpaper_engine/assets"
+        try:
+            projects = sorted(workshop.glob("*/project.json"))
+        except OSError:
+            continue
+        for project in projects:
+            wallpaper_id = project.parent.name
+            if not _ID_PATTERN.fullmatch(wallpaper_id) or wallpaper_id in result:
+                continue
+            try:
+                data = json.loads(project.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            kind = str(data.get("type", "")).lower()
+            if kind not in {"scene", "video"}:
+                continue
+            raw_title = data.get("title")
+            title = raw_title.strip() if isinstance(raw_title, str) and raw_title.strip() else wallpaper_id
+            result[wallpaper_id] = {
+                "title": title,
+                "type": kind,
+                "path": str(project.parent),
+                "assets": str(assets),
+                "preview": _preview_for(project.parent, data.get("preview")),
+                "tags": _tags_for(data.get("tags")),
+            }
+    return result
+
+
+def detect_outputs() -> list[str]:
+    """Discover active outputs using an available desktop/session backend."""
+    if shutil.which("kscreen-doctor"):
+        try:
+            result = subprocess.run(
+                ["kscreen-doctor", "-j"], capture_output=True, text=True,
+                timeout=5, check=True,
+            )
+            data = json.loads(result.stdout)
+            names = [
+                output["name"] for output in data.get("outputs", [])
+                if isinstance(output, dict) and output.get("enabled")
+                and output.get("connected") and isinstance(output.get("name"), str)
+            ]
+            if names:
+                return list(dict.fromkeys(names))
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+            pass
+
+    session_type = os.environ.get("XDG_SESSION_TYPE")
+    if session_type == "wayland" or (
+        session_type != "x11"
+        and (not os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    ):
+        return []
+    if not shutil.which("xrandr"):
+        return []
+    try:
+        result = subprocess.run(
+            ["xrandr", "--query"], capture_output=True, text=True,
+            timeout=5, check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    names = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "connected":
+            names.append(parts[0])
+    return list(dict.fromkeys(names))
+
     raw_paths.extend(re.findall(legacy_pattern, text, flags=re.MULTILINE))
 
     result: list[Path] = []
