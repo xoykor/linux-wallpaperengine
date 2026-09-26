@@ -360,8 +360,26 @@ bool parseAnimations (const std::vector<char>& data, PuppetModel& model) {
 	    break;
 	}
 
+	// MDLA uses a NUL-terminated version header (e.g. MDLA0006), followed by
+	// a block-size field and the authored clip count. Large puppet files can
+	// keep all clips under a single MDLA marker, so never cap this scan at 1 MiB.
+	size_t declaredClipCount = 0;
+	if (const auto* headerEnd = static_cast<const char*> (
+		std::memchr (data.data () + mdla, 0, data.size () - mdla)
+	    );
+	    headerEnd != nullptr) {
+	    const size_t afterHeader = static_cast<size_t> (headerEnd - data.data ()) + 1;
+	    if (afterHeader + 2 * sizeof (uint32_t) <= data.size ()) {
+		uint32_t count = 0;
+		std::memcpy (&count, data.data () + afterHeader + sizeof (uint32_t), sizeof (count));
+		if (count > 0 && count <= 512) {
+		    declaredClipCount = count;
+		}
+	    }
+	}
+
 	const size_t scanBegin = std::min (mdla + 4, data.size ());
-	const size_t scanEnd = std::min (data.size (), scanBegin + 1024 * 1024);
+	const size_t scanEnd = data.size ();
 	size_t offset = scanBegin;
 	while (offset + 24 < scanEnd) {
 	    PuppetModel::Clip candidate;
@@ -372,6 +390,9 @@ bool parseAnimations (const std::vector<char>& data, PuppetModel& model) {
 		);
 		if (!duplicate) {
 		    found.push_back (std::move (candidate));
+		    if (declaredClipCount > 0 && found.size () >= declaredClipCount) {
+			break;
+		    }
 		}
 		offset = std::max (candidateEnd, offset + 1);
 	    } else {
