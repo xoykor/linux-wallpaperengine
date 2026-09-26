@@ -159,6 +159,20 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glm::vec2 size = this->getSize ();
     glm::vec3 scale = transform.scale;
 
+    // Composition layers render their authored child subtree into a private full-frame
+    // target. Their material samples _rt_FullFrameBuffer, so shadow that name locally.
+    if (this->isCompositionLayer () && scene.hasAuthoredChildren (image.id)) {
+	const glm::vec2 compositionSize {
+	    static_cast<float> (scene.getWidth ()), static_cast<float> (scene.getHeight ())
+	};
+	auto composition = scene.create (
+	    "_rt_compositionLayer_" + std::to_string (image.id),
+	    TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, compositionSize, compositionSize
+	);
+	this->m_compositionFBO = composition;
+	this->alias ("_rt_FullFrameBuffer", composition);
+    }
+
     this->detectTexture ();
 
     // detect texture (if any)
@@ -926,7 +940,10 @@ void CImage::render () {
 
     for (const auto end = this->m_passes.end (); cur != end; ++cur) {
 	if (std::next (cur) == end) {
-	    glColorMask (true, true, true, false);
+	    glColorMask (
+		true, true, true,
+		this->getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE
+	    );
 	}
 
 	(*cur)->render ();
@@ -1116,6 +1133,14 @@ void CImage::updateScreenSpacePosition () {
 }
 
 const Image& CImage::getImage () const { return this->m_image; }
+
+bool CImage::isCompositionLayer () const {
+    return this->m_image.model != nullptr && this->m_image.model->filename == "models/util/composelayer.json";
+}
+
+bool CImage::copiesCompositionBackground () const { return this->m_image.copyBackground; }
+
+std::shared_ptr<const CFBO> CImage::getCompositionFBO () const { return this->m_compositionFBO; }
 
 glm::vec2 CImage::getSize () const {
     if (this->m_texture == nullptr) {
