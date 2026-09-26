@@ -123,6 +123,12 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, ObjectData base) {
 }
 
 TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, ObjectData base) {
+    const auto padding = it.optional ("padding");
+    // Workshop text layers may encode padding as a vector string (for example,
+    // "32.00000 32.00000"). Text padding is not rendered yet, so keep the
+    // existing numeric value when present and ignore other representations.
+    const int paddingValue = padding && padding->is_number () ? padding->get<int> () : 0;
+
     return std::make_unique<Text> (
 	std::move (base),
 	TextData {
@@ -136,7 +142,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .visible = it.user ("visible", project.properties, true),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
-	    .padding = it.optional ("padding", 0),
+	    .padding = paddingValue,
 	}
     );
 }
