@@ -9,6 +9,7 @@
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 #include "WallpaperEngine/Render/RenderContext.h"
+#include "WallpaperEngine/Render/PostProcessSettings.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Media/MediaSource.h"
@@ -140,13 +141,14 @@ public:
     static std::unique_ptr<CWallpaper> fromWallpaper (
 	const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
 	WebBrowser::WebBrowserContext* browserContext, const WallpaperState::TextureUVsScaling& scalingMode,
-	const uint32_t& clampMode
+	const uint32_t& clampMode, const glm::vec2& uvOffset, const PostProcessSettings& postProcess
     );
 
 protected:
     CWallpaper (
 	const Wallpaper& wallpaperData, RenderContext& context, AudioContext& audioContext,
-	const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
+	const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode, const glm::vec2& uvOffset,
+	const PostProcessSettings& postProcess
     );
 
     /**
@@ -187,6 +189,7 @@ private:
     AudioContext& m_audioContext;
     /** Current Wallpaper state */
     WallpaperState m_state;
+    PostProcessSettings m_postProcess;
     /** Span info for multi-monitor spanning (optional) */
     std::optional<SpanInfo> m_spanInfo = std::nullopt;
     /** Frame counter to avoid redundant renderFrame calls when shared across viewports */
