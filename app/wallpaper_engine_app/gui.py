@@ -103,7 +103,6 @@ window {
 .wallpaper-card:hover {
   border-color: rgba(255,255,255,0.18);
   background: #191310;
-  transform: translateY(-1px);
 }
 .wallpaper-card image {
   border-radius: 13px 13px 0 0;
@@ -196,7 +195,15 @@ scale.intensity-slider trough {
   min-height: 30px;
   padding: 0;
   border-radius: 99px;
+  color: transparent;
+  border: 2px solid rgba(255,255,255,0.16);
 }
+.preset-amber { background: #ff7417; }
+.preset-gold { background: #f6b91f; }
+.preset-red { background: #e43b2f; }
+.preset-violet { background: #a24ce6; }
+.preset-blue { background: #397be8; }
+.preset-green { background: #39ad70; }
 .toast {
   margin-top: 8px;
   padding: 9px 12px;
@@ -491,16 +498,17 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         body.append(_label("Predefinições", css="subtle"))
         presets = _box(spacing=8)
-        for hue, intensity, name in (
-            (24, 88, "Âmbar"),
-            (38, 94, "Dourado"),
-            (8, 92, "Vermelho"),
-            (285, 82, "Violeta"),
-            (215, 82, "Azul"),
-            (150, 76, "Verde"),
+        for hue, intensity, name, css_class in (
+            (24, 88, "Âmbar", "preset-amber"),
+            (38, 94, "Dourado", "preset-gold"),
+            (8, 92, "Vermelho", "preset-red"),
+            (285, 82, "Violeta", "preset-violet"),
+            (215, 82, "Azul", "preset-blue"),
+            (150, 76, "Verde", "preset-green"),
         ):
             button = Gtk.Button(label="●")
             button.add_css_class("preset-dot")
+            button.add_css_class(css_class)
             button.set_tooltip_text(name)
             button.connect(
                 "clicked",
@@ -566,6 +574,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         }}
         .badge {{
           border: 1px solid alpha({accent}, 0.38);
+        }}
+        .theme-preview {{
+          background: linear-gradient(110deg, {hot} 0%, {accent2} 52%, {accent} 100%);
+          box-shadow: inset 0 0 0 1px alpha({accent2}, 0.18);
         }}
         scale.intensity-slider highlight {{
           background: linear-gradient(90deg, {accent}, {accent2});
