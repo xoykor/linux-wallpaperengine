@@ -234,10 +234,36 @@ def _libraryfolders_paths(steamapps: Path) -> list[Path]:
     except OSError:
         return []
 
-    raw_paths = re.findall(r'"path"\s*"([^"]+)"', text, flags=re.IGNORECASE)
+    raw_paths = re.findall(r'"path"\\s*"([^"]+)"', text, flags=re.IGNORECASE)
     # Older VDF files used numeric keys directly for library paths.
-    raw_paths.extend(re.findall(r'^\s*"\d+"\s*"([^"]+)"\s*
+    legacy_pattern = r'^\\s*"\\d+"\\s*"([^"]+)"\\s*$'
+    raw_paths.extend(re.findall(legacy_pattern, text, flags=re.MULTILINE))
 
+    result: list[Path] = []
+    for raw in raw_paths:
+        value = raw.replace(r"\\\\", "\\").replace(r'\\"', '"')
+        if not value:
+            continue
+        library = Path(value).expanduser()
+        if not library.is_absolute():
+            continue
+        result.append(library / "steamapps")
+    return result
+
+
+def steamapps_roots() -> list[Path]:
+    home = Path.home()
+    data_home = _xdg_dir("XDG_DATA_HOME", home / ".local/share")
+    primary = [
+        data_home / "Steam/steamapps",
+        home / ".steam/steam/steamapps",
+        home / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps",
+        home / "snap/steam/common/.local/share/Steam/steamapps",
+    ]
+    candidates = list(primary)
+    for steamapps in primary:
+        candidates.extend(_libraryfolders_paths(steamapps))
+    return list(dict.fromkeys(candidates))
 
 def _preview_for(project_dir: Path, raw: Any) -> str | None:
     candidates = [raw] if isinstance(raw, str) else []
