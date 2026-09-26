@@ -198,6 +198,7 @@ private:
     Render::Shaders::Shader* m_shader = nullptr;
 
     std::shared_ptr<const CFBO> m_drawTo = nullptr;
+    std::shared_ptr<const CFBO> m_resolvedDrawTo = nullptr;
     std::shared_ptr<const TextureProvider> m_input = nullptr;
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};
