@@ -12,9 +12,12 @@ import tempfile
 from typing import Any
 import unicodedata
 
+from .i18n import tr
+
 
 APP_NAME = "linux-wallpaperengine"
 WORKSHOP_APP_ID = "431960"
+LANGUAGE_CODES = ("auto", "pt_BR", "en", "de", "ru", "ja", "zh_CN", "es", "hi")
 
 
 def _xdg_dir(variable: str, fallback: Path) -> Path:
@@ -43,6 +46,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scaling": "fill",
     "mute": True,
     "renderer_path": "auto",
+    "language": "auto",
 }
 
 _ID_PATTERN = re.compile(r"[0-9]{1,24}\Z")
@@ -52,71 +56,83 @@ _SCALING = {"stretch", "fit", "fill", "default"}
 def normalize_id(value: Any) -> str:
     """Return a Workshop ID, rejecting paths and arbitrary CLI values."""
     if isinstance(value, bool) or not isinstance(value, (int, str)):
-        raise ValueError("O ID do wallpaper deve ser numérico.")
+        raise ValueError(tr("O ID do wallpaper deve ser numérico."))
     result = str(value)
     if not _ID_PATTERN.fullmatch(result):
-        raise ValueError("O ID do wallpaper deve ser numérico.")
+        raise ValueError(tr("O ID do wallpaper deve ser numérico."))
     return result
 
 
 def validate_screen(value: Any) -> str:
     if not isinstance(value, str) or not value or len(value) > 128:
-        raise ValueError("Nome de monitor inválido.")
+        raise ValueError(tr("Nome de monitor inválido."))
     if any(ord(char) < 32 or char == "\x7f" for char in value):
-        raise ValueError("Nome de monitor inválido.")
+        raise ValueError(tr("Nome de monitor inválido."))
     return value
 
 
 def normalize_playlist_name(value: Any) -> str:
     if not isinstance(value, str):
-        raise ValueError("Nome de playlist inválido.")
+        raise ValueError(tr("Nome de playlist inválido."))
     if any(unicodedata.category(char).startswith("C") for char in value):
-        raise ValueError("O nome da playlist não pode conter caracteres de controle.")
+        raise ValueError(tr("O nome da playlist não pode conter caracteres de controle."))
     name = unicodedata.normalize("NFC", value).strip()
     if not 1 <= len(name) <= 80:
-        raise ValueError("O nome da playlist deve ter de 1 a 80 caracteres.")
+        raise ValueError(tr("O nome da playlist deve ter de 1 a 80 caracteres."))
     return name
+
+
+def normalize_language(value: Any) -> str:
+    """Canonicalize a supported GUI language code for saved settings."""
+    if not isinstance(value, str):
+        raise ValueError(tr("Idioma inválido."))
+    normalized = value.strip().replace("-", "_").casefold()
+    canonical = {code.casefold(): code for code in LANGUAGE_CODES}
+    if normalized not in canonical:
+        raise ValueError(tr("Idioma inválido."))
+    return canonical[normalized]
 
 
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(config, dict):
-        raise ValueError("A configuração deve ser um objeto JSON.")
+        raise ValueError(tr("A configuração deve ser um objeto JSON."))
     unknown = set(config) - set(DEFAULT_CONFIG)
     if unknown:
-        raise ValueError(f"Opções desconhecidas: {', '.join(sorted(unknown))}.")
+        raise ValueError(tr("Opções desconhecidas: {options}.", options=", ".join(sorted(unknown))))
 
     result = dict(DEFAULT_CONFIG)
     result.update(config)
     for key in ("rotation_enabled", "shuffle", "only_favorites", "mute"):
         if type(result[key]) is not bool:
-            raise ValueError(f"{key} deve ser verdadeiro ou falso.")
+            raise ValueError(tr("{key} deve ser verdadeiro ou falso.", key=key))
 
     minutes = result["interval_minutes"]
     if type(minutes) is not int or not 1 <= minutes <= 1440:
-        raise ValueError("O intervalo deve estar entre 1 e 1440 minutos.")
+        raise ValueError(tr("O intervalo deve estar entre 1 e 1440 minutos."))
     fps = result["fps"]
     if type(fps) is not int or not 1 <= fps <= 240:
-        raise ValueError("FPS deve estar entre 1 e 240.")
+        raise ValueError(tr("FPS deve estar entre 1 e 240."))
     if not isinstance(result["scaling"], str) or result["scaling"] not in _SCALING:
-        raise ValueError("Escala inválida.")
+        raise ValueError(tr("Escala inválida."))
+    result["language"] = normalize_language(result["language"])
 
     favorites = result["favorites"]
     if not isinstance(favorites, list):
-        raise ValueError("Favoritos deve ser uma lista de IDs.")
+        raise ValueError(tr("Favoritos deve ser uma lista de IDs."))
     result["favorites"] = list(dict.fromkeys(normalize_id(value) for value in favorites))
 
     raw_playlists = result["playlists"]
     if not isinstance(raw_playlists, dict):
-        raise ValueError("Playlists deve ser um objeto de nomes e listas de IDs.")
+        raise ValueError(tr("Playlists deve ser um objeto de nomes e listas de IDs."))
     playlists: dict[str, list[str]] = {}
     seen_names: set[str] = set()
     for raw_name, raw_ids in raw_playlists.items():
         name = normalize_playlist_name(raw_name)
         if name.casefold() in seen_names:
-            raise ValueError(f"Nome de playlist duplicado: {name}.")
+            raise ValueError(tr("Nome de playlist duplicado: {name}.", name=name))
         seen_names.add(name.casefold())
         if not isinstance(raw_ids, list):
-            raise ValueError(f"A playlist {name} deve conter uma lista de IDs.")
+            raise ValueError(tr("A playlist {name} deve conter uma lista de IDs.", name=name))
         playlists[name] = list(dict.fromkeys(normalize_id(value) for value in raw_ids))
     result["playlists"] = playlists
 
@@ -125,7 +141,7 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
         normalized = normalize_playlist_name(active)
         matching = [name for name in playlists if name.casefold() == normalized.casefold()]
         if not matching:
-            raise ValueError(f"Playlist ativa não encontrada: {normalized}.")
+            raise ValueError(tr("Playlist ativa não encontrada: {name}.", name=normalized))
         result["active_playlist"] = matching[0]
 
     selected = result["selected_id"]
@@ -133,7 +149,7 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
 
     assignments = result["screen_assignments"]
     if not isinstance(assignments, dict):
-        raise ValueError("Atribuições de monitor devem ser um objeto.")
+        raise ValueError(tr("Atribuições de monitor devem ser um objeto."))
     result["screen_assignments"] = {
         validate_screen(screen): normalize_id(wallpaper_id)
         for screen, wallpaper_id in assignments.items()
@@ -141,9 +157,9 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
 
     renderer = result["renderer_path"]
     if not isinstance(renderer, str) or not renderer or len(renderer) > 4096:
-        raise ValueError("Caminho do renderizador inválido.")
+        raise ValueError(tr("Caminho do renderizador inválido."))
     if renderer != "auto" and (not Path(renderer).is_absolute() or "\x00" in renderer):
-        raise ValueError("O caminho do renderizador deve ser absoluto ou 'auto'.")
+        raise ValueError(tr("O caminho do renderizador deve ser absoluto ou 'auto'."))
     return result
 
 
@@ -189,7 +205,7 @@ def read_status() -> dict[str, Any]:
     try:
         status = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
         if not isinstance(status, dict):
-            raise ValueError("Estado inválido")
+            raise ValueError(tr("Estado inválido"))
     except (OSError, ValueError):
         status = {}
     result: dict[str, Any] = {
@@ -218,13 +234,103 @@ def read_status() -> dict[str, Any]:
 def steamapps_roots() -> list[Path]:
     home = Path.home()
     data_home = _xdg_dir("XDG_DATA_HOME", home / ".local/share")
-    candidates = [
+    defaults = [
         data_home / "Steam/steamapps",
         home / ".steam/steam/steamapps",
         home / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps",
         home / "snap/steam/common/.local/share/Steam/steamapps",
     ]
-    return list(dict.fromkeys(candidates))
+    candidates = list(defaults)
+    for steamapps in defaults:
+        for listing in (
+            steamapps / "libraryfolders.vdf",
+            steamapps.parent / "config/libraryfolders.vdf",
+        ):
+            for library in _steam_library_paths(listing):
+                candidates.append(
+                    library if library.name == "steamapps" else library / "steamapps"
+                )
+    roots: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            canonical = candidate.resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if canonical not in seen:
+            roots.append(canonical)
+            seen.add(canonical)
+    return roots
+
+
+def _steam_library_paths(listing: Path) -> list[Path]:
+    """Read both current and older Steam libraryfolders.vdf layouts."""
+    try:
+        source = listing.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        return []
+
+    tokens: list[str] = []
+    position = 0
+    while position < len(source):
+        char = source[position]
+        if char.isspace():
+            position += 1
+        elif source.startswith("//", position):
+            end = source.find("\n", position)
+            position = len(source) if end < 0 else end + 1
+        elif char in "{}":
+            tokens.append(char)
+            position += 1
+        elif char == '"':
+            position += 1
+            value: list[str] = []
+            while position < len(source) and source[position] != '"':
+                if source[position] == "\\" and position + 1 < len(source) and source[position + 1] in ('"', "\\"):
+                    position += 1
+                value.append(source[position])
+                position += 1
+            tokens.append("".join(value))
+            position += 1
+        else:
+            end = position
+            while end < len(source) and not source[end].isspace() and source[end] not in '{}"':
+                end += 1
+            tokens.append(source[position:end])
+            position = end
+
+    def read_object(index: int, depth: int = 0) -> tuple[dict[str, Any], int]:
+        if depth > 16:
+            return {}, len(tokens)
+        values: dict[str, Any] = {}
+        while index < len(tokens):
+            key = tokens[index]
+            index += 1
+            if key == "}":
+                break
+            if index >= len(tokens):
+                break
+            value = tokens[index]
+            index += 1
+            if value == "{":
+                values[key], index = read_object(index, depth + 1)
+            elif value == "}":
+                break
+            else:
+                values[key] = value
+        return values, index
+
+    if len(tokens) < 2 or tokens[0].casefold() != "libraryfolders" or tokens[1] != "{":
+        return []
+    entries, _ = read_object(2)
+    libraries: list[Path] = []
+    for key, value in entries.items():
+        if not key.isdigit():
+            continue
+        raw = value.get("path") if isinstance(value, dict) else value
+        if isinstance(raw, str) and raw:
+            libraries.append(Path(raw).expanduser())
+    return libraries
 
 
 def _preview_for(project_dir: Path, raw: Any) -> str | None:

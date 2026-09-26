@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from . import model
+from .i18n import set_language, tr
 
 
 _MAX_REQUEST = 1024 * 1024
@@ -26,6 +27,7 @@ _CRASH_COOLDOWN = 24 * 60 * 60
 class WallpaperDaemon:
     def __init__(self) -> None:
         self.config = model.load_config()
+        set_language(self.config.get("language", "auto"))
         self.catalog: dict[str, dict[str, Any]] = {}
         self.outputs: list[str] = []
         self.active = True
@@ -151,14 +153,14 @@ class WallpaperDaemon:
         if not path and configured == "auto" and Path("/usr/bin/linux-wallpaperengine").is_file():
             path = "/usr/bin/linux-wallpaperengine"
         if not path or not Path(path).is_file() or not os.access(path, os.X_OK):
-            raise RuntimeError("Renderizador linux-wallpaperengine não encontrado ou sem permissão de execução.")
+            raise RuntimeError(tr("Renderizador linux-wallpaperengine não encontrado ou sem permissão de execução."))
         return path
 
     def _build_command(self, wallpaper_id: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
         if wallpaper_id not in self.catalog:
-            raise ValueError("Wallpaper selecionado não está mais instalado.")
+            raise ValueError(tr("Wallpaper selecionado não está mais instalado."))
         if not self.outputs:
-            raise RuntimeError("Nenhum monitor ativo detectado.")
+            raise RuntimeError(tr("Nenhum monitor ativo detectado."))
         screens = {}
         for screen in self.outputs:
             assigned = self.config["screen_assignments"].get(screen)
@@ -235,9 +237,9 @@ class WallpaperDaemon:
                 self.crash_streak = 0
             self.crash_streak += 1
             delay = min(10 * 2 ** min(self.crash_streak - 1, 6), 600)
-            self.error = (
-                f"O renderizador encerrou (código {returncode}); "
-                f"nova tentativa em {delay} segundos."
+            self.error = tr(
+                "O renderizador encerrou (código {code}); nova tentativa em {delay} segundos.",
+                code=returncode, delay=delay,
             )
             self.pending_id = self._next_id()
             self.retry_at = time.monotonic() + delay
@@ -297,20 +299,17 @@ class WallpaperDaemon:
                 selected = assignments[self.outputs[0]]
             if selected is None:
                 if self.config["active_playlist"] is not None:
-                    self.error = (
-                        f"A playlist '{self.config['active_playlist']}' não contém wallpapers "
-                        "instalados e disponíveis para rotação."
+                    self.error = tr(
+                        "A playlist '{playlist}' não contém wallpapers instalados e disponíveis para rotação.",
+                        playlist=self.config["active_playlist"],
                     )
                 elif self.catalog:
-                    self.error = (
-                        "Nenhum wallpaper elegível encontrado. Confira as assinaturas da Steam "
-                        "e o filtro de favoritos."
-                    )
+                    self.error = tr("Nenhum wallpaper elegível encontrado. Confira as assinaturas da Steam e o filtro de favoritos.")
                 else:
-                    self.error = "Nenhum wallpaper scene ou video do Workshop encontrado."
+                    self.error = tr("Nenhum wallpaper scene ou video do Workshop encontrado.")
                 self.retry_at = now + _SCAN_SECONDS
             elif not self.outputs:
-                self.error = "Nenhum monitor ativo detectado."
+                self.error = tr("Nenhum monitor ativo detectado.")
                 self.retry_at = now + _SCAN_SECONDS
             else:
                 self._start_child(selected)
@@ -319,7 +318,7 @@ class WallpaperDaemon:
     def _validate_known_id(self, value: Any) -> str:
         wallpaper_id = model.normalize_id(value)
         if wallpaper_id not in self.catalog:
-            raise ValueError(f"Wallpaper {wallpaper_id} não está instalado.")
+            raise ValueError(tr("Wallpaper {wallpaper_id} não está instalado.", wallpaper_id=wallpaper_id))
         return wallpaper_id
 
     def _validate_known_config(self, config: dict[str, Any]) -> None:
@@ -336,20 +335,20 @@ class WallpaperDaemon:
 
     def _dispatch(self, message: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(message, dict):
-            raise ValueError("Solicitação inválida.")
+            raise ValueError(tr("Solicitação inválida."))
         command = message.get("command")
         if not isinstance(command, str):
-            raise ValueError("Comando inválido.")
+            raise ValueError(tr("Comando inválido."))
         expected = {
             "status": set(), "next": set(), "select": {"id"},
             "set": {"settings"}, "assign": {"screen", "id"},
             "start": set(), "stop": set(), "reload": set(),
         }
         if command not in expected:
-            raise ValueError(f"Comando desconhecido: {command}.")
+            raise ValueError(tr("Comando desconhecido: {command}.", command=command))
         supplied = set(message) - {"command"}
         if supplied != expected[command]:
-            raise ValueError(f"Argumentos inválidos para {command}.")
+            raise ValueError(tr("Argumentos inválidos para {command}.", command=command))
 
         if command == "status":
             pass
@@ -358,8 +357,8 @@ class WallpaperDaemon:
             selected = self._next_id()
             if selected is None:
                 if self.config["active_playlist"] is not None:
-                    raise ValueError("A playlist ativa não contém wallpapers instalados e disponíveis.")
-                raise ValueError("Nenhum wallpaper elegível para avançar.")
+                    raise ValueError(tr("A playlist ativa não contém wallpapers instalados e disponíveis."))
+                raise ValueError(tr("Nenhum wallpaper elegível para avançar."))
             self.config = model.save_config(dict(self.config, selected_id=selected))
             self.active = True
             self.retry_at = 0.0
@@ -369,21 +368,27 @@ class WallpaperDaemon:
             selected = self._validate_known_id(message["id"])
             self.config = model.save_config(dict(
                 self.config, selected_id=selected, rotation_enabled=False,
-                screen_assignments={},
+                active_playlist=None, screen_assignments={},
             ))
+            self.queue = []
             self.active = True
             self.retry_at = 0.0
             self._request_switch(selected)
         elif command == "set":
             settings = message["settings"]
             if not isinstance(settings, dict):
-                raise ValueError("As configurações devem ser um objeto.")
+                raise ValueError(tr("As configurações devem ser um objeto."))
             updated = model.validate_config(dict(self.config, **settings))
             self._refresh(force=True)
             self._validate_known_config(updated)
             previous = self.config
             self.config = model.save_config(updated)
             changed = {key for key in updated if updated[key] != previous[key]}
+            if "language" in changed:
+                set_language(self.config["language"])
+                self.error = None
+                if self.child is None:
+                    self.retry_at = 0.0
             if changed & {"shuffle", "favorites", "only_favorites", "playlists", "active_playlist"}:
                 self.queue = []
             if self.active and changed:
@@ -420,7 +425,7 @@ class WallpaperDaemon:
             self._refresh(force=True)
             screen = model.validate_screen(message["screen"])
             if screen not in self.outputs:
-                raise ValueError(f"Monitor {screen} não está ativo.")
+                raise ValueError(tr("Monitor {screen} não está ativo.", screen=screen))
             selected = message["id"]
             assignments = dict(self.config["screen_assignments"])
             if selected is None:
@@ -465,7 +470,7 @@ class WallpaperDaemon:
                 if not raw:
                     return
                 if len(raw) > _MAX_REQUEST or not raw.endswith(b"\n"):
-                    raise ValueError("Solicitação grande demais ou incompleta.")
+                    raise ValueError(tr("Solicitação grande demais ou incompleta."))
                 message = json.loads(raw)
                 status = self._dispatch(message)
                 response = {"ok": True, "status": status}
@@ -489,7 +494,7 @@ class WallpaperDaemon:
             existing = path.lstat()
             if not stat.S_ISSOCK(existing.st_mode) or existing.st_uid != os.getuid():
                 listener.close()
-                raise RuntimeError(f"Socket ocupado por outro arquivo: {path}") from exc
+                raise RuntimeError(tr("Socket ocupado por outro arquivo: {path}", path=path)) from exc
             try:
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
                     probe.settimeout(0.2)
@@ -499,7 +504,7 @@ class WallpaperDaemon:
                 listener.bind(str(path))
             else:
                 listener.close()
-                raise RuntimeError("O serviço de wallpapers já está em execução.") from exc
+                raise RuntimeError(tr("O serviço de wallpapers já está em execução.")) from exc
         os.chmod(path, 0o600)
         self.socket_inode = path.stat().st_ino
         listener.listen(8)

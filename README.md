@@ -167,11 +167,15 @@ You can use either:
 
 ### Desktop app (this fork)
 
-The optional GTK 4 app provides a library of installed Workshop items with previews, search and
-scene/video/favorites filters. You can apply a wallpaper to every display or
-pin one to a specific display, mark favorites, and control rotation, shuffle,
-the interval, FPS, scaling and audio mute. The app has
-start/stop/next controls and a setting for a custom renderer path. A user
+The GTK 4 app provides a responsive library of installed Workshop items with
+cached previews, search and scene/video/favorites filters. A plain click starts
+the selected wallpaper immediately on every display, stopping an active
+playlist and clearing per-display pins. Use Ctrl+click to select several
+wallpapers or Shift+click to select a range without changing playback; the
+floating selection bar adds them to an existing or new playlist. You can also
+pin a wallpaper to a specific display, mark favorites, and control rotation,
+shuffle, the interval, FPS, scaling and audio mute. The app has start/stop/next
+controls and a setting for a custom renderer path. A user
 systemd service keeps the wallpaper running when the window is closed. The
 default renderer setup runs continuously at 30 FPS with audio isolated; it
 does not suspend the renderer when another window covers the wallpaper.
@@ -184,9 +188,18 @@ existing Steam session in Wallpaper Engine, so this app does not ask you to
 sign in again.
 
 The **Playlists** page creates, renames, deletes, activates and reorders
-playlists. Add an installed wallpaper from the library. With shuffle off,
-rotation follows the order shown in the playlist. The active playlist
-determines the rotation pool; wallpapers pinned to a display stay fixed.
+playlists. Its searchable picker can add multiple installed wallpapers at once.
+With shuffle off, rotation follows the order shown in the playlist. The active
+playlist determines the rotation pool; wallpapers pinned to a display stay
+fixed until you choose a wallpaper for all displays.
+
+The interface adapts to narrower windows. The **Languages** page offers an
+automatic system-language option plus English, Portuguese, German, Russian,
+Japanese, Mandarin Chinese, Spanish and Hindi; the choice is saved per user.
+New installations follow the system language, with English as the fallback.
+An existing language choice is preserved.
+Keyboard shortcuts include Ctrl+F for library search, Ctrl+R to refresh,
+Ctrl+N for a new playlist and Ctrl+1/2/3/4 to switch pages.
 
 The app is currently designed for a KDE Plasma desktop session. Install the
 renderer first and make `linux-wallpaperengine` available in `PATH` or
