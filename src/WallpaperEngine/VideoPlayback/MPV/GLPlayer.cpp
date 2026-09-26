@@ -104,6 +104,13 @@ void GLPlayer::setVolume (double volume) {
     }
 }
 
+void GLPlayer::setAudioEnabled (bool enabled) {
+    if (this->m_handle) {
+	sLog.exception ("Cannot change mpv audio selection after playback has started");
+    }
+    this->m_audioEnabled = enabled;
+}
+
 void GLPlayer::setPaused () {
     this->m_paused = true;
 
@@ -222,6 +229,12 @@ void GLPlayer::init () {
     mpv_set_option_string (this->m_handle, "vo", "libmpv");
     mpv_set_option_string (this->m_handle, "profile", "fast");
     mpv_set_option_string (this->m_handle, "untimed", this->m_untimed ? "yes" : "no");
+    if (!this->m_audioEnabled) {
+	// Mute/volume=0 still opens an output device. Disable the audio track
+	// before mpv starts so a silent wallpaper never connects to a sound server.
+	mpv_set_option_string (this->m_handle, "aid", "no");
+	mpv_set_option_string (this->m_handle, "ao", "null");
+    }
 
     if (mpv_initialize (this->m_handle) < 0) {
 	sLog.exception ("Could not initialize mpv context");
