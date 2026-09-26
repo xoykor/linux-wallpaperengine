@@ -176,24 +176,16 @@ systemd service keeps the wallpaper running when the window is closed. The
 default renderer setup runs continuously at 30 FPS with audio isolated; it
 does not suspend the renderer when another window covers the wallpaper.
 
-**Steam Workshop** opens the official Steam Community Workshop in a separate
-GTK 3/WebKit2 window. Search there, open an item, and subscribe on Steam's
-site; the Steam client performs the download. **Abrir no Steam** opens the
-selected item in the client, and **Usar no app** sends its ID back to the GTK 4
-app. The library detects new downloads automatically while the app is open. The
-browser keeps its cookies and cache in
-`$XDG_DATA_HOME/linux-wallpaperengine-app/webkit` (or
-`~/.local/share/linux-wallpaperengine-app/webkit`). The app does not log login
-credentials. If Steam login or the page does not work in WebKit, use **Open
-Workshop in browser** and subscribe there. Steam's [Workshop implementation
-guide](https://partner.steamgames.com/doc/features/workshop/implementation)
-describes subscriptions through the official portal and Steamworks SDK.
+Discover and subscribe to wallpapers in the **original Wallpaper Engine app**.
+Steam downloads subscribed items. This Linux app reads the local Workshop
+library and automatically shows new wallpapers after Steam finishes downloading
+them, including while its window is open. Discovery and subscriptions use the
+existing Steam session in Wallpaper Engine, so this app does not ask you to
+sign in again.
 
 The **Playlists** page creates, renames, deletes, activates and reorders
-playlists. Add an installed wallpaper from the library, or paste a Workshop
-item ID or Steam item URL. Pending items show their public Workshop title when
-available and become usable once the Steam client installs them. With shuffle
-off, rotation follows the order shown in the playlist. The active playlist
+playlists. Add an installed wallpaper from the library. With shuffle off,
+rotation follows the order shown in the playlist. The active playlist
 determines the rotation pool; wallpapers pinned to a display stay fixed.
 
 The app is currently designed for a KDE Plasma desktop session. Install the
@@ -209,12 +201,10 @@ ln -s "$HOME/.local/opt/linux-wallpaperengine/linux-wallpaperengine" \
 ```
 
 Skip those commands if your package manager already installed the renderer.
-The desktop app also needs Python 3 with `gi`/GTK 4 introspection, GTK 3 and
-WebKit2GTK 4.1 for the separate Workshop browser, `kscreen-doctor`, and a
-working user systemd manager. Typical Debian/Ubuntu package names are
-`python3-gi`, `gir1.2-gtk-4.0`, `gir1.2-gtk-3.0`,
-`gir1.2-webkit2-4.1`, and `kscreen`. Run the installer as your normal user,
-without `sudo`, from the repository root:
+The desktop app also needs Python 3 with `gi`/GTK 4 introspection,
+`kscreen-doctor`, and a working user systemd manager. Typical Debian/Ubuntu
+package names are `python3-gi`, `gir1.2-gtk-4.0`, and `kscreen`. Run the
+installer as your normal user, without `sudo`, from the repository root:
 
 ```bash
 ./app/install.sh
@@ -254,10 +244,10 @@ which could freeze PipeWire/Firefox or hide the wallpaper after login. If you
 want to return to the legacy helper, install its corrected version from this
 checkout with `./contrib/rotation/install.sh`.
 
-The catalog reads downloaded Steam Workshop projects from the standard
-Steam, Flatpak and Snap locations listed above. Subscriptions and downloads
-are handled by the official Steam portal and client. It currently shows
-`scene` and `video` projects.
+The catalog reads downloaded Steam Workshop projects from the standard Steam,
+Flatpak and Snap locations listed above. Discover and subscribe in the original
+Wallpaper Engine app; Steam handles downloads and this app updates its library
+when the files become available. It currently shows `scene` and `video` projects.
 Wallpaper Engine's Steam assets are still needed for some projects. Display
 discovery relies on KScreen, and wallpaper layering depends on the renderer
 and compositor support described below.

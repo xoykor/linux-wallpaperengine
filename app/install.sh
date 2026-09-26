@@ -60,10 +60,6 @@ PYTHON_BIN="$(command -v python3 || true)"
 [[ -n "${PYTHON_BIN}" ]] || die 'Python 3 is required.'
 "${PYTHON_BIN}" -c 'import gi; gi.require_version("Gtk", "4.0"); from gi.repository import Gtk' 2>/dev/null || \
     die 'Python gi with GTK 4 introspection is required (for example python3-gi and gir1.2-gtk-4.0).'
-# The Workshop browser runs in another process because GTK 3 and GTK 4
-# cannot share one Python process.
-"${PYTHON_BIN}" -c 'import gi; gi.require_version("Gtk", "3.0"); gi.require_version("WebKit2", "4.1"); from gi.repository import Gtk, WebKit2' 2>/dev/null || \
-    die 'GTK 3 and WebKit2GTK 4.1 introspection are required for the Steam Workshop browser (for example gir1.2-gtk-3.0 and gir1.2-webkit2-4.1).'
 command -v kscreen-doctor >/dev/null 2>&1 || \
     die 'kscreen-doctor is required to detect KDE Plasma displays.'
 if ! command -v linux-wallpaperengine >/dev/null 2>&1 && \

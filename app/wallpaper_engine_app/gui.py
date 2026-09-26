@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
-import sys
 import threading
 import time
 from typing import Callable
-from urllib.parse import parse_qs, urlparse
 
 import gi
 
@@ -16,7 +14,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import GdkPixbuf, Gio, GLib, Gtk, Pango
 
-from . import ipc, model, workshop
+from . import ipc, model
 
 
 SERVICE = "linux-wallpaperengine-app.service"
@@ -102,10 +100,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._toast_timer = 0
         self.playlist_name: str | None = None
         self._updating_playlists = False
-        self._awaiting_workshop_id: str | None = None
-        self.workshop_details: dict[str, dict] = {}
-        self._metadata_requested: set[str] = set()
-        self._metadata_loading = False
         self._catalog_scan_pending = False
         self._command_queue: list[tuple[str, dict[str, object]]] = []
         self._command_busy = False
@@ -116,7 +110,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._refresh_status()
         self._refresh_autostart()
         GLib.timeout_add_seconds(2, self._tick)
-        GLib.timeout_add_seconds(15, self._check_workshop_download)
+        GLib.timeout_add_seconds(15, self._check_library_changes)
 
     def _build(self) -> None:
         provider = Gtk.CssProvider()
@@ -144,10 +138,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.reload_button = Gtk.Button(label="Atualizar biblioteca")
         self.reload_button.connect("clicked", lambda *_: self._reload())
         header.pack_end(self.reload_button)
-
-        self.workshop_button = Gtk.Button(label="Steam Workshop")
-        self.workshop_button.connect("clicked", self._open_workshop)
-        header.pack_end(self.workshop_button)
 
         self.next_button = Gtk.Button(label="Próximo")
         self.next_button.connect("clicked", lambda *_: self._command("next"))
@@ -301,32 +291,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.playlist_list.select_row(chosen_row)
         self._updating_playlists = False
         self._show_playlist_detail()
-        self._load_pending_details()
-
-    def _load_pending_details(self) -> None:
-        if self._metadata_loading:
-            return
-        missing = list(dict.fromkeys(
-            wallpaper_id
-            for identifiers in (self.config.get("playlists") or {}).values()
-            for wallpaper_id in identifiers
-            if wallpaper_id not in self.catalog and wallpaper_id not in self._metadata_requested
-        ))[:200]
-        if not missing:
-            return
-        self._metadata_requested.update(missing)
-        self._metadata_loading = True
-
-        def done(value: dict | None, error: Exception | None) -> None:
-            self._metadata_loading = False
-            if value:
-                self.workshop_details.update(value)
-                self._show_playlist_detail()
-            if error:
-                self._notice(f"Não foi possível consultar os detalhes do Workshop: {error}", error=True)
-            self._load_pending_details()
-
-        self._background(lambda: workshop.fetch_details(missing), done)
 
     def _playlist_selected(self, _listbox: Gtk.ListBox, row: Gtk.ListBoxRow | None) -> None:
         if self._updating_playlists:
@@ -373,26 +337,40 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.playlist_detail.append(activation)
         self.playlist_detail.append(_label(
             "A ordem abaixo vale quando a opção aleatória está desligada. "
-            "Itens ainda não instalados serão ignorados até o Steam terminar o download.",
+            "Itens salvos que não estão instalados serão ignorados até reaparecerem na biblioteca.",
             css="subtle", wrap=True,
         ))
 
-        add = _box(spacing=8)
-        self.playlist_id_entry = Gtk.Entry()
-        self.playlist_id_entry.set_placeholder_text("ID ou link do item do Workshop")
-        self.playlist_id_entry.set_hexpand(True)
-        self.playlist_id_entry.connect(
-            "activate", lambda *_: self._playlist_add_text(name, self.playlist_id_entry.get_text())
+        available_ids = sorted(
+            (wallpaper_id for wallpaper_id in self.catalog if wallpaper_id not in playlists[name]),
+            key=lambda wallpaper_id: str(self.catalog[wallpaper_id].get("title", wallpaper_id)).casefold(),
         )
-        add.append(self.playlist_id_entry)
-        add_button = Gtk.Button(label="Adicionar")
-        add_button.connect(
-            "clicked", lambda *_: self._playlist_add_text(name, self.playlist_id_entry.get_text())
-        )
-        add.append(add_button)
-        self.playlist_detail.append(add)
+        if available_ids:
+            add = _box(spacing=8)
+            picker = Gtk.DropDown.new_from_strings([
+                f"{self.catalog[wallpaper_id].get('title') or wallpaper_id} · {wallpaper_id}"
+                for wallpaper_id in available_ids
+            ])
+            picker.set_hexpand(True)
+            add.append(picker)
+            add_button = Gtk.Button(label="Adicionar wallpaper instalado")
+            add_button.connect(
+                "clicked",
+                lambda *_: self._playlist_add_id(
+                    name,
+                    available_ids[picker.get_selected()]
+                    if picker.get_selected() < len(available_ids) else None,
+                ),
+            )
+            add.append(add_button)
+            self.playlist_detail.append(add)
+        else:
+            self.playlist_detail.append(_label(
+                "Nenhum outro wallpaper instalado disponível. Atualize a biblioteca após assinar pelo Wallpaper Engine.",
+                css="subtle", wrap=True,
+            ))
 
-        if self.selected_id:
+        if self.selected_id and self.selected_id not in playlists[name]:
             selected_title = self.catalog.get(self.selected_id, {}).get("title", self.selected_id)
             add_selected = Gtk.Button(label=f"Adicionar selecionado: {selected_title}")
             add_selected.connect("clicked", lambda *_: self._playlist_add_id(name, self.selected_id))
@@ -400,10 +378,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         for position, wallpaper_id in enumerate(playlists[name]):
             item = self.catalog.get(wallpaper_id)
-            details = self.workshop_details.get(wallpaper_id, {})
-            title = item.get("title", wallpaper_id) if item else details.get("title", wallpaper_id)
+            title = item.get("title", wallpaper_id) if item else wallpaper_id
             if not item:
-                title = f"{title} · aguardando Steam"
+                title = f"{title} · não instalado"
             row = _box(spacing=7)
             row.add_css_class("settings-row")
             caption = _label(f"{position + 1}. {title}", wrap=True)
@@ -422,12 +399,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             remove = Gtk.Button(label="Remover")
             remove.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_remove(name, item_id))
             row.append(remove)
-            if not item:
-                open_item = Gtk.Button(label="Workshop")
-                open_item.connect(
-                    "clicked", lambda button, item_id=wallpaper_id: self._open_workshop(button, item_id)
-                )
-                row.append(open_item)
             self.playlist_detail.append(row)
 
     def _playlist_name_dialog(self, title: str, previous: str | None) -> None:
@@ -510,32 +481,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         dialog.connect("response", response)
         dialog.present()
 
-    def _playlist_add_text(self, name: str, value: str) -> None:
-        try:
-            wallpaper_id = self._workshop_id(value)
-        except ValueError as exc:
-            self._notice(str(exc), error=True)
-            return
-        self._playlist_add_id(name, wallpaper_id)
-
-    @staticmethod
-    def _workshop_id(value: str) -> str:
-        value = value.strip()
-        if value.isdecimal():
-            return model.normalize_id(value)
-        parsed = urlparse(value)
-        if parsed.scheme != "https" or parsed.netloc.lower() not in {
-            "steamcommunity.com", "www.steamcommunity.com"
-        }:
-            raise ValueError("Cole um ID numérico ou um link HTTPS do Steam Workshop.")
-        identifier = parse_qs(parsed.query).get("id", [None])[0]
-        try:
-            return model.normalize_id(identifier)
-        except ValueError as exc:
-            raise ValueError("O link não contém um ID de item válido.") from exc
-
     def _playlist_add_id(self, name: str, wallpaper_id: str | None) -> None:
-        if wallpaper_id is None:
+        if wallpaper_id is None or wallpaper_id not in self.catalog:
             return
         playlists = {key: list(value) for key, value in (self.config.get("playlists") or {}).items()}
         if name not in playlists:
@@ -692,11 +639,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 return
             self.catalog = value or {}
             self.library_count.set_text(f"{len(self.catalog)} wallpapers")
-            if self._awaiting_workshop_id in self.catalog:
-                self.selected_id = self._awaiting_workshop_id
-                self._awaiting_workshop_id = None
-                self.tabs.set_visible_child_name("library")
-                self._notice("O download do Workshop terminou. O wallpaper já pode ser aplicado.")
             _clear(self.gallery)
             self._cards.clear()
             identifiers = sorted(
@@ -776,7 +718,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.detail.append(_preview(item.get("preview"), 290, 165))
         self.detail.append(_label(str(item.get("title") or self.selected_id), css="detail-title", wrap=True))
         self.detail.append(
-            _label(f"{str(item.get('type', '')).capitalize()} · Workshop {self.selected_id}", css="subtle")
+            _label(f"{str(item.get('type', '')).capitalize()} · {self.selected_id}", css="subtle")
         )
         tags = item.get("tags", [])
         if tags:
@@ -831,14 +773,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 if assigned and assigned != self.selected_id:
                     other = self.catalog.get(assigned, {}).get("title", assigned)
                     self.detail.append(_label(f"Atual: {other}", css="subtle", wrap=True))
-
-        if self.selected_id.isdecimal():
-            workshop = Gtk.Button(label="Ver no Steam Workshop")
-            workshop.set_halign(Gtk.Align.START)
-            workshop.connect(
-                "clicked", lambda button: self._open_workshop(button, self.selected_id)
-            )
-            self.detail.append(workshop)
 
     def _toggle_favorite(self, wallpaper_id: str | None) -> None:
         if wallpaper_id is None:
@@ -1048,50 +982,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         if not self._updating_controls:
             self._systemctl("enable" if widget.get_active() else "disable")
 
-    def _open_workshop(self, _button: Gtk.Button, item_id: str | None = None) -> None:
-        if not self.workshop_button.get_sensitive():
-            return
-        self.workshop_button.set_sensitive(False)
-
-        def run() -> str | None:
-            command = [sys.executable, "-m", "wallpaper_engine_app.workshop_browser"]
-            if item_id:
-                command.extend(("--item", model.normalize_id(item_id)))
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            stdout, stderr = process.communicate()
-            if process.returncode:
-                raise RuntimeError(stderr.strip() or "O navegador do Workshop não abriu.")
-            for line in stdout.splitlines():
-                if line.startswith("ITEM "):
-                    return model.normalize_id(line[5:].strip())
-            return None
-
-        def done(value: str | None, error: Exception | None) -> None:
-            self.workshop_button.set_sensitive(True)
-            if error:
-                self._notice(f"Steam Workshop: {error}", error=True)
-                return
-            if value is None:
-                self._load_catalog()
-                return
-            self._awaiting_workshop_id = value
-            self._load_catalog()
-            if value not in self.catalog:
-                if self.playlist_name in (self.config.get("playlists") or {}):
-                    self.tabs.set_visible_child_name("playlists")
-                    self.playlist_id_entry.set_text(value)
-                self._notice(
-                    "Aguardando o Steam instalar este item. Você já pode adicioná-lo a uma playlist."
-                )
-
-        self._background(run, done)
-
-    def _check_workshop_download(self) -> bool:
+    def _check_library_changes(self) -> bool:
         if not self.get_visible():
             return False
         if self._catalog_scan_pending:

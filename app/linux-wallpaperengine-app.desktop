@@ -2,7 +2,7 @@
 Type=Application
 Name=Linux Wallpaper Engine
 GenericName=Live wallpaper manager
-Comment=Choose and manage Steam Workshop wallpapers
+Comment=Choose installed wallpapers and manage playlists
 Exec=@APP_EXEC@
 Icon=preferences-desktop-wallpaper
 Categories=Settings;
