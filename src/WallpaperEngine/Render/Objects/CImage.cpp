@@ -73,7 +73,7 @@ std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std
     return std::nullopt;
 }
 
-
+} // namespace
 
 CImage::ResolvedTransform CImage::localTransform (const Object& object) {
     glm::vec3 origin = object.origin->value->getVec3 ();
