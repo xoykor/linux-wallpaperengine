@@ -162,8 +162,22 @@ bool parseSkeletonCandidate (
 }
 
 bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
-    // MDLS framing differs between Wallpaper Engine revisions. First try to
-    // discover an explicit bone-count field near every MDLS marker.
+    // The mesh tells us a hard lower bound for the real skeleton size: every
+    // non-zero blend weight must reference an existing bone. Use this to reject
+    // accidental one-record matches in large MDLS blocks.
+    size_t requiredBones = 0;
+    for (size_t i = 0; i < model.blendIndices.size () && i < model.blendWeights.size (); i++) {
+	for (int j = 0; j < 4; j++) {
+	    if (model.blendWeights[i][j] > 0.0f) {
+		requiredBones = std::max (requiredBones, static_cast<size_t> (model.blendIndices[i][j]) + 1);
+	    }
+	}
+    }
+    requiredBones = std::max<size_t> (requiredBones, 1);
+
+    std::vector<PuppetModel::Bone> best;
+    size_t bestMdls = data.size ();
+
     size_t searchFrom = 0;
     while (searchFrom < data.size ()) {
 	const size_t mdls = findMarker (data, "MDLS", searchFrom);
@@ -171,48 +185,38 @@ bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
 	    break;
 	}
 
-	const size_t payload = std::min (mdls + 8, data.size ());
-	const size_t countLimit = std::min (payload + 256, data.size ());
+	const size_t nextMdla = findMarker (data, "MDLA", mdls + 4);
+	const size_t limit = nextMdla < data.size () ? nextMdla : data.size ();
+	const size_t payload = std::min (mdls + 8, limit);
+
+	// Count-based layouts: search much farther than the old fixed 256-byte
+	// window, and retain the largest structurally valid skeleton instead of the
+	// first candidate.
+	const size_t countLimit = std::min (payload + 65536, limit);
 	for (size_t countOff = payload; countOff + sizeof (uint32_t) <= countLimit; countOff++) {
 	    uint32_t count = 0;
 	    std::memcpy (&count, data.data () + countOff, sizeof (count));
-	    if (count == 0 || count > 512) {
+	    if (count < requiredBones || count > 512) {
 		continue;
 	    }
 
 	    const size_t recordMin = countOff + sizeof (uint32_t);
-	    const size_t recordLimit = std::min (recordMin + 64, data.size ());
+	    const size_t recordLimit = std::min (recordMin + 512, limit);
 	    for (size_t recordOff = recordMin; recordOff + 12 <= recordLimit; recordOff++) {
 		PuppetModel candidate;
-		if (parseSkeletonCandidate (data, countOff, recordOff, candidate)) {
-		    model.bones = std::move (candidate.bones);
-		    sLog.out (
-			"Puppet skeleton parsed via MDLS count scan offset=", mdls, " bones=", model.bones.size ()
-		    );
-		    return true;
+		if (!parseSkeletonCandidate (data, countOff, recordOff, candidate)) {
+		    continue;
+		}
+		if (candidate.bones.size () >= requiredBones && candidate.bones.size () > best.size ()) {
+		    best = std::move (candidate.bones);
+		    bestMdls = mdls;
 		}
 	    }
 	}
 
-	searchFrom = mdls + 4;
-    }
-
-    // Some Workshop puppets do not expose the count using the framing above.
-    // Infer the skeleton from the longest structurally valid chain of bone
-    // records. A record is [flags:u32][parent:i32][matrixBytes:u32=64][mat4].
-    std::vector<PuppetModel::Bone> best;
-    searchFrom = 0;
-    while (searchFrom < data.size ()) {
-	const size_t mdls = findMarker (data, "MDLS", searchFrom);
-	if (mdls >= data.size ()) {
-	    break;
-	}
-	const size_t nextMdla = findMarker (data, "MDLA", mdls + 4);
-	const size_t limit = nextMdla < data.size () ? nextMdla : data.size ();
-	const size_t scanBegin = std::min (mdls + 8, limit);
-	const size_t scanEnd = std::min (scanBegin + 4096, limit);
-
-	for (size_t start = scanBegin; start + 12 + 64 <= scanEnd; start++) {
+	// Count-less layouts: infer the longest chain. Scan the full MDLS section
+	// and allow larger revision-specific gaps between records.
+	for (size_t start = payload; start + 12 + 64 <= limit; start++) {
 	    int32_t firstParent = 0;
 	    uint32_t firstMatrixBytes = 0;
 	    std::memcpy (&firstParent, data.data () + start + 4, sizeof (firstParent));
@@ -228,6 +232,7 @@ bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
 		if (cur.off + 12 + 64 > limit) {
 		    break;
 		}
+
 		int32_t parent = 0;
 		uint32_t matrixBytes = 0;
 		std::memcpy (&parent, data.data () + cur.off + 4, sizeof (parent));
@@ -250,9 +255,8 @@ bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
 			.parent = parent, .bindLocal = bindLocal, .bindWorldInverse = glm::inverse (bindWorld.back ()) }
 		);
 
-		// Locate the next valid record, allowing revision-specific padding.
 		bool foundNext = false;
-		for (size_t pad = 0; pad <= 64 && cur.off + pad + 12 <= limit; pad++) {
+		for (size_t pad = 0; pad <= 512 && cur.off + pad + 12 <= limit; pad++) {
 		    int32_t p = 0;
 		    uint32_t bytes = 0;
 		    std::memcpy (&p, data.data () + cur.off + pad + 4, sizeof (p));
@@ -268,23 +272,25 @@ bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
 		}
 	    }
 
-	    if (parsed.size () > best.size ()) {
+	    if (parsed.size () >= requiredBones && parsed.size () > best.size ()) {
 		best = std::move (parsed);
+		bestMdls = mdls;
 	    }
-	}
-
-	if (!best.empty ()) {
-	    model.bones = std::move (best);
-	    sLog.out (
-		"Puppet skeleton parsed via inferred MDLS chain offset=", mdls, " bones=", model.bones.size ()
-	    );
-	    return true;
 	}
 
 	searchFrom = mdls + 4;
     }
 
-    return false;
+    if (best.empty ()) {
+	sLog.error ("Puppet skeleton not found; mesh requires at least ", requiredBones, " bones");
+	return false;
+    }
+
+    model.bones = std::move (best);
+    sLog.out (
+	"Puppet skeleton parsed offset=", bestMdls, " bones=", model.bones.size (), " requiredByMesh=", requiredBones
+    );
+    return true;
 }
 
 bool parseAnimationCandidate (
