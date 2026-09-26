@@ -1143,11 +1143,14 @@ bool CImage::copiesCompositionBackground () const { return this->m_image.copyBac
 std::shared_ptr<const CFBO> CImage::getCompositionFBO () const { return this->m_compositionFBO; }
 
 glm::vec2 CImage::getSize () const {
-    if (this->m_texture == nullptr) {
-	return this->getImage ().size;
+    const glm::vec2 authored = this->getImage ().size;
+    if (authored.x > 0.0f && authored.y > 0.0f) {
+	return authored;
     }
-
-    return { this->m_texture->getRealWidth (), this->m_texture->getRealHeight () };
+    if (this->m_texture != nullptr) {
+	return { this->m_texture->getRealWidth (), this->m_texture->getRealHeight () };
+    }
+    return authored;
 }
 
 GLuint CImage::getSceneSpacePosition () const { return this->m_sceneSpacePosition; }
