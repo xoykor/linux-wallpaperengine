@@ -52,17 +52,24 @@ std::string unescapeVdfPath (std::string value) {
 
 std::vector<std::filesystem::path> steamappsDirectories () {
     const auto home = detectHomepath ();
-    const std::vector<std::filesystem::path> primary = {
-	home / ".local/share/Steam/steamapps",
-	home / ".steam/steam/steamapps",
-	home / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps",
-	home / "snap/steam/common/.local/share/Steam/steamapps",
-    };
+    std::vector<std::filesystem::path> primary;
+    if (const char* xdgDataHome = getenv ("XDG_DATA_HOME"); xdgDataHome != nullptr && *xdgDataHome != '\0') {
+	primary.emplace_back (std::filesystem::path (xdgDataHome) / "Steam/steamapps");
+    }
+    primary.insert (
+	primary.end (),
+	{
+	    home / ".local/share/Steam/steamapps",
+	    home / ".steam/steam/steamapps",
+	    home / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps",
+	    home / "snap/steam/common/.local/share/Steam/steamapps",
+	}
+    );
 
     std::vector<std::filesystem::path> result;
     std::set<std::string> seen;
-    const std::regex pathEntry (R"("path"\s*"([^"]+)")", std::regex::icase);
-    const std::regex legacyEntry (R"(^\s*"\d+"\s*"([^"]+)"\s*$)");
+    const std::regex pathEntry ("\\\"path\\\"\\s*\\\"([^\\\"]+)\\\"", std::regex::icase);
+    const std::regex legacyEntry ("^\\s*\\\"\\d+\\\"\\s*\\\"([^\\\"]+)\\\"\\s*$");
 
     for (const auto& steamapps : primary) {
 	appendUnique (result, seen, steamapps);
