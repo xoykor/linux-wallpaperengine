@@ -277,9 +277,10 @@ want to return to the legacy helper, install its corrected version from this
 checkout with `./contrib/rotation/install.sh`.
 
 The catalog reads downloaded Steam Workshop projects from the standard Steam,
-Flatpak and Snap locations listed above. Discover and subscribe in the original
-Wallpaper Engine app; Steam handles downloads and this app updates its library
-when the files become available. It currently shows `scene` and `video` projects.
+Flatpak and Snap locations listed above and from additional libraries declared
+in `libraryfolders.vdf`. Discover and subscribe in the original Wallpaper Engine
+app; Steam handles downloads and this app updates its library when the files
+become available. It currently shows `scene` and `video` projects.
 Wallpaper Engine's Steam assets are still needed for some projects. Display
 discovery uses KScreen when available and XRandR on X11; wallpaper layering
 still depends on the renderer and compositor support described below.
