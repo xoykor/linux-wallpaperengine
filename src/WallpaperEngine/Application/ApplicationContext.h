@@ -7,12 +7,14 @@
 #include <string>
 #include <vector>
 
+#include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 
 #include "ApplicationState.h"
 #include "WallpaperEngine/Data/JSON.h"
 
 #include "../Render/TextureProvider.h"
+#include "WallpaperEngine/Render/PostProcessSettings.h"
 #include "WallpaperEngine/Render/WallpaperState.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
@@ -30,6 +32,7 @@ public:
      * Parses the given argc and argv and builds settings for the app
      */
     void loadSettingsFromArgv ();
+    void printCatalogJson () const;
 
     enum WINDOW_MODE {
 	/** Default window mode */
@@ -81,6 +84,8 @@ public:
 	struct {
 	    /** If the user requested a list of properties for the given background */
 	    bool onlyListProperties;
+	    /** If the user requested the installed Workshop catalog as machine-readable JSON */
+	    bool catalogJson;
 	    /** If the user requested a dump of the background structure */
 	    bool dumpStructure;
 	    /** If the user requested the particles to be deactivated */
@@ -91,10 +96,16 @@ public:
 	    std::filesystem::path defaultBackground;
 	    /** The backgrounds specified for different screens */
 	    std::map<std::string, std::filesystem::path> screenBackgrounds;
-	    /** Properties to change values for */
+	    /** Properties to change values for globally */
 	    std::map<std::string, std::string> properties;
+	    /** Property overrides scoped to one output or span group */
+	    std::map<std::string, std::map<std::string, std::string>> screenProperties;
 	    /** The scaling mode for different screens */
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::TextureUVsScaling> screenScalings;
+	    /** UV offsets for individual outputs and span groups */
+	    std::map<std::string, glm::vec2> screenOffsets;
+	    /** Post-process controls for individual outputs and span groups */
+	    std::map<std::string, WallpaperEngine::Render::PostProcessSettings> screenPostProcess;
 	    /** The clamping mode for different screens */
 	    std::map<std::string, TextureFlags> screenClamps;
 	    /** Playlists selected per screen */
@@ -125,6 +136,8 @@ public:
 	     * Example: "firefox" will match "org.mozilla.firefox".
 	     */
 	    std::vector<std::string> fullscreenPauseIgnoreAppIds;
+	    /** Post-process controls used when no output-specific override exists */
+	    WallpaperEngine::Render::PostProcessSettings postProcess;
 	    /** Render debugging switches for scene compatibility work */
 	    struct {
 		bool baseOnly;
@@ -140,6 +153,7 @@ public:
 		glm::ivec4 geometry;
 		TextureFlags clamp;
 		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode;
+		glm::vec2 uvOffset;
 	    } window;
 
 	    struct {
@@ -186,12 +200,16 @@ public:
     } settings = {
         .general = {
             .onlyListProperties = false,
+            .catalogJson = false,
             .dumpStructure = false,
             .assets = "",
             .defaultBackground = "",
             .screenBackgrounds = {},
             .properties = {},
+            .screenProperties = {},
             .screenScalings = {},
+            .screenOffsets = {},
+            .screenPostProcess = {},
             .screenClamps = {},
             .screenPlaylists = {},
             .defaultPlaylist = std::nullopt,
@@ -203,6 +221,7 @@ public:
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
             .fullscreenPauseIgnoreAppIds = {},
+            .postProcess = {},
             .debug = {
                 .baseOnly = false,
                 .noSolidFinal = false,
@@ -215,6 +234,7 @@ public:
                 .geometry = {},
                 .clamp = TextureFlags_ClampUVs,
                 .scalingMode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs,
+                .uvOffset = { 0.0f, 0.0f },
             },
             .wayland = {
                 .layer = WAYLAND_LAYER_BOTTOM,

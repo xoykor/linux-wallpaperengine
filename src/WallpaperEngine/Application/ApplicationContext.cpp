@@ -5,6 +5,8 @@
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
+#include <cctype>
+#include <glm/common.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -242,6 +244,124 @@ const ApplicationContext::PlaylistDefinition& ApplicationContext::getPlaylistFro
     return cur->second;
 }
 
+void ApplicationContext::printCatalogJson () const {
+    JSON catalog = JSON::object ();
+
+    for (const auto& root : Steam::FileSystem::workshopDirectories (WORKSHOP_APP_ID)) {
+	std::error_code iteratorError;
+
+	for (std::filesystem::directory_iterator it (root, iteratorError), end; !iteratorError && it != end;
+	     it.increment (iteratorError)) {
+	    std::error_code entryError;
+	    if (!it->is_directory (entryError) || entryError) {
+		continue;
+	    }
+
+	    const auto projectDirectory = it->path ();
+	    const auto wallpaperId = projectDirectory.filename ().string ();
+	    if (wallpaperId.empty ()
+		|| !std::all_of (wallpaperId.begin (), wallpaperId.end (), [] (unsigned char value) {
+		       return std::isdigit (value) != 0;
+		   })
+		|| catalog.contains (wallpaperId)) {
+		continue;
+	    }
+
+	    std::ifstream projectFile (projectDirectory / "project.json");
+	    if (!projectFile.is_open ()) {
+		continue;
+	    }
+
+	    try {
+		const JSON project = JSON::parse (projectFile);
+		std::string type = project.optional<std::string> ("type", "");
+		std::transform (type.begin (), type.end (), type.begin (), [] (unsigned char value) {
+		    return static_cast<char> (std::tolower (value));
+		});
+		if (type != "scene" && type != "video" && type != "web") {
+		    continue;
+		}
+
+		const auto title = project.optional<std::string> ("title", wallpaperId);
+		const auto steamapps = root.parent_path ().parent_path ().parent_path ();
+
+		JSON item = {
+		    { "title", title.empty () ? wallpaperId : title },
+		    { "type", type },
+		    { "path", projectDirectory.string () },
+		    { "assets", (steamapps / "common/wallpaper_engine/assets").string () },
+		    { "preview", nullptr },
+		    { "tags", JSON::array () },
+		    { "properties", JSON::object () },
+		};
+
+		auto validPreview = [&projectDirectory] (const std::filesystem::path& relative) -> std::optional<std::string> {
+		    if (relative.empty () || relative.is_absolute ()) {
+			return std::nullopt;
+		    }
+
+		    const auto normalized = (projectDirectory / relative).lexically_normal ();
+		    const auto local = normalized.lexically_relative (projectDirectory);
+		    if (local.empty () || *local.begin () == "..") {
+			return std::nullopt;
+		    }
+
+		    std::error_code fileError;
+		    if (!std::filesystem::is_regular_file (normalized, fileError) || fileError) {
+			return std::nullopt;
+		    }
+		    return normalized.string ();
+		};
+
+		if (const auto configured = project.optional<std::string> ("preview"); configured.has_value ()) {
+		    if (const auto preview = validPreview (*configured); preview.has_value ()) {
+			item["preview"] = *preview;
+		    }
+		}
+
+		if (item["preview"].is_null ()) {
+		    for (const auto* fallback : { "preview.jpg", "preview.jpeg", "preview.png", "preview.gif" }) {
+			if (const auto preview = validPreview (fallback); preview.has_value ()) {
+			    item["preview"] = *preview;
+			    break;
+			}
+		    }
+		}
+
+		if (const auto tags = project.optional ("tags"); tags.has_value ()) {
+		    if (tags->is_array ()) {
+			item["tags"] = *tags;
+		    } else if (tags->is_string ()) {
+			std::stringstream values (tags->get<std::string> ());
+			std::string value;
+			while (std::getline (values, value, ',')) {
+			    const auto first = value.find_first_not_of (" \t\r\n");
+			    const auto last = value.find_last_not_of (" \t\r\n");
+			    if (first != std::string::npos) {
+				item["tags"].push_back (value.substr (first, last - first + 1));
+			    }
+			}
+		    }
+		}
+
+		if (const auto general = project.optional ("general"); general.has_value ()) {
+		    if (const auto properties = general->optional ("properties"); properties.has_value ()
+			&& properties->is_object ()) {
+			item["properties"] = *properties;
+		    }
+		}
+
+		catalog[wallpaperId] = std::move (item);
+	    } catch (const std::exception&) {
+		// A malformed Workshop item must not hide the rest of the installed catalog.
+		continue;
+	    }
+	}
+    }
+
+    std::cout << catalog.dump () << std::endl;
+}
+
 ApplicationContext::ApplicationContext (int argc, char* argv[]) : m_argc (argc), m_argv (argv) { }
 
 void ApplicationContext::loadSettingsFromArgv () {
@@ -312,6 +432,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    lastScreen = value;
 	    this->settings.general.screenBackgrounds[lastScreen] = "";
 	    this->settings.general.screenScalings[lastScreen] = this->settings.render.window.scalingMode;
+	    this->settings.general.screenOffsets[lastScreen] = this->settings.render.window.uvOffset;
+	    this->settings.general.screenPostProcess[lastScreen] = this->settings.render.postProcess;
 	    this->settings.general.screenClamps[lastScreen] = this->settings.render.window.clamp;
 	})
 	.append ();
@@ -356,11 +478,13 @@ void ApplicationContext::loadSettingsFromArgv () {
 
 	    group.scaling = this->settings.render.window.scalingMode;
 	    group.clamp = this->settings.render.window.clamp;
+	    const std::string groupKey = "span:" + group.screens.front ();
 	    this->settings.general.spanGroups.push_back (std::move (group));
-	    // set lastScreen to a synthetic name so --bg/--scaling/--clamp can target this group
-	    lastScreen = "span:" + value;
-	    // register the synthetic name in screenBackgrounds so the rest of the pipeline sees it
+	    // Use the same key WallpaperApplication uses while loading and rendering the group.
+	    lastScreen = groupKey;
 	    this->settings.general.screenBackgrounds[lastScreen] = "";
+	    this->settings.general.screenOffsets[lastScreen] = this->settings.render.window.uvOffset;
+	    this->settings.general.screenPostProcess[lastScreen] = this->settings.render.postProcess;
 	})
 	.append ();
     backgroundGroup.add_argument ("-b", "--bg")
@@ -432,6 +556,27 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	})
 	.append ();
+    backgroundGroup.add_argument ("--offset-x")
+	.help ("UV X offset for the preceding output/span, or the default window when no output is selected")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const float offset = std::stof (value);
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenOffsets[lastScreen].x = offset;
+	    else
+		this->settings.render.window.uvOffset.x = offset;
+	})
+	.append ();
+    backgroundGroup.add_argument ("--offset-y")
+	.help ("UV Y offset for the preceding output/span, or the default window when no output is selected")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const float offset = std::stof (value);
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenOffsets[lastScreen].y = offset;
+	    else
+		this->settings.render.window.uvOffset.y = offset;
+	})
+	.append ();
+
     backgroundGroup.add_argument ("--clamp")
 	.help (
 	    "Clamp mode to use when rendering the background, this applies to the previous --window, --screen-root, "
@@ -554,6 +699,11 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     auto& contentGroup = program.add_group ("Content options");
 
+    contentGroup.add_argument ("--catalog-json")
+	.help ("Prints the installed scene/video/web Workshop catalog as JSON and exits")
+	.flag ()
+	.store_into (this->settings.general.catalogJson);
+
     contentGroup.add_argument ("--assets-dir")
 	.help ("Folder where the assets are stored")
 	.default_value ("")
@@ -575,6 +725,42 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.mouse.disableparallax = true; });
 
+    configurationGroup.add_argument ("--contrast")
+	.help ("Post-process contrast for the preceding output/span, or globally when no output is selected")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const float v = std::stof (value);
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenPostProcess[lastScreen].contrast = v;
+	    else
+		this->settings.render.postProcess.contrast = v;
+	});
+    configurationGroup.add_argument ("--saturation")
+	.help ("Post-process saturation for the preceding output/span, or globally when no output is selected")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const float v = std::stof (value);
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenPostProcess[lastScreen].saturation = v;
+	    else
+		this->settings.render.postProcess.saturation = v;
+	});
+    configurationGroup.add_argument ("--border-colour")
+	.help ("RGB border colour as r,g,b with components from 0 to 1")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const auto first = value.find (',');
+	    const auto second = first == std::string::npos ? std::string::npos : value.find (',', first + 1);
+	    if (first == std::string::npos || second == std::string::npos
+		|| value.find (',', second + 1) != std::string::npos)
+		sLog.exception ("--border-colour expects exactly three comma-separated values");
+	    glm::vec3 colour { std::stof (value.substr (0, first)),
+		std::stof (value.substr (first + 1, second - first - 1)),
+		std::stof (value.substr (second + 1)) };
+	    colour = glm::clamp (colour, glm::vec3 (0.0f), glm::vec3 (1.0f));
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenPostProcess[lastScreen].borderColour = colour;
+	    else
+		this->settings.render.postProcess.borderColour = colour;
+	});
+
     configurationGroup.add_argument ("-l", "--list-properties")
 	.help ("List all the available properties and their configuration")
 	.flag ()
@@ -590,6 +776,22 @@ void ApplicationContext::loadSettingsFromArgv () {
 		this->settings.general.properties[value] = "1";
 	    } else {
 		this->settings.general.properties[value.substr (0, equals)] = value.substr (equals + 1);
+	    }
+	})
+	.append ();
+
+    configurationGroup.add_argument ("--screen-property")
+	.help ("Overrides a project property only for the preceding --screen-root or --screen-span output")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    if (lastScreen.empty ()) {
+		sLog.exception ("--screen-property must follow --screen-root or --screen-span");
+	    }
+
+	    const std::string::size_type equals = value.find ('=');
+	    if (equals == std::string::npos) {
+		this->settings.general.screenProperties[lastScreen][value] = "1";
+	    } else {
+		this->settings.general.screenProperties[lastScreen][value.substr (0, equals)] = value.substr (equals + 1);
 	    }
 	})
 	.append ();
@@ -657,6 +859,10 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     try {
 	program.parse_known_args (this->m_argc, this->m_argv);
+
+	if (this->settings.general.catalogJson) {
+	    return;
+	}
 
 	if (this->settings.general.defaultBackground.empty ()) {
 	    throw std::runtime_error ("At least one background ID must be specified");

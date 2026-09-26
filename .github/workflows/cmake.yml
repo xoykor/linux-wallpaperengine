@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/cmake.yml'
       - 'src/**'
+      - 'app/**'
       - 'CMakeModules/**'
       - CMakeLists.txt
       - 'protocols/**'
@@ -13,6 +14,7 @@ on:
     paths:
       - '.github/workflows/cmake.yml'
       - 'src/**'
+      - 'app/**'
       - 'CMakeModules/**'
       - CMakeLists.txt
       - 'protocols/**'
@@ -20,6 +22,18 @@ on:
   workflow_dispatch:
 
 jobs:
+  python-app:
+    name: Desktop app checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Python syntax
+        run: python3 -m compileall -q app/wallpaper_engine_app app/tests
+      - name: Check installer syntax
+        run: bash -n app/install.sh
+      - name: Run desktop app regression tests
+        run: python3 -m unittest discover -s app/tests -v
+
   formatting:
     name: Formatting check
     runs-on: ubuntu-latest

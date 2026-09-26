@@ -5,8 +5,9 @@
 
 using namespace WallpaperEngine::Render;
 
-WallpaperState::WallpaperState (const TextureUVsScaling& textureUVsMode, const uint32_t& clampMode) :
-    m_textureUVsMode (textureUVsMode), m_clampingMode (clampMode) { }
+WallpaperState::WallpaperState (
+    const TextureUVsScaling& textureUVsMode, const uint32_t& clampMode, const glm::vec2& uvOffset
+) : m_textureUVsMode (textureUVsMode), m_clampingMode (clampMode), m_uvOffset (uvOffset) { }
 
 bool WallpaperState::hasChanged (
     const glm::ivec4& viewport, const bool& vflip, const int& projectionWidth, const int& projectionHeight
@@ -182,5 +183,15 @@ void WallpaperState::updateState (
                 This message is for developers, if you are just user it's a bug."
 	    );
 	    break;
+    }
+
+    this->m_UVs.ustart += this->m_uvOffset.x;
+    this->m_UVs.uend += this->m_uvOffset.x;
+    if (this->m_vflip) {
+	this->m_UVs.vstart -= this->m_uvOffset.y;
+	this->m_UVs.vend -= this->m_uvOffset.y;
+    } else {
+	this->m_UVs.vstart += this->m_uvOffset.y;
+	this->m_UVs.vend += this->m_uvOffset.y;
     }
 }

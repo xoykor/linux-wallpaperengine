@@ -96,8 +96,7 @@ yay -S linux-wallpaperengine-git
 
 You **must own and install Wallpaper Engine** via Steam. This provides the required assets used by many backgrounds.
 
-Right now the application will automatically detect everything for you as long as the official Wallpaper Engine is installed
-in one of these locations:
+The application checks the standard Steam, Flatpak Steam and Snap Steam locations:
 
 ```
 ~/.steam/steam/steamapps/common
@@ -106,7 +105,11 @@ in one of these locations:
 ~/snap/steam/common/.local/share/Steam/steamapps/common
 ```
 
-> ✅ If Wallpaper Engine is installed in one of these paths, the assets will be detected automatically!
+It also reads each installation's `steamapps/libraryfolders.vdf`, so additional Steam
+libraries on other mounted disks are discovered automatically. A custom
+`XDG_DATA_HOME/Steam` location is supported as well.
+
+> ✅ Wallpaper Engine assets and Workshop content can live in a secondary Steam library; they no longer need to be under the default home-directory library.
 
 ---
 
@@ -136,7 +139,7 @@ linux-wallpaperengine --assets-dir /path/to/assets
 Clone the repo:
 
 ```bash
-git clone --recurse-submodules https://github.com/Almamu/linux-wallpaperengine.git
+git clone --recurse-submodules https://github.com/xoykor/linux-wallpaperengine.git
 cd linux-wallpaperengine
 ```
 
@@ -165,37 +168,128 @@ You can use either:
 - A Steam Workshop ID (e.g. `1845706469`)
 - A path to a background folder
 
-### Automatic Steam Workshop rotation
+### Desktop app (this fork)
 
-This fork includes an optional user-level systemd service that automatically
-detects supported `scene` and `video` wallpapers in the Steam Workshop and
-changes them every ten minutes. It also pauses the renderer when KDE detects a
-maximized or fullscreen window.
+The optional GTK 4 app provides a library of installed Workshop items with previews, search and
+scene/video/favorites filters. You can apply a wallpaper to every display or
+pin one to a specific display, mark favorites, and control rotation, shuffle,
+the interval, FPS, scaling and audio mute. The app has
+start/stop/next controls and a setting for a custom renderer path. A user
+systemd service keeps the wallpaper running when the window is closed. The
+default renderer setup runs continuously at 30 FPS with audio isolated; it
+does not suspend the renderer when another window covers the wallpaper.
 
-On KDE Plasma, install and enable it from the repository root with:
+Discover and subscribe to wallpapers in the **original Wallpaper Engine app**.
+Steam downloads subscribed items. This Linux app reads the local Workshop
+library and automatically shows new wallpapers after Steam finishes downloading
+them, including while its window is open. Discovery and subscriptions use the
+existing Steam session in Wallpaper Engine, so this app does not ask you to
+sign in again.
+
+The **Playlists** page creates, renames, deletes, activates and reorders
+playlists. Add an installed wallpaper from the library. With shuffle off,
+rotation follows the order shown in the playlist. The active playlist
+determines the rotation pool; wallpapers pinned to a display stay fixed.
+
+The GTK 4 control app is intended to stay distribution-neutral across
+systemd-based Fedora and Debian/Ubuntu families. Display discovery prefers
+`kscreen-doctor` when KScreen is installed and falls back to `xrandr` on
+X11. Renderer/compositor support is a separate constraint: KDE Plasma is the
+tested desktop target; GNOME/Mutter Wayland does not implement the
+`wlr-layer-shell` protocol required by the renderer, so GNOME Wayland desktop
+rendering is not currently claimed as supported. On X11, the renderer also
+retains the upstream limitation that a desktop/compositor drawing over the
+root background can hide the wallpaper.
+
+Install the renderer first and make `linux-wallpaperengine` available in
+`PATH` or `~/.local/bin`. If you built the renderer from this checkout, one
+way to keep its binary and support files together is:
 
 ```bash
-./contrib/rotation/install.sh
+cmake --install build --prefix "$HOME/.local/opt/linux-wallpaperengine"
+mkdir -p "$HOME/.local/bin"
+ln -s "$HOME/.local/opt/linux-wallpaperengine/linux-wallpaperengine" \
+  "$HOME/.local/bin/linux-wallpaperengine"
 ```
 
-The helper checks the standard Steam locations, applies the first wallpaper
-as soon as a connected screen is available, and keeps rotating at the ten
-minute cadence. Stop it with:
+Skip those commands if your package manager already installed the renderer.
+The desktop app also needs Python 3 with `gi`/GTK 4 introspection and a
+working user systemd manager. For monitor discovery, install `kscreen` on KDE
+Plasma or the XRandR command-line utility for an X11 session.
+
+Typical packages:
 
 ```bash
-systemctl --user disable --now linux-wallpaperengine-rotation.service
+# Debian / Ubuntu
+sudo apt install python3-gi gir1.2-gtk-4.0
+# KDE Plasma display discovery:
+sudo apt install kscreen
+# X11 fallback (provides xrandr):
+sudo apt install x11-xserver-utils
+
+# Fedora
+sudo dnf install python3-gobject gtk4
+# KDE Plasma display discovery:
+sudo dnf install kscreen
+# X11 fallback:
+sudo dnf install xrandr
 ```
 
-The pause bridge requires the Python `dbus` and `gi` modules. The renderer
-itself can still be used normally without this optional service.
+Run the installer as your normal user, without `sudo`, from the repository
+root:
+
+```bash
+./app/install.sh
+```
+
+On the first install, the script adds **Linux Wallpaper Engine** to the app
+menu and enables and starts `linux-wallpaperengine-app.service`. Open it from
+the menu or run
+`~/.local/bin/linux-wallpaperengine-app`. The service can be managed with:
+
+```bash
+systemctl --user status linux-wallpaperengine-app.service
+systemctl --user restart linux-wallpaperengine-app.service
+journalctl --user -u linux-wallpaperengine-app.service -e
+```
+
+Re-running the installer updates the app while preserving whether its service
+was enabled and running. A stopped service stays stopped, and an active one
+restarts with the updated code. When the new service is enabled or running,
+the installer disables the older `linux-wallpaperengine-rotation.service`
+before starting the new one so two renderers do not compete. It keeps the old
+service file and scripts and restores its previous service state if the
+installation fails. The new app has separate settings in
+`~/.config/linux-wallpaperengine/app.json`; it does not import the old
+rotation queue.
+
+To remove the app, its menu shortcut and its service while keeping your
+settings and renderer:
+
+```bash
+./app/install.sh --uninstall
+```
+
+Uninstall does not change the older rotation service. An already installed
+copy of that helper may still contain the former SIGSTOP-based pause logic,
+which could freeze PipeWire/Firefox or hide the wallpaper after login. If you
+want to return to the legacy helper, install its corrected version from this
+checkout with `./contrib/rotation/install.sh`.
+
+The catalog reads downloaded Steam Workshop projects from the standard Steam,
+Flatpak and Snap locations listed above and from additional libraries declared
+in `libraryfolders.vdf`. Discover and subscribe in the original Wallpaper Engine
+app; Steam handles downloads and this app updates its library when the files
+become available. It currently shows `scene` and `video` projects.
+Wallpaper Engine's Steam assets are still needed for some projects. Display
+discovery uses KScreen when available and XRandR on X11; wallpaper layering
+still depends on the renderer and compositor support described below.
 
 ---
 
-### What about a GUI?
+### Other GUIs
 
-Implementing a GUI is out of scope for now.
-There's a few developers that decided to focus on this and created their own.
-If you're one of those developers, feel free to open an issue to get your project included here!
+The community also maintains these alternative interfaces:
 
 - [simple-linux-wallpaperengine-gui](https://github.com/Maxnights/simple-linux-wallpaperengine-gui) by @Maxnights
 - [linux-wallpaper-engine](https://github.com/jagrat7/linux-wallpaper-engine) by @jagrat7

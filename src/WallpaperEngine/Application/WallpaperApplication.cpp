@@ -432,7 +432,7 @@ void WallpaperApplication::advancePlaylist (
 
 	auto project = this->loadBackground (nextPath.string ());
 
-	this->setupPropertiesForProject (*project);
+	this->setupPropertiesForProject (*project, screen);
 	this->ensureBrowserForProject (*project);
 
 	this->m_backgrounds[screen] = std::move (project);
@@ -445,15 +445,66 @@ void WallpaperApplication::advancePlaylist (
 	const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
 	    ? clampIt->second
 	    : this->m_context.settings.render.window.clamp;
+	const auto offsetIt = this->m_context.settings.general.screenOffsets.find (screen);
+	const auto postIt = this->m_context.settings.general.screenPostProcess.find (screen);
+	const auto offset = offsetIt != this->m_context.settings.general.screenOffsets.end ()
+	    ? offsetIt->second
+	    : this->m_context.settings.render.window.uvOffset;
+	const auto postProcess = postIt != this->m_context.settings.general.screenPostProcess.end ()
+	    ? postIt->second
+	    : this->m_context.settings.render.postProcess;
 
 	if (this->m_renderContext) {
-	    this->m_renderContext->setWallpaper (
-		screen,
-		WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		    *this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
-		    this->m_browserContext.get (), scaling, clamp
-		)
+	    auto rendered = WallpaperEngine::Render::CWallpaper::fromWallpaper (
+		*this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
+		this->m_browserContext.get (), scaling, clamp, offset, postProcess
 	    );
+
+	    if (screen.rfind ("span:", 0) == 0) {
+		auto groupIt = std::find_if (
+		    this->m_context.settings.general.spanGroups.begin (),
+		    this->m_context.settings.general.spanGroups.end (),
+		    [&screen] (const ApplicationContext::SpanGroup& group) {
+			return !group.screens.empty () && "span:" + group.screens.front () == screen;
+		    }
+		);
+		if (groupIt == this->m_context.settings.general.spanGroups.end ()) {
+		    throw std::runtime_error ("Span playlist target no longer exists");
+		}
+
+		const auto& viewports = this->m_renderContext->getOutput ().getViewports ();
+		int minX = INT_MAX, minY = INT_MAX, maxX = INT_MIN, maxY = INT_MIN;
+		bool anyFound = false;
+		for (const auto& screenName : groupIt->screens) {
+		    const auto viewport = viewports.find (screenName);
+		    if (viewport == viewports.end ()) {
+			continue;
+		    }
+		    anyFound = true;
+		    minX = std::min (minX, viewport->second->globalPosition.x);
+		    minY = std::min (minY, viewport->second->globalPosition.y);
+		    maxX = std::max (
+			maxX, viewport->second->globalPosition.x + viewport->second->logicalSize.x
+		    );
+		    maxY = std::max (
+			maxY, viewport->second->globalPosition.y + viewport->second->logicalSize.y
+		    );
+		}
+		if (!anyFound) {
+		    throw std::runtime_error ("No active viewport remains for span playlist");
+		}
+
+		WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo;
+		spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
+		std::shared_ptr<WallpaperEngine::Render::CWallpaper> shared (std::move (rendered));
+		shared->setSpanInfo (spanInfo);
+		for (const auto& screenName : groupIt->screens) {
+		    this->m_renderContext->setWallpaper (screenName, shared);
+		}
+		groupIt->background = nextPath;
+	    } else {
+		this->m_renderContext->setWallpaper (screen, std::move (rendered));
+	    }
 	}
 
 	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;
@@ -499,16 +550,22 @@ void WallpaperApplication::updatePlaylists () {
     }
 }
 
-void WallpaperApplication::setupPropertiesForProject (const Project& project) {
-    // show properties if required
+void WallpaperApplication::setupPropertiesForProject (const Project& project, const std::string& outputKey) {
+    const auto scoped = this->m_context.settings.general.screenProperties.find (outputKey);
+
     for (const auto& [key, cur] : project.properties) {
-	// update the value of the property
-	auto override = this->m_context.settings.general.properties.find (key);
+	const auto globalOverride = this->m_context.settings.general.properties.find (key);
+	if (globalOverride != this->m_context.settings.general.properties.end ()) {
+	    sLog.out ("Applying global override value for ", key);
+	    cur->update (globalOverride->second, DynamicValue::UpdateSource::User);
+	}
 
-	if (override != this->m_context.settings.general.properties.end ()) {
-	    sLog.out ("Applying override value for ", key);
-
-	    cur->update (override->second, DynamicValue::UpdateSource::User);
+	if (scoped != this->m_context.settings.general.screenProperties.end ()) {
+	    const auto screenOverride = scoped->second.find (key);
+	    if (screenOverride != scoped->second.end ()) {
+		sLog.out ("Applying override value for ", key, " on ", outputKey);
+		cur->update (screenOverride->second, DynamicValue::UpdateSource::User);
+	    }
 	}
 
 	if (this->m_context.settings.general.onlyListProperties) {
@@ -519,7 +576,7 @@ void WallpaperApplication::setupPropertiesForProject (const Project& project) {
 
 void WallpaperApplication::setupProperties () {
     for (const auto& [background, info] : this->m_backgrounds) {
-	this->setupPropertiesForProject (*info);
+	this->setupPropertiesForProject (*info, background);
     }
 }
 
@@ -687,14 +744,17 @@ void WallpaperApplication::setupOutput () {
 }
 
 void WallpaperApplication::setupAudio () {
-    // ensure audioprocessing is required by any background, and we have it enabled
-    const bool audioProcessingRequired = std::ranges::any_of (
+    // A native playlist can switch from a non-reactive project to an
+    // audio-reactive one after startup. Keep the Pulse recorder available for
+    // playlist sessions, while static non-reactive wallpapers retain the
+    // lightweight recorder used upstream.
+    const bool audioProcessingMayBeRequired = !this->m_activePlaylists.empty () || std::ranges::any_of (
 	this->m_backgrounds, [] (const std::pair<const std::string, ProjectUniquePtr>& pair) -> bool {
 	    return pair.second->supportsAudioProcessing;
 	}
     );
 
-    if (audioProcessingRequired && this->m_context.settings.audio.audioprocessing) {
+    if (audioProcessingMayBeRequired && this->m_context.settings.audio.audioprocessing) {
 	this->m_audioRecorder
 	    = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> ();
     } else {
@@ -738,11 +798,20 @@ void WallpaperApplication::prepareOutputs () {
 	const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
 	    ? clampIt->second
 	    : this->m_context.settings.render.window.clamp;
+	const auto offsetIt = this->m_context.settings.general.screenOffsets.find (background);
+	const auto postIt = this->m_context.settings.general.screenPostProcess.find (background);
+	const auto offset = offsetIt != this->m_context.settings.general.screenOffsets.end ()
+	    ? offsetIt->second
+	    : this->m_context.settings.render.window.uvOffset;
+	const auto postProcess = postIt != this->m_context.settings.general.screenPostProcess.end ()
+	    ? postIt->second
+	    : this->m_context.settings.render.postProcess;
 
 	m_renderContext->setWallpaper (
 	    background,
 	    WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		*info->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), scaling, clamp
+		*info->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), scaling, clamp, offset,
+		postProcess
 	    )
 	);
     }
@@ -799,9 +868,17 @@ void WallpaperApplication::prepareOutputs () {
 	spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
 
 	// Create one shared wallpaper with the span group's scaling mode
+	const auto offsetIt = this->m_context.settings.general.screenOffsets.find (groupKey);
+	const auto postIt = this->m_context.settings.general.screenPostProcess.find (groupKey);
+	const auto offset = offsetIt != this->m_context.settings.general.screenOffsets.end ()
+	    ? offsetIt->second
+	    : this->m_context.settings.render.window.uvOffset;
+	const auto postProcess = postIt != this->m_context.settings.general.screenPostProcess.end ()
+	    ? postIt->second
+	    : this->m_context.settings.render.postProcess;
 	auto sharedWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
 	    *bgIt->second->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), spanGroup.scaling,
-	    spanGroup.clamp
+	    spanGroup.clamp, offset, postProcess
 	);
 
 	// Convert to shared_ptr so it can be registered for multiple viewports

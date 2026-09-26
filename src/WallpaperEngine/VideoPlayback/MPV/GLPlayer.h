@@ -43,6 +43,7 @@ public:
     void setMuted ();
     void clearMuted ();
     void setVolume (double volume);
+    void setAudioEnabled (bool enabled);
     void setPaused ();
     void clearPaused ();
 
@@ -69,6 +70,7 @@ protected:
     mpv_render_context* m_renderContext = nullptr;
     double m_volume = 0.0f;
     bool m_muted = false;
+    bool m_audioEnabled = true;
     bool m_untimed = false;
     bool m_paused = false;
     std::optional<std::filesystem::path> m_file;

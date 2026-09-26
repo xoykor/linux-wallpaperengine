@@ -5,6 +5,9 @@ The renderer itself remains unchanged: this helper supervises one renderer
 process at a time, rescans the Workshop directory before every selection, and
 keeps the current wallpaper in a small state directory for manual control and
 diagnostics.
+
+Do not suspend the renderer with SIGSTOP: a suspended process can hold PipeWire
+nodes and can fail to establish its Wayland layer during session startup.
 """
 
 import json
@@ -15,9 +18,6 @@ import signal
 import subprocess
 import time
 
-from wallpaper_pause import PauseController
-
-
 INTERVAL = 10 * 60
 WORKSHOP_APP_ID = "431960"
 STATE = Path.home() / ".local/state/linux-wallpaperengine"
@@ -26,8 +26,6 @@ STATE.mkdir(parents=True, exist_ok=True)
 running = True
 advance = False
 child = None
-paused = False
-pause_controller = None
 
 
 def stop(_signum, _frame):
@@ -122,13 +120,10 @@ def outputs():
 
 
 def terminate():
-    global child, paused
+    global child
     if child is None:
         return
     try:
-        # A stopped renderer must resume before graceful termination.
-        if paused:
-            os.killpg(child.pid, signal.SIGCONT)
         os.killpg(child.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
@@ -138,28 +133,6 @@ def terminate():
         os.killpg(child.pid, signal.SIGKILL)
         child.wait()
     child = None
-    paused = False
-
-
-def update_pause(started):
-    global paused
-    requested = pause_controller.poll()
-    # Give a selected wallpaper two seconds to initialize before pausing it.
-    desired = requested and time.monotonic() - started >= 2
-    if desired == paused or child.poll() is not None:
-        return
-    try:
-        os.killpg(child.pid, signal.SIGSTOP if desired else signal.SIGCONT)
-    except ProcessLookupError:
-        return
-    paused = desired
-    save("pause.json", {"paused": paused, "pid": child.pid, "updated_at": time.time()})
-    print(
-        "Wallpaper paused: maximized or fullscreen window."
-        if paused
-        else "Wallpaper resumed: desktop visible.",
-        flush=True,
-    )
 
 
 previous = load("current.json", {}).get("id")
@@ -167,8 +140,6 @@ queue = load("queue.json", [])
 failed = load("failed.json", {})
 
 try:
-    pause_controller = PauseController()
-    pause_controller.poll()
     while running:
         items = catalog()
         now = time.time()
@@ -231,10 +202,6 @@ try:
         child = subprocess.Popen(cmd, start_new_session=True, env=wp_env)
         started_at = time.time()
         save(
-            "pause.json",
-            {"paused": False, "pid": child.pid, "updated_at": started_at},
-        )
-        save(
             "current.json",
             dict(
                 selected_data,
@@ -257,7 +224,6 @@ try:
             and child.poll() is None
             and time.monotonic() - started < INTERVAL
         ):
-            update_pause(started)
             time.sleep(0.2)
 
         crashed = child.poll() is not None
@@ -274,5 +240,3 @@ try:
             time.sleep(2)
 finally:
     terminate()
-    if pause_controller is not None:
-        pause_controller.close()

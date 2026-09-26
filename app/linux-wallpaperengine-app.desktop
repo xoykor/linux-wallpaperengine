@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Linux Wallpaper Engine
+GenericName=Live wallpaper manager
+Comment=Choose installed wallpapers and manage playlists
+Exec=@APP_EXEC@
+Icon=preferences-desktop-wallpaper
+Categories=Settings;
+Terminal=false
+StartupNotify=true
