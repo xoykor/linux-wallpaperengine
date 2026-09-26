@@ -227,11 +227,11 @@ void CModel::setupPass (Submesh& submesh) {
     submesh.fboProvider = std::make_shared<FBOProvider> (this);
     submesh.passOverride = std::make_unique<ImageEffectPassOverride> ();
 
-    // Keep authored material behavior, but enable the model-lighting branch when
-    // the shader exposes it. The existing renderer already supplies ambient/skylight.
-    if (!firstPass.combos.contains ("LIGHTING")) {
-	submesh.passOverride->combos["LIGHTING"] = 1;
-    }
+    // Until the scene-light stage is available, never select Wallpaper Engine's
+    // dynamic LightingV1 branch: our current generated module is a zero-light stub,
+    // which turns otherwise valid 3D model materials black/invisible. Render the
+    // authored albedo/material path as the global fallback instead.
+    submesh.passOverride->combos["LIGHTING"] = 0;
 
     submesh.pass = new Effects::CPass (
 	*this, submesh.fboProvider, firstPass, *submesh.passOverride, std::nullopt, std::nullopt
