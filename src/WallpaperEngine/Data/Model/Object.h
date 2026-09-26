@@ -25,6 +25,8 @@ struct ObjectData {
     std::string name;
     std::vector<int> dependencies;
     std::optional<int> parent;
+    /** Optional puppet/model attachment point on the parent. */
+    std::optional<std::string> attachment;
     /** The point of origin of the object */
     UserSettingUniquePtr origin;
     /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
