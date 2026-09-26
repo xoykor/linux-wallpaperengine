@@ -234,9 +234,9 @@ def _libraryfolders_paths(steamapps: Path) -> list[Path]:
     except OSError:
         return []
 
-    raw_paths = re.findall(r'"path"[ \t]*"([^"]+)"', text, flags=re.IGNORECASE)
+    raw_paths = re.findall(r'"path"[ \\t]*"([^"]+)"', text, flags=re.IGNORECASE)
     # Older VDF files used numeric keys directly for library paths.
-    legacy_pattern = r'^[ \t]*"[0-9]+"[ \t]*"([^"]+)"[ \t]*
+    legacy_pattern = r'^[ \\t]*"[0-9]+"[ \\t]*"([^"]+)"'
     raw_paths.extend(re.findall(legacy_pattern, text, flags=re.MULTILINE))
 
     result: list[Path] = []
@@ -264,6 +264,7 @@ def steamapps_roots() -> list[Path]:
     for steamapps in primary:
         candidates.extend(_libraryfolders_paths(steamapps))
     return list(dict.fromkeys(candidates))
+
 
 def _preview_for(project_dir: Path, raw: Any) -> str | None:
     candidates = [raw] if isinstance(raw, str) else []
