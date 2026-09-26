@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CRenderable.h"
+#include "PuppetModel.h"
 #include "WallpaperEngine/Render/CObject.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
@@ -11,6 +12,7 @@
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <glm/vec3.hpp>
+#include <optional>
 #include <vector>
 
 using namespace WallpaperEngine;
@@ -79,6 +81,8 @@ private:
     bool loadPuppetMesh (const glm::vec2& size);
     void updatePuppetPositionBuffer (const glm::vec2& size);
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
+    void uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::vec2& size);
+    void updatePuppetAnimation ();
     ResolvedTransform updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
     void updateScenePosition (
@@ -102,7 +106,21 @@ private:
     GLuint m_puppetIndices = GL_NONE;
     GLsizei m_puppetIndexCount = 0;
     bool m_hasPuppetMesh = false;
+    /** Effectless puppet: the first pass can become the screen pass, so puppet verts
+     *  may need to be remapped from texture-local space into the image quad. */
+    bool m_puppetScreenSpace = false;
     std::vector<GLfloat> m_puppetRawPositions = {};
+
+    std::optional<PuppetModel> m_puppetModel = std::nullopt;
+    struct PuppetLayerBinding {
+	const PuppetModel::Clip* clip;
+	const ImageAnimationLayer* layer;
+    };
+    std::vector<PuppetLayerBinding> m_puppetLayers = {};
+    std::vector<PuppetModel::ActiveLayer> m_puppetActiveScratch = {};
+    std::vector<glm::mat4> m_puppetSkinMatrices = {};
+    std::vector<glm::vec3> m_puppetSkinnedPositions = {};
+    std::vector<GLfloat> m_puppetSkinnedFlat = {};
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};

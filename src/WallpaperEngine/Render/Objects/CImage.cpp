@@ -431,75 +431,26 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	const auto stream = this->getScene ().getScene ().project.assetLocator->read (*this->getImage ().model->puppet);
 	std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
 
-	constexpr size_t markerSize = 9;
-	constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
-	constexpr size_t vertexStride = 80;
-	constexpr size_t positionOffset = 0;
-	constexpr size_t uvOffset = 72;
-
-	const std::string puppetVersion
-	    = data.size () >= markerSize ? std::string (data.data (), strlen ("MDLV0021")) : "";
-	if (puppetVersion != "MDLV0021" && puppetVersion != "MDLV0023") {
-	    sLog.error ("Unsupported puppet model header ", puppetVersion, " in ", *this->getImage ().model->puppet);
+	std::string error;
+	auto parsed = PuppetModel::parse (data, error);
+	if (!parsed.has_value ()) {
+	    sLog.error ("Could not parse puppet ", *this->getImage ().model->puppet, ": ", error);
 	    return false;
 	}
+	this->m_puppetModel = std::move (parsed);
+	const auto& model = *this->m_puppetModel;
 
-	const size_t mdlsOffset = [&data] () -> size_t {
-	    for (size_t offset = markerSize; offset + strlen ("MDLS") < data.size (); offset++) {
-		if (std::memcmp (data.data () + offset, "MDLS", strlen ("MDLS")) == 0) {
-		    return offset;
-		}
-	    }
-	    return data.size ();
-	}();
-
-	auto meshBuffer = std::make_unique<char[]> (data.size ());
-	std::copy (data.begin (), data.end (), meshBuffer.get ());
-	const BinaryReader reader (std::make_shared<MemoryStream> (std::move (meshBuffer), data.size ()));
-	const auto meshBlock = findPuppetMeshBlock (reader, markerSize, mdlsOffset, meshHeaderSize, vertexStride);
-	if (!meshBlock.has_value ()) {
-	    sLog.error ("Could not find a usable MDLV mesh block in ", *this->getImage ().model->puppet);
-	    return false;
-	}
-
-	const size_t vertexCount = meshBlock->vertexBytes / vertexStride;
-	const size_t verticesOffset = meshBlock->headerOffset + meshHeaderSize;
-	const size_t indicesOffset = verticesOffset + meshBlock->vertexBytes + sizeof (uint32_t);
-	const size_t indexCount = meshBlock->indexBytes / sizeof (uint16_t);
-	std::vector<GLfloat> texcoords;
-	std::vector<GLushort> indices;
-
+	const size_t vertexCount = model.positions.size ();
 	this->m_puppetRawPositions.clear ();
 	this->m_puppetRawPositions.reserve (vertexCount * 3);
+	std::vector<GLfloat> texcoords;
 	texcoords.reserve (vertexCount * 2);
-	indices.reserve (indexCount);
-
-	for (size_t index = 0; index < vertexCount; index++) {
-	    const size_t vertexOffset = verticesOffset + index * vertexStride;
-	    reader.base ().seekg (static_cast<std::streamoff> (vertexOffset + positionOffset), std::ios::beg);
-	    const float x = reader.nextFloat ();
-	    const float y = reader.nextFloat ();
-	    const float z = reader.nextFloat ();
-	    reader.base ().seekg (static_cast<std::streamoff> (vertexOffset + uvOffset), std::ios::beg);
-	    const float u = reader.nextFloat ();
-	    const float v = reader.nextFloat ();
-
-	    this->m_puppetRawPositions.push_back (x);
-	    this->m_puppetRawPositions.push_back (y);
-	    this->m_puppetRawPositions.push_back (z);
-	    texcoords.push_back (u);
-	    texcoords.push_back (v);
-	}
-
-	reader.base ().seekg (static_cast<std::streamoff> (indicesOffset), std::ios::beg);
-	for (size_t index = 0; index < indexCount; index++) {
-	    uint16_t value = 0;
-	    reader.next (reinterpret_cast<char*> (&value), sizeof (value));
-	    if (value >= vertexCount) {
-		sLog.error ("Invalid puppet mesh index ", value, " in ", *this->getImage ().model->puppet);
-		return false;
-	    }
-	    indices.push_back (value);
+	for (size_t i = 0; i < vertexCount; i++) {
+	    this->m_puppetRawPositions.push_back (model.positions[i].x);
+	    this->m_puppetRawPositions.push_back (model.positions[i].y);
+	    this->m_puppetRawPositions.push_back (model.positions[i].z);
+	    texcoords.push_back (model.uvs[i].x);
+	    texcoords.push_back (model.uvs[i].y);
 	}
 
 	this->updatePuppetPositionBuffer (size);
@@ -509,13 +460,27 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	glBufferData (GL_ARRAY_BUFFER, texcoords.size () * sizeof (GLfloat), texcoords.data (), GL_STATIC_DRAW);
 
 	glGenBuffers (1, &this->m_puppetIndices);
-	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
-	glBufferData (GL_ELEMENT_ARRAY_BUFFER, indices.size () * sizeof (GLushort), indices.data (), GL_STATIC_DRAW);
+	glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetIndices);
+	glBufferData (
+	    GL_ARRAY_BUFFER, model.indices.size () * sizeof (GLushort), model.indices.data (), GL_STATIC_DRAW
+	);
 
-	this->m_puppetIndexCount = static_cast<GLsizei> (indices.size ());
+	this->m_puppetIndexCount = static_cast<GLsizei> (model.indices.size ());
+
+	for (const auto& layer : this->getImage ().animationLayers) {
+	    const auto clipId = static_cast<uint32_t> (layer->animation->value->getInt ());
+	    const auto* clip = model.findClip (clipId);
+	    if (clip == nullptr) {
+		sLog.out ("Puppet ", *this->getImage ().model->puppet, ": no clip with id ", clipId, ", layer ignored");
+		continue;
+	    }
+	    this->m_puppetLayers.push_back (PuppetLayerBinding { .clip = clip, .layer = layer.get () });
+	}
+
 	sLog.out (
-	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion,
-	    " vertices=", vertexCount, " indices=", this->m_puppetIndexCount
+	    "Loaded puppet ", *this->getImage ().model->puppet, " vertices=", vertexCount,
+	    " indices=", this->m_puppetIndexCount, " bones=", model.bones.size (), " clips=", model.clips.size (),
+	    " layers=", this->m_puppetLayers.size ()
 	);
 
 	return true;
@@ -526,16 +491,29 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 }
 
 void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
-    if (this->m_puppetRawPositions.empty ()) {
+    this->uploadPuppetPositions (this->m_puppetRawPositions, size);
+}
+
+void CImage::uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::vec2& size) {
+    if (raw.empty ()) {
 	return;
     }
 
     std::vector<GLfloat> positions;
-    positions.reserve (this->m_puppetRawPositions.size ());
-    for (size_t index = 0; index + 2 < this->m_puppetRawPositions.size (); index += 3) {
-	positions.push_back (size.x / 2.0f + this->m_puppetRawPositions[index]);
-	positions.push_back (size.y / 2.0f - this->m_puppetRawPositions[index + 1]);
-	positions.push_back (this->m_puppetRawPositions[index + 2]);
+    positions.reserve (raw.size ());
+    for (size_t index = 0; index + 2 < raw.size (); index += 3) {
+	const float localX = size.x / 2.0f + raw[index];
+	const float localY = size.y / 2.0f - raw[index + 1];
+	if (this->m_puppetScreenSpace) {
+	    const float u = localX / size.x;
+	    const float v = localY / size.y;
+	    positions.push_back (this->m_pos.x + u * (this->m_pos.z - this->m_pos.x));
+	    positions.push_back (this->m_pos.w + v * (this->m_pos.y - this->m_pos.w));
+	} else {
+	    positions.push_back (localX);
+	    positions.push_back (localY);
+	}
+	positions.push_back (raw[index + 2]);
     }
 
     if (this->m_puppetSpacePosition == GL_NONE) {
@@ -543,6 +521,41 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     }
     glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetSpacePosition);
     glBufferData (GL_ARRAY_BUFFER, positions.size () * sizeof (GLfloat), positions.data (), GL_DYNAMIC_DRAW);
+}
+
+void CImage::updatePuppetAnimation () {
+    if (!this->m_hasPuppetMesh || !this->m_puppetModel.has_value () || this->m_puppetLayers.empty ()
+	|| !this->m_puppetModel->hasAnimation ()) {
+	return;
+    }
+
+    this->m_puppetActiveScratch.clear ();
+    for (const auto& binding : this->m_puppetLayers) {
+	if (!binding.layer->visible->value->getBool ()) {
+	    continue;
+	}
+	this->m_puppetActiveScratch.push_back (
+	    PuppetModel::ActiveLayer {
+		.clip = binding.clip,
+		.rate = binding.layer->rate->value->getFloat (),
+		.blend = binding.layer->blend->value->getFloat (),
+	    }
+	);
+    }
+
+    this->m_puppetModel->evaluateSkinning (
+	this->m_puppetActiveScratch, static_cast<double> (g_Time), this->m_puppetSkinMatrices
+    );
+    this->m_puppetModel->skinPositions (this->m_puppetSkinMatrices, this->m_puppetSkinnedPositions);
+
+    this->m_puppetSkinnedFlat.resize (this->m_puppetSkinnedPositions.size () * 3);
+    for (size_t i = 0; i < this->m_puppetSkinnedPositions.size (); i++) {
+	this->m_puppetSkinnedFlat[i * 3 + 0] = this->m_puppetSkinnedPositions[i].x;
+	this->m_puppetSkinnedFlat[i * 3 + 1] = this->m_puppetSkinnedPositions[i].y;
+	this->m_puppetSkinnedFlat[i * 3 + 2] = this->m_puppetSkinnedPositions[i].z;
+    }
+
+    this->uploadPuppetPositions (this->m_puppetSkinnedFlat, this->m_size);
 }
 
 void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
@@ -827,6 +840,11 @@ void CImage::setupPasses () {
 	    drawTo = this->getScene ().getFBO ();
 	    projection = &this->m_modelViewProjectionScreen;
 	    inverseProjection = &this->m_modelViewProjectionScreenInverse;
+
+	    if (isFirstPass && this->m_hasPuppetMesh && !this->m_puppetScreenSpace) {
+		this->m_puppetScreenSpace = true;
+		this->updatePuppetPositionBuffer (this->m_size);
+	    }
 	}
 
 	pass->setDestination (drawTo);
@@ -920,6 +938,9 @@ void CImage::render () {
 
     // Always update screen transform (handles rotation + parallax dynamically)
     this->updateScreenSpacePosition ();
+
+    // Puppet meshes are skinned from the authored animation layers every frame.
+    this->updatePuppetAnimation ();
 
 #if !NDEBUG
     std::string str = "Image ";
