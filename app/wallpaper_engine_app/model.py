@@ -234,10 +234,11 @@ def _libraryfolders_paths(steamapps: Path) -> list[Path]:
     except OSError:
         return []
 
-    raw_paths = re.findall(r'"path"[ \\t]*"([^"]+)"', text, flags=re.IGNORECASE)
+    normalized = text.replace("\t", " ")
+    raw_paths = re.findall(r'"path" *"([^"]+)"', normalized, flags=re.IGNORECASE)
     # Older VDF files used numeric keys directly for library paths.
-    legacy_pattern = r'^[ \\t]*"[0-9]+"[ \\t]*"([^"]+)"'
-    raw_paths.extend(re.findall(legacy_pattern, text, flags=re.MULTILINE))
+    legacy_pattern = r'^ *"[0-9]+" *"([^"]+)"'
+    raw_paths.extend(re.findall(legacy_pattern, normalized, flags=re.MULTILINE))
 
     result: list[Path] = []
     for raw in raw_paths:
