@@ -3,6 +3,7 @@
 #include "CRenderable.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <optional>
@@ -505,6 +506,12 @@ void CImage::uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::
 }
 
 void CImage::updatePuppetAnimation () {
+    // Diagnostic switch: keep the uploaded puppet mesh in its authored bind pose.
+    // Useful for separating mesh/material issues from skeletal animation issues.
+    if (std::getenv ("LWE_PUPPET_BINDPOSE") != nullptr) {
+	return;
+    }
+
     if (!this->m_hasPuppetMesh || !this->m_puppetModel.has_value () || this->m_puppetLayers.empty ()
 	|| !this->m_puppetModel->hasAnimation ()) {
 	return;
