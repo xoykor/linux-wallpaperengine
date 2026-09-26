@@ -802,8 +802,9 @@ void CImage::setupPasses () {
 	std::shared_ptr<const CFBO> prevDrawTo = drawTo;
 	bool writesToTarget = false;
 	const bool isFirstPass = first;
+	const bool usePuppetGeometry = this->m_hasPuppetMesh && std::getenv ("LWE_PUPPET_QUAD") == nullptr;
 	GLuint spacePosition = (isFirstPass)
-	    ? (this->m_hasPuppetMesh ? this->m_puppetSpacePosition : this->getCopySpacePosition ())
+	    ? (usePuppetGeometry ? this->m_puppetSpacePosition : this->getCopySpacePosition ())
 	    : this->getPassSpacePosition ();
 	const glm::mat4* projection
 	    = (isFirstPass) ? &this->m_modelViewProjectionCopy : &this->m_modelViewProjectionPass;
@@ -811,7 +812,7 @@ void CImage::setupPasses () {
 	    = (isFirstPass) ? &this->m_modelViewProjectionCopyInverse : &this->m_modelViewProjectionPassInverse;
 	first = false;
 
-	if (isFirstPass && this->m_hasPuppetMesh) {
+	if (isFirstPass && usePuppetGeometry) {
 	    pass->setBlendingMode (BlendingMode_Translucent);
 	    this->setupPuppetGeometryCallback (pass);
 	}
@@ -829,7 +830,7 @@ void CImage::setupPasses () {
 	    projection = &this->m_modelViewProjectionScreen;
 	    inverseProjection = &this->m_modelViewProjectionScreenInverse;
 
-	    if (isFirstPass && this->m_hasPuppetMesh && !this->m_puppetScreenSpace) {
+	    if (isFirstPass && usePuppetGeometry && !this->m_puppetScreenSpace) {
 		this->m_puppetScreenSpace = true;
 		this->updatePuppetPositionBuffer (this->m_size);
 	    }
