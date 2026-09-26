@@ -1,7 +1,7 @@
 [Unit]
 Description=Linux Wallpaper Engine desktop app background service
 PartOf=graphical-session.target
-After=graphical-session.target plasma-plasmashell.service
+After=graphical-session.target
 
 [Service]
 Type=exec
