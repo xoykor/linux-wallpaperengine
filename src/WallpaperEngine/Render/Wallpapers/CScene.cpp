@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Render/Objects/CImage.h"
+#include "WallpaperEngine/Render/Objects/CModel.h"
 #include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Render/Objects/CText.h"
@@ -249,6 +250,8 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 
     if (object.is<Image> ()) {
 	renderObject = new Objects::CImage (*this, *object.as<Image> ());
+    } else if (object.is<ModelObject> ()) {
+	renderObject = new Objects::CModel (*this, *object.as<ModelObject> ());
     } else if (object.is<Sound> ()) {
 	renderObject = new Objects::CSound (*this, *object.as<Sound> ());
     } else if (object.is<Text> ()) {
