@@ -58,6 +58,10 @@ public:
      */
     void pinpongFramebuffer (std::shared_ptr<const CFBO>* drawTo, std::shared_ptr<const TextureProvider>* asInput);
 
+    [[nodiscard]] bool isCompositionLayer () const;
+    [[nodiscard]] bool copiesCompositionBackground () const;
+    [[nodiscard]] std::shared_ptr<const CFBO> getCompositionFBO () const;
+
 protected:
     void setupPasses ();
 
@@ -140,6 +144,7 @@ private:
     const Image& m_image;
 
     std::vector<Effects::CPass*> m_passes = {};
+    std::shared_ptr<const CFBO> m_compositionFBO = nullptr;
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
 
     glm::vec4 m_pos = {};
