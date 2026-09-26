@@ -98,20 +98,25 @@ class WallpaperDaemon:
         if self.current_id and self.current_id not in new_catalog:
             self._request_switch(None)
 
+    def _available(self, wallpaper_id: str | None, *, now: float | None = None) -> bool:
+        if wallpaper_id is None or wallpaper_id not in self.catalog:
+            return False
+        current = time.time() if now is None else now
+        return current - self.failed.get(wallpaper_id, 0) >= _CRASH_COOLDOWN
+
     def _eligible(self) -> list[str]:
         now = time.time()
         playlist_name = self.config["active_playlist"]
         if playlist_name is not None:
             return [
                 wallpaper_id for wallpaper_id in self.config["playlists"][playlist_name]
-                if wallpaper_id in self.catalog
-                and now - self.failed.get(wallpaper_id, 0) >= _CRASH_COOLDOWN
+                if self._available(wallpaper_id, now=now)
             ]
         favorites = set(self.config["favorites"])
         return [
             wallpaper_id for wallpaper_id in sorted(self.catalog, key=int)
             if (not self.config["only_favorites"] or wallpaper_id in favorites)
-            and now - self.failed.get(wallpaper_id, 0) >= _CRASH_COOLDOWN
+            and self._available(wallpaper_id, now=now)
         ]
 
     def _next_id(self) -> str | None:
@@ -132,7 +137,7 @@ class WallpaperDaemon:
 
     def _first_id(self) -> str | None:
         selected = self.config["selected_id"]
-        if not self.config["rotation_enabled"] and selected in self.catalog:
+        if not self.config["rotation_enabled"] and self._available(selected):
             return selected
         eligible = self._eligible()
         if self.config["active_playlist"] is not None:
@@ -162,8 +167,9 @@ class WallpaperDaemon:
         screens = {}
         for screen in self.outputs:
             assigned = self.config["screen_assignments"].get(screen)
-            # A Workshop unsubscribe must not prevent other screens rendering.
-            screens[screen] = assigned if assigned in self.catalog else wallpaper_id
+            # A missing or recently crashing fixed wallpaper must not keep
+            # taking down the single renderer process for every display.
+            screens[screen] = assigned if self._available(assigned) else wallpaper_id
 
         renderer = self._resolve_renderer()
         command = [
@@ -220,6 +226,9 @@ class WallpaperDaemon:
 
         was_terminating = self.terminating
         old_id = self.current_id
+        active_ids = set(self.screens.values())
+        if not active_ids and old_id is not None:
+            active_ids.add(old_id)
         # Catch helper processes that outlived the renderer's main process.
         self._signal_child(signal.SIGKILL)
         self.child = None
@@ -229,8 +238,9 @@ class WallpaperDaemon:
         self.next_change_mono = None
         self.next_change_at = None
         if not was_terminating and self.active:
-            if old_id is not None:
-                self.failed[old_id] = time.time()
+            failed_at = time.time()
+            for wallpaper_id in active_ids:
+                self.failed[wallpaper_id] = failed_at
             if time.monotonic() - self.child_started > 60:
                 self.crash_streak = 0
             self.crash_streak += 1
@@ -284,16 +294,17 @@ class WallpaperDaemon:
                     self.next_change_mono = now + interval
                     self.next_change_at = time.time() + interval
         if self.child is None and now >= self.retry_at:
-            pending_allowed = self.pending_id in self.catalog
+            pending_allowed = self._available(self.pending_id)
             if self.config["rotation_enabled"]:
                 pending_allowed = pending_allowed and self.pending_id in self._eligible()
             selected = self.pending_id if pending_allowed else self._first_id()
             assignments = self.config["screen_assignments"]
             if selected is None and self.outputs and all(
-                screen in assignments and assignments[screen] in self.catalog
+                screen in assignments and self._available(assignments[screen])
                 for screen in self.outputs
             ):
-                # All displays have fixed wallpapers, so no rotation item is needed.
+                # All displays have fixed, currently healthy wallpapers, so no
+                # separate rotation item is needed to start the renderer.
                 selected = assignments[self.outputs[0]]
             if selected is None:
                 if self.config["active_playlist"] is not None:
@@ -375,9 +386,20 @@ class WallpaperDaemon:
             self.retry_at = 0.0
             self._request_switch(selected)
         elif command == "set":
-            settings = message["settings"]
-            if not isinstance(settings, dict):
+            raw_settings = message["settings"]
+            if not isinstance(raw_settings, dict):
                 raise ValueError("As configurações devem ser um objeto.")
+            settings = dict(raw_settings)
+            # Turning rotation off means "keep what I am looking at". Persist
+            # that choice so a daemon/session restart cannot jump back to an
+            # older selected_id.
+            if (
+                settings.get("rotation_enabled") is False
+                and self.config["rotation_enabled"]
+                and "selected_id" not in settings
+                and self.current_id in self.catalog
+            ):
+                settings["selected_id"] = self.current_id
             updated = model.validate_config(dict(self.config, **settings))
             self._refresh(force=True)
             self._validate_known_config(updated)
@@ -387,9 +409,12 @@ class WallpaperDaemon:
             if changed & {"shuffle", "favorites", "only_favorites", "playlists", "active_playlist"}:
                 self.queue = []
             if self.active and changed:
-                restart_keys = {"fps", "scaling", "mute", "renderer_path", "screen_assignments", "selected_id"}
-                if changed & restart_keys:
-                    selected = self.config["selected_id"] if "selected_id" in changed else self.current_id
+                restart_keys = {"fps", "scaling", "mute", "renderer_path", "screen_assignments"}
+                selected_changed = (
+                    "selected_id" in changed and self.config["selected_id"] != self.current_id
+                )
+                if changed & restart_keys or selected_changed:
+                    selected = self.config["selected_id"] if selected_changed else self.current_id
                     self.retry_at = 0.0
                     self._request_switch(selected)
                 elif self.config["rotation_enabled"] and self.current_id not in self._eligible() and (
