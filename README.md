@@ -188,10 +188,19 @@ playlists. Add an installed wallpaper from the library. With shuffle off,
 rotation follows the order shown in the playlist. The active playlist
 determines the rotation pool; wallpapers pinned to a display stay fixed.
 
-The app is currently designed for a KDE Plasma desktop session. Install the
-renderer first and make `linux-wallpaperengine` available in `PATH` or
-`~/.local/bin`. If you built the renderer from this checkout, one way to keep
-its binary and support files together is:
+The GTK 4 control app is intended to stay distribution-neutral across
+systemd-based Fedora and Debian/Ubuntu families. Display discovery prefers
+`kscreen-doctor` when KScreen is installed and falls back to `xrandr` on
+X11. Renderer/compositor support is a separate constraint: KDE Plasma is the
+tested desktop target; GNOME/Mutter Wayland does not implement the
+`wlr-layer-shell` protocol required by the renderer, so GNOME Wayland desktop
+rendering is not currently claimed as supported. On X11, the renderer also
+retains the upstream limitation that a desktop/compositor drawing over the
+root background can hide the wallpaper.
+
+Install the renderer first and make `linux-wallpaperengine` available in
+`PATH` or `~/.local/bin`. If you built the renderer from this checkout, one
+way to keep its binary and support files together is:
 
 ```bash
 cmake --install build --prefix "$HOME/.local/opt/linux-wallpaperengine"
@@ -201,10 +210,30 @@ ln -s "$HOME/.local/opt/linux-wallpaperengine/linux-wallpaperengine" \
 ```
 
 Skip those commands if your package manager already installed the renderer.
-The desktop app also needs Python 3 with `gi`/GTK 4 introspection,
-`kscreen-doctor`, and a working user systemd manager. Typical Debian/Ubuntu
-package names are `python3-gi`, `gir1.2-gtk-4.0`, and `kscreen`. Run the
-installer as your normal user, without `sudo`, from the repository root:
+The desktop app also needs Python 3 with `gi`/GTK 4 introspection and a
+working user systemd manager. For monitor discovery, install `kscreen` on KDE
+Plasma or the XRandR command-line utility for an X11 session.
+
+Typical packages:
+
+```bash
+# Debian / Ubuntu
+sudo apt install python3-gi gir1.2-gtk-4.0
+# KDE Plasma display discovery:
+sudo apt install kscreen
+# X11 fallback (provides xrandr):
+sudo apt install x11-xserver-utils
+
+# Fedora
+sudo dnf install python3-gobject gtk4
+# KDE Plasma display discovery:
+sudo dnf install kscreen
+# X11 fallback:
+sudo dnf install xrandr
+```
+
+Run the installer as your normal user, without `sudo`, from the repository
+root:
 
 ```bash
 ./app/install.sh
@@ -249,8 +278,8 @@ Flatpak and Snap locations listed above. Discover and subscribe in the original
 Wallpaper Engine app; Steam handles downloads and this app updates its library
 when the files become available. It currently shows `scene` and `video` projects.
 Wallpaper Engine's Steam assets are still needed for some projects. Display
-discovery relies on KScreen, and wallpaper layering depends on the renderer
-and compositor support described below.
+discovery uses KScreen when available and XRandR on X11; wallpaper layering
+still depends on the renderer and compositor support described below.
 
 ---
 
