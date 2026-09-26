@@ -71,7 +71,13 @@ def _preview(path: str | None, width: int, height: int) -> Gtk.Widget:
             scaled = first.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
             if scaled is not None:
                 picture = Gtk.Picture.new_for_pixbuf(scaled)
-                picture.set_content_fit(Gtk.ContentFit.COVER)
+                # Gtk.ContentFit was added in GTK 4.8. Ubuntu 22.04 ships
+                # GTK 4.6, so keep a compatible fallback instead of failing
+                # while building the first preview card.
+                if hasattr(Gtk, "ContentFit"):
+                    picture.set_content_fit(Gtk.ContentFit.COVER)
+                else:
+                    picture.set_keep_aspect_ratio(True)
                 picture.set_size_request(width, height)
                 return picture
         except GLib.Error:
@@ -555,7 +561,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._widget_row(
             body,
             "Iniciar com a sessão",
-            "Ativa o serviço do usuário quando você entra no KDE.",
+            "Ativa o serviço do usuário quando a sessão gráfica é iniciada.",
             self.autostart_switch,
         )
         self.renderer_entry = Gtk.Entry()
@@ -577,8 +583,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         info = _label(
             "Os wallpapers de cena e vídeo são lidos da biblioteca Steam instalada. "
-            "A detecção de monitores usa KDE Plasma. O motor continua renderizando "
-            "para preservar a estabilidade do vídeo e do áudio da sessão.",
+            "A detecção de monitores usa KScreen quando disponível e XRandR em X11. "
+            "O motor continua renderizando para preservar a estabilidade do vídeo "
+            "e do áudio da sessão.",
             css="subtle",
             wrap=True,
         )
