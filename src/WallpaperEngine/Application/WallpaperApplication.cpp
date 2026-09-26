@@ -432,7 +432,7 @@ void WallpaperApplication::advancePlaylist (
 
 	auto project = this->loadBackground (nextPath.string ());
 
-	this->setupPropertiesForProject (*project);
+	this->setupPropertiesForProject (*project, screen);
 	this->ensureBrowserForProject (*project);
 
 	this->m_backgrounds[screen] = std::move (project);
@@ -499,16 +499,22 @@ void WallpaperApplication::updatePlaylists () {
     }
 }
 
-void WallpaperApplication::setupPropertiesForProject (const Project& project) {
-    // show properties if required
+void WallpaperApplication::setupPropertiesForProject (const Project& project, const std::string& outputKey) {
+    const auto scoped = this->m_context.settings.general.screenProperties.find (outputKey);
+
     for (const auto& [key, cur] : project.properties) {
-	// update the value of the property
-	auto override = this->m_context.settings.general.properties.find (key);
+	const auto globalOverride = this->m_context.settings.general.properties.find (key);
+	if (globalOverride != this->m_context.settings.general.properties.end ()) {
+	    sLog.out ("Applying global override value for ", key);
+	    cur->update (globalOverride->second, DynamicValue::UpdateSource::User);
+	}
 
-	if (override != this->m_context.settings.general.properties.end ()) {
-	    sLog.out ("Applying override value for ", key);
-
-	    cur->update (override->second, DynamicValue::UpdateSource::User);
+	if (scoped != this->m_context.settings.general.screenProperties.end ()) {
+	    const auto screenOverride = scoped->second.find (key);
+	    if (screenOverride != scoped->second.end ()) {
+		sLog.out ("Applying override value for ", key, " on ", outputKey);
+		cur->update (screenOverride->second, DynamicValue::UpdateSource::User);
+	    }
 	}
 
 	if (this->m_context.settings.general.onlyListProperties) {
@@ -519,7 +525,7 @@ void WallpaperApplication::setupPropertiesForProject (const Project& project) {
 
 void WallpaperApplication::setupProperties () {
     for (const auto& [background, info] : this->m_backgrounds) {
-	this->setupPropertiesForProject (*info);
+	this->setupPropertiesForProject (*info, background);
     }
 }
 

@@ -113,7 +113,7 @@ private:
      *
      * @param project
      */
-    void setupPropertiesForProject (const Project& project);
+    void setupPropertiesForProject (const Project& project, const std::string& outputKey);
     /**
      * Prepares CEF browser to be used
      */

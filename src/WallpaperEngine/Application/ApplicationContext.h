@@ -30,6 +30,7 @@ public:
      * Parses the given argc and argv and builds settings for the app
      */
     void loadSettingsFromArgv ();
+    void printCatalogJson () const;
 
     enum WINDOW_MODE {
 	/** Default window mode */
@@ -81,6 +82,8 @@ public:
 	struct {
 	    /** If the user requested a list of properties for the given background */
 	    bool onlyListProperties;
+	    /** If the user requested the installed Workshop catalog as machine-readable JSON */
+	    bool catalogJson;
 	    /** If the user requested a dump of the background structure */
 	    bool dumpStructure;
 	    /** If the user requested the particles to be deactivated */
@@ -91,8 +94,10 @@ public:
 	    std::filesystem::path defaultBackground;
 	    /** The backgrounds specified for different screens */
 	    std::map<std::string, std::filesystem::path> screenBackgrounds;
-	    /** Properties to change values for */
+	    /** Properties to change values for globally */
 	    std::map<std::string, std::string> properties;
+	    /** Property overrides scoped to one output or span group */
+	    std::map<std::string, std::map<std::string, std::string>> screenProperties;
 	    /** The scaling mode for different screens */
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::TextureUVsScaling> screenScalings;
 	    /** The clamping mode for different screens */
@@ -186,11 +191,13 @@ public:
     } settings = {
         .general = {
             .onlyListProperties = false,
+            .catalogJson = false,
             .dumpStructure = false,
             .assets = "",
             .defaultBackground = "",
             .screenBackgrounds = {},
             .properties = {},
+            .screenProperties = {},
             .screenScalings = {},
             .screenClamps = {},
             .screenPlaylists = {},
