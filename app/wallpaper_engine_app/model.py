@@ -44,6 +44,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scaling": "fill",
     "mute": True,
     "renderer_path": "auto",
+    "ui_hue": 24,
+    "ui_intensity": 88,
 }
 
 _ID_PATTERN = re.compile(r"[0-9]{1,24}\Z")
@@ -98,6 +100,13 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     fps = result["fps"]
     if type(fps) is not int or not 1 <= fps <= 240:
         raise ValueError("FPS deve estar entre 1 e 240.")
+
+    hue = result["ui_hue"]
+    if type(hue) is not int or not 0 <= hue <= 360:
+        raise ValueError("Matiz da interface deve estar entre 0 e 360.")
+    intensity = result["ui_intensity"]
+    if type(intensity) is not int or not 35 <= intensity <= 100:
+        raise ValueError("Intensidade da interface deve estar entre 35 e 100.")
     if not isinstance(result["scaling"], str) or result["scaling"] not in _SCALING:
         raise ValueError("Escala inválida.")
 
