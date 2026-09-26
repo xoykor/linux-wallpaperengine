@@ -58,19 +58,28 @@ fi
 
 PYTHON_BIN="$(command -v python3 || true)"
 [[ -n "${PYTHON_BIN}" ]] || die 'Python 3 is required.'
-"${PYTHON_BIN}" -c 'import gi; gi.require_version("Gtk", "4.0"); from gi.repository import Gtk' 2>/dev/null || \
-    die 'Python gi with GTK 4 introspection is required (Debian/Ubuntu: python3-gi + gir1.2-gtk-4.0; Fedora: python3-gobject + gtk4).'
+"${PYTHON_BIN}" -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("GdkPixbuf", "2.0"); from gi.repository import Gtk, GdkPixbuf' 2>/dev/null || \
+    die 'Python gi with GTK 4/GdkPixbuf introspection is required (Debian/Ubuntu: python3-gi + gir1.2-gtk-4.0; Fedora: python3-gobject + gtk4).'
 
-# Display discovery is desktop/session specific. KScreen is used on Plasma;
-# XRandR is a fallback for X11. Do not make a KDE-only helper a universal
-# installation requirement.
-if ! command -v kscreen-doctor >/dev/null 2>&1 && ! command -v xrandr >/dev/null 2>&1; then
-    printf 'Warning: neither kscreen-doctor nor xrandr is available; monitor discovery may fail.\n' >&2
-fi
-
+# Display discovery is session-specific. XRandR cannot discover native Wayland
+# outputs, so it must never satisfy the KDE Wayland requirement by itself.
 case "${XDG_CURRENT_DESKTOP:-}:${XDG_SESSION_TYPE:-}" in
+    *KDE*:wayland|*kde*:wayland|*Plasma*:wayland|*plasma*:wayland)
+        command -v kscreen-doctor >/dev/null 2>&1 || \
+            die 'kscreen-doctor is required for display discovery in a KDE Plasma Wayland session.'
+        ;;
     *GNOME*:wayland|*gnome*:wayland)
         printf 'Warning: GNOME/Mutter Wayland does not provide the wlr-layer-shell protocol required by the renderer; the control app can be installed, but desktop wallpaper rendering is not supported in this session.\n' >&2
+        ;;
+    *:wayland)
+        if ! command -v kscreen-doctor >/dev/null 2>&1; then
+            printf 'Warning: no supported Wayland display-discovery backend was found; monitor discovery may fail.\n' >&2
+        fi
+        ;;
+    *)
+        if ! command -v kscreen-doctor >/dev/null 2>&1 && ! command -v xrandr >/dev/null 2>&1; then
+            printf 'Warning: neither kscreen-doctor nor xrandr is available; monitor discovery may fail.\n' >&2
+        fi
         ;;
 esac
 if ! command -v linux-wallpaperengine >/dev/null 2>&1 && \
