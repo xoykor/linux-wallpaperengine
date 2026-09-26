@@ -117,6 +117,8 @@ struct ImageData {
     UserSettingUniquePtr colorBlendMode;
     /** The brightness of the image */
     UserSettingUniquePtr brightness;
+    /** Whether a composition layer starts with a copy of the scene behind it. */
+    bool copyBackground = false;
     /** The material in use for this image */
     ModelUniquePtr model;
     /** The effects applied to this image after the material is rendered */
