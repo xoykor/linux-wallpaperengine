@@ -393,8 +393,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->m_sceneCenter
 	= glm::vec3 ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
 
-    this->m_modelViewProjectionScreen
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+    const auto& initialCamera = this->getScene ().getCamera ();
+    this->m_modelViewProjectionScreen = initialCamera.isOrthogonal ()
+	? initialCamera.getProjection () * initialCamera.getLookAt ()
+	: initialCamera.getScreenProjection ();
 
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
@@ -1159,8 +1161,10 @@ void CImage::updateScreenSpacePosition () {
 	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
     }
 
-    glm::mat4 mvp
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * rotModel;
+    const auto& camera = this->getScene ().getCamera ();
+    glm::mat4 mvp = camera.isOrthogonal ()
+	? camera.getProjection () * camera.getLookAt () * rotModel
+	: camera.getScreenProjection () * rotModel;
 
     // Apply parallax displacement if enabled
     if (this->getScene ().getScene ().camera.parallax.enabled
