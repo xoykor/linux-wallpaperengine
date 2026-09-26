@@ -441,13 +441,22 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetTexCoord);
 	glBufferData (GL_ARRAY_BUFFER, texcoords.size () * sizeof (GLfloat), texcoords.data (), GL_STATIC_DRAW);
 
+	// Puppet vertices are converted from Wallpaper Engine's image-local Y-down
+	// coordinates into our Y-up render space. That reflection reverses triangle
+	// winding. Rewind each triangle so materials using normal back-face culling
+	// remain visible (most tail puppets use nocull, which hid this bug).
+	std::vector<GLushort> rewoundIndices = model.indices;
+	for (size_t i = 0; i + 2 < rewoundIndices.size (); i += 3) {
+	    std::swap (rewoundIndices[i + 1], rewoundIndices[i + 2]);
+	}
+
 	glGenBuffers (1, &this->m_puppetIndices);
 	glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetIndices);
 	glBufferData (
-	    GL_ARRAY_BUFFER, model.indices.size () * sizeof (GLushort), model.indices.data (), GL_STATIC_DRAW
+	    GL_ARRAY_BUFFER, rewoundIndices.size () * sizeof (GLushort), rewoundIndices.data (), GL_STATIC_DRAW
 	);
 
-	this->m_puppetIndexCount = static_cast<GLsizei> (model.indices.size ());
+	this->m_puppetIndexCount = static_cast<GLsizei> (rewoundIndices.size ());
 
 	for (const auto& layer : this->getImage ().animationLayers) {
 	    const auto clipId = static_cast<uint32_t> (layer->animation->value->getInt ());
