@@ -119,11 +119,12 @@ std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
 }
 
 void CPass::setupRenderFramebuffer () const {
-    // set the framebuffer we're drawing to
-    glBindFramebuffer (GL_FRAMEBUFFER, this->m_drawTo->getFramebuffer ());
+    // set the framebuffer we're drawing to; scene output may be redirected while
+    // rendering a composition-layer subtree.
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_resolvedDrawTo->getFramebuffer ());
 
     // set proper viewport based on what we're drawing to
-    glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
+    glViewport (0, 0, this->m_resolvedDrawTo->getRealWidth (), this->m_resolvedDrawTo->getRealHeight ());
 
     // set texture blending
     switch (this->getBlendingMode ()) {
@@ -488,7 +489,9 @@ void CPass::render () {
 	}
     }
 
-    if (this->m_drawTo == nullptr) {
+    this->m_resolvedDrawTo = this->m_renderable.getScene ().resolveRenderTarget (this->m_drawTo);
+
+    if (this->m_resolvedDrawTo == nullptr) {
 	sLog.error ("Skipping render pass for object ", this->m_renderable.getId (), ": no destination FBO set");
 	return;
     }
