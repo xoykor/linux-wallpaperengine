@@ -295,6 +295,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._command_queue: list[tuple[str, dict[str, object]]] = []
         self._command_busy = False
         self._mutation_generation = 0
+        self._spin_timers: dict[str, int] = {}
         self._theme_save_timer = 0
         self._theme_updating = False
 
@@ -1315,8 +1316,21 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self._set_settings(**{key: widget.get_active()})
 
     def _spin_changed(self, widget: Gtk.SpinButton, key: str) -> None:
-        if not self._updating_controls:
-            self._set_settings(**{key: widget.get_value_as_int()})
+        if self._updating_controls:
+            return
+        previous = self._spin_timers.pop(key, 0)
+        if previous:
+            GLib.source_remove(previous)
+        value = widget.get_value_as_int()
+
+        def apply() -> bool:
+            self._spin_timers.pop(key, None)
+            self._set_settings(**{key: value})
+            return False
+
+        # Spin buttons can emit many value-changed events while held down.
+        # Coalesce them so FPS changes do not repeatedly restart the renderer.
+        self._spin_timers[key] = GLib.timeout_add(300, apply)
 
     def _scaling_changed(self, widget: Gtk.DropDown, _property: object) -> None:
         if not self._updating_controls:
