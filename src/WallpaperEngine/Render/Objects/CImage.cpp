@@ -1150,21 +1150,22 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
 
 void CImage::updateScreenSpacePosition () {
     const ResolvedTransform transform = this->updateGeometryBuffers ();
+    const glm::vec3 angles = this->getImage ().angles->value->getVec3 ();
 
-    // Build rotation from angles (already in radians from scene.json — see CParticle.cpp:2119)
-    // Negate X and Z rotations to account for Y-flipped coordinate system (CParticle.cpp:2120)
+    // Angles are in radians. Negate X and Z to account for the Y-flipped coordinate system.
     const float angle = transform.angle;
     glm::mat4 rotModel = glm::mat4 (1.0f);
-    if (angle != 0.0f) {
+    if (angle != 0.0f || angles.x != 0.0f || angles.y != 0.0f) {
 	rotModel = glm::translate (rotModel, this->m_sceneCenter);
 	rotModel = glm::rotate (rotModel, -angle, glm::vec3 (0.0f, 0.0f, 1.0f));
+	rotModel = glm::rotate (rotModel, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
+	rotModel = glm::rotate (rotModel, -angles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
 	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
     }
 
     const auto& camera = this->getScene ().getCamera ();
-    glm::mat4 mvp = camera.isOrthogonal ()
-	? camera.getProjection () * camera.getLookAt () * rotModel
-	: camera.getScreenProjection () * rotModel;
+    glm::mat4 mvp = camera.isOrthogonal () ? camera.getProjection () * camera.getLookAt ()
+						       : camera.getScreenProjection ();
 
     // Apply parallax displacement if enabled
     if (this->getScene ().getScene ().camera.parallax.enabled
@@ -1172,12 +1173,14 @@ void CImage::updateScreenSpacePosition () {
 	const double parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->getImage ().parallaxDepth->value->getVec2 ();
 	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
-	const float referenceSize = static_cast<float> (this->getScene ().getWidth ());
-	float x = (depth.x + parallaxAmount) * displacement->x * referenceSize;
-	float y = (depth.y + parallaxAmount) * displacement->y * referenceSize;
+	const float x = (depth.x + parallaxAmount) * displacement->x * this->m_size.x;
+	const float y = (depth.y + parallaxAmount) * displacement->y * this->m_size.y;
 	mvp = glm::translate (mvp, { x, y, 0.0f });
     }
 
+
+    // Rotate the image first so parallax stays aligned with the screen axes.
+    mvp *= rotModel;
     this->m_modelViewProjectionScreen = mvp;
     this->m_modelViewProjectionScreenInverse = glm::inverse (mvp);
     if (this->getImage ().model->passthrough) {
