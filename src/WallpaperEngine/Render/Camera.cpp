@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -23,6 +24,8 @@ const glm::vec3& Camera::getUp () const { return this->m_camera.configuration.up
 
 const glm::mat4& Camera::getProjection () const { return this->m_projection; }
 
+const glm::mat4& Camera::getScreenProjection () const { return this->m_screenProjection; }
+
 const glm::mat4& Camera::getLookAt () const { return this->m_lookat; }
 
 bool Camera::isOrthogonal () const { return this->m_isOrthogonal; }
@@ -34,6 +37,8 @@ float Camera::getWidth () const { return this->m_width; }
 float Camera::getHeight () const { return this->m_height; }
 
 float Camera::getFov () const { return this->m_camera.projection.fov->value->getFloat (); }
+
+float Camera::getOverrideFov () const { return this->m_camera.projection.overrideFov->value->getFloat (); }
 
 float Camera::getNearZ () const { return this->m_camera.projection.nearz->value->getFloat (); }
 
@@ -48,5 +53,26 @@ void Camera::setOrthogonalProjection (const float width, const float height) {
 
     this->m_projection = glm::ortho<float> (-width / 2.0, width / 2.0, -height / 2.0, height / 2.0, nearz, farz);
     this->m_projection = glm::translate (this->m_projection, this->getEye ());
+    this->m_screenProjection = this->m_projection;
     this->m_isOrthogonal = true;
+}
+
+void Camera::setPerspectiveProjection (const float width, const float height) {
+    const float safeWidth = std::max (width, 1.0f);
+    const float safeHeight = std::max (height, 1.0f);
+    this->m_width = safeWidth;
+    this->m_height = safeHeight;
+
+    const float nearz = std::max (this->getNearZ (), 0.01f);
+    const float farz = std::max (this->getFarZ (), nearz + 1.0f);
+
+    this->m_projection = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
+        * glm::perspective (glm::radians (this->getFov ()), safeWidth / safeHeight, nearz, farz);
+
+    const float halfRange = std::max (farz, 1000.0f);
+    this->m_screenProjection = glm::ortho<float> (
+        -safeWidth / 2.0f, safeWidth / 2.0f, -safeHeight / 2.0f, safeHeight / 2.0f, -halfRange, halfRange
+    );
+    this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
+    this->m_isOrthogonal = false;
 }
