@@ -12,6 +12,7 @@ APP_LIB="${HOME}/.local/lib/linux-wallpaperengine-app"
 PACKAGE_DIR="${APP_LIB}/wallpaper_engine_app"
 APP_BIN="${HOME}/.local/bin/linux-wallpaperengine-app"
 DESKTOP_FILE="${HOME}/.local/share/applications/linux-wallpaperengine-app.desktop"
+ICON_FILE="${HOME}/.local/share/icons/hicolor/scalable/apps/linux-wallpaperengine-app.svg"
 SERVICE_FILE="${HOME}/.config/systemd/user/linux-wallpaperengine-app.service"
 SERVICE="linux-wallpaperengine-app.service"
 LEGACY_SERVICE="linux-wallpaperengine-rotation.service"
@@ -48,13 +49,14 @@ if [[ "${UNINSTALL:-0}" -eq 1 ]]; then
             die "Could not stop ${SERVICE}; installed files were kept."
     fi
     rm -rf -- "${PACKAGE_DIR}"
-    rm -f -- "${APP_BIN}" "${DESKTOP_FILE}" "${SERVICE_FILE}"
+    rm -f -- "${APP_BIN}" "${DESKTOP_FILE}" "${ICON_FILE}" "${SERVICE_FILE}"
     systemctl --user daemon-reload
     printf 'Desktop app removed. Preferences and the old rotation service were kept; the old service state was not changed.\n'
     exit 0
 fi
 
 [[ -f "${SOURCE_PACKAGE}/__main__.py" ]] || die 'App package not found. Run this from the repository checkout.'
+[[ -f "${ROOT}/app/linux-wallpaperengine-app.svg" ]] || die 'App icon not found.'
 
 PYTHON_BIN="$(command -v python3 || true)"
 [[ -n "${PYTHON_BIN}" ]] || die 'Python 3 is required.'
@@ -88,7 +90,8 @@ if ! command -v linux-wallpaperengine >/dev/null 2>&1 && \
 fi
 
 install -d "${APP_LIB}" "$(dirname -- "${APP_BIN}")" \
-    "$(dirname -- "${DESKTOP_FILE}")" "$(dirname -- "${SERVICE_FILE}")"
+    "$(dirname -- "${DESKTOP_FILE}")" "$(dirname -- "${ICON_FILE}")" \
+    "$(dirname -- "${SERVICE_FILE}")"
 STAGING="$(mktemp -d "${APP_LIB}/.install.XXXXXXXX")"
 PACKAGE_REPLACED=0
 LEGACY_ENABLED=0
@@ -137,6 +140,7 @@ finish() {
             rm -f -- "${APP_BIN}"
         fi
         restore_file desktop "${DESKTOP_FILE}" || true
+        restore_file icon "${ICON_FILE}" || true
         restore_file service "${SERVICE_FILE}" || true
         systemctl --user daemon-reload >/dev/null 2>&1 || true
         if [[ "${NEW_ENABLED}" -eq 1 ]]; then
@@ -163,6 +167,7 @@ find "${STAGING}/new_package" -type d -name __pycache__ -prune -exec rm -rf -- {
 find "${STAGING}/new_package" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 if [[ -e "${APP_BIN}" ]]; then cp -a -- "${APP_BIN}" "${STAGING}/backup/app_bin"; fi
 if [[ -e "${DESKTOP_FILE}" ]]; then cp -a -- "${DESKTOP_FILE}" "${STAGING}/backup/desktop"; fi
+if [[ -e "${ICON_FILE}" ]]; then cp -a -- "${ICON_FILE}" "${STAGING}/backup/icon"; fi
 if [[ -e "${SERVICE_FILE}" ]]; then cp -a -- "${SERVICE_FILE}" "${STAGING}/backup/service"; fi
 
 printf -v PYTHON_QUOTED '%q' "${PYTHON_BIN}"
@@ -196,6 +201,7 @@ PACKAGE_REPLACED=1
 mv -- "${STAGING}/new_package" "${PACKAGE_DIR}"
 install -Dm755 "${STAGING}/app_bin" "${APP_BIN}"
 install -Dm644 "${STAGING}/desktop" "${DESKTOP_FILE}"
+install -Dm644 "${ROOT}/app/linux-wallpaperengine-app.svg" "${ICON_FILE}"
 install -Dm644 "${ROOT}/app/linux-wallpaperengine-app.service" "${SERVICE_FILE}"
 systemctl --user daemon-reload
 

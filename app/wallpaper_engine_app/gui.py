@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import colorsys
+import math
 import subprocess
 import threading
 import time
@@ -12,220 +12,30 @@ from typing import Callable
 import gi
 
 gi.require_version("Gtk", "4.0")
-gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf, Gio, GLib, Gtk, Pango
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 
 from . import ipc, model
+from .i18n import current_language, language_options, set_language, system_language, tr
+from .previews import preview as _preview
+from .theme import install_theme
 
 
 SERVICE = "linux-wallpaperengine-app.service"
 FILTERS = ("Todos", "Cenas", "Vídeos", "Favoritos")
 SCALINGS = ("fill", "fit", "stretch", "default")
-
-CSS = """
-window {
-  background: #0b0908;
-  color: #f8f4ef;
+PAGES = {
+    "library": ("Biblioteca", "Seus wallpapers instalados, prontos para usar."),
+    "playlists": ("Playlists", "Organize a rotação do seu jeito."),
+    "languages": ("Idiomas", "Escolha o idioma da interface."),
+    "settings": ("Configurações", "Ajuste a reprodução e o aplicativo."),
 }
-.app-root {
-  background: #0b0908;
-}
-.sidebar {
-  min-width: 218px;
-  padding: 18px 14px 16px;
-  background: linear-gradient(180deg, #17100d 0%, #100c0a 56%, #0c0a09 100%);
-  border-right: 1px solid rgba(255,255,255,0.07);
-}
-.brand-mark {
-  min-width: 36px;
-  min-height: 36px;
-  border-radius: 11px;
-  background: rgba(255,255,255,0.08);
-}
-.brand-title {
-  font-size: 1.12em;
-  font-weight: 800;
-}
-.brand-subtitle {
-  font-size: 0.80em;
-  opacity: 0.58;
-}
-.nav-button {
-  min-height: 44px;
-  padding: 0 12px;
-  border-radius: 11px;
-  border: 0;
-  box-shadow: none;
-  background: transparent;
-}
-.nav-button:hover {
-  background: rgba(255,255,255,0.065);
-}
-.nav-button image {
-  opacity: 0.88;
-}
-.nav-button label {
-  font-weight: 600;
-}
-.main-area {
-  padding: 18px 20px 16px;
-}
-.page-title {
-  font-size: 1.75em;
-  font-weight: 800;
-}
-.page-subtitle {
-  opacity: 0.58;
-}
-.surface {
-  border-radius: 14px;
-  background: rgba(255,255,255,0.045);
-  border: 1px solid rgba(255,255,255,0.06);
-}
-.library-tools {
-  padding: 10px;
-  border-radius: 14px;
-  background: rgba(255,255,255,0.045);
-  border: 1px solid rgba(255,255,255,0.06);
-}
-.search-entry {
-  min-height: 38px;
-}
-.wallpaper-card {
-  padding: 0;
-  border-radius: 14px;
-  min-width: 244px;
-  min-height: 192px;
-  border: 1px solid rgba(255,255,255,0.075);
-  background: #15110f;
-  box-shadow: 0 5px 18px rgba(0,0,0,0.22);
-}
-.wallpaper-card:hover {
-  border-color: rgba(255,255,255,0.18);
-  background: #191310;
-}
-.wallpaper-card image {
-  border-radius: 13px 13px 0 0;
-}
-.card-copy {
-  padding: 7px 10px 9px;
-}
-.card-title {
-  font-weight: 700;
-}
-.badge {
-  margin: 9px;
-  padding: 3px 7px;
-  border-radius: 7px;
-  font-size: 0.72em;
-  font-weight: 800;
-  background: rgba(16,12,10,0.82);
-  color: #fff;
-}
-.detail-panel {
-  margin-left: 14px;
-  padding: 14px;
-  border-radius: 16px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.065);
-}
-.detail-hero {
-  border-radius: 13px;
-}
-.detail-title {
-  font-size: 1.45em;
-  font-weight: 800;
-}
-.status-strip {
-  padding: 12px;
-  border-radius: 13px;
-  background: rgba(255,255,255,0.055);
-  border: 1px solid rgba(255,255,255,0.06);
-}
-.status-dot {
-  min-width: 8px;
-  min-height: 8px;
-  border-radius: 99px;
-  background: #45d483;
-}
-.subtle {
-  opacity: 0.62;
-}
-.section-title {
-  font-size: 1.1em;
-  font-weight: 750;
-}
-.settings-row {
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.045);
-  border: 1px solid rgba(255,255,255,0.055);
-}
-.empty-state {
-  font-size: 1.05em;
-  opacity: 0.62;
-}
-.theme-popover {
-  min-width: 330px;
-  padding: 16px;
-}
-.theme-heading {
-  font-size: 1.15em;
-  font-weight: 800;
-}
-.theme-preview {
-  min-height: 74px;
-  border-radius: 14px;
-  background: linear-gradient(110deg, #ff641f 0%, #ffad1f 48%, #d7262e 100%);
-  border: 1px solid rgba(255,255,255,0.12);
-}
-scale.hue-slider trough {
-  min-height: 10px;
-  border-radius: 99px;
-  background: linear-gradient(90deg,
-    #ff3030 0%, #ffd230 16%, #5fe05f 33%, #35dbe4 50%,
-    #4a6cff 66%, #c84cff 83%, #ff3030 100%);
-}
-scale.intensity-slider trough {
-  min-height: 8px;
-  border-radius: 99px;
-}
-.preset-dot {
-  min-width: 30px;
-  min-height: 30px;
-  padding: 0;
-  border-radius: 99px;
-  color: transparent;
-  border: 2px solid rgba(255,255,255,0.16);
-}
-.preset-amber { background: #ff7417; }
-.preset-gold { background: #f6b91f; }
-.preset-red { background: #e43b2f; }
-.preset-violet { background: #a24ce6; }
-.preset-blue { background: #397be8; }
-.preset-green { background: #39ad70; }
-.toast {
-  margin-top: 8px;
-  padding: 9px 12px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.07);
-}
-.error {
-  color: #ff8787;
-}
-button {
-  border-radius: 10px;
-}
-entry, dropdown, spinbutton {
-  border-radius: 10px;
-}
-"""
-
-
 
 def _label(text: str, *, css: str | None = None, wrap: bool = False) -> Gtk.Label:
     widget = Gtk.Label(label=text, xalign=0)
     widget.set_wrap(wrap)
+    if wrap:
+        widget.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
     if css:
         widget.add_css_class(css)
     return widget
@@ -238,6 +48,25 @@ def _box(*, vertical: bool = False, spacing: int = 0) -> Gtk.Box:
     )
 
 
+def _badge(text: str, css: str | None = None) -> Gtk.Label:
+    badge = _label(text, css="pill")
+    if css:
+        badge.add_css_class(css)
+    return badge
+
+
+def _icon_button(label: str, icon: str, *, tooltip: str | None = None) -> Gtk.Button:
+    button = Gtk.Button()
+    content = _box(spacing=7)
+    content.set_valign(Gtk.Align.CENTER)
+    content.append(Gtk.Image.new_from_icon_name(icon))
+    content.append(_label(label))
+    button.set_child(content)
+    if tooltip:
+        button.set_tooltip_text(tooltip)
+    return button
+
+
 def _clear(container: Gtk.Box | Gtk.FlowBox | Gtk.ListBox) -> None:
     child = container.get_first_child()
     while child is not None:
@@ -246,40 +75,24 @@ def _clear(container: Gtk.Box | Gtk.FlowBox | Gtk.ListBox) -> None:
         child = following
 
 
-def _preview(path: str | None, width: int, height: int) -> Gtk.Widget:
-    """Decode the first preview frame so gallery GIFs do not all animate."""
-    if path and Path(path).is_file():
-        try:
-            animation = GdkPixbuf.PixbufAnimation.new_from_file(path)
-            first = animation.get_static_image()
-            scaled = first.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
-            if scaled is not None:
-                picture = Gtk.Picture.new_for_pixbuf(scaled)
-                # Gtk.ContentFit was added in GTK 4.8. Ubuntu 22.04 ships
-                # GTK 4.6, so keep a compatible fallback instead of failing
-                # while building the first preview card.
-                if hasattr(Gtk, "ContentFit"):
-                    picture.set_content_fit(Gtk.ContentFit.COVER)
-                else:
-                    picture.set_keep_aspect_ratio(True)
-                picture.set_size_request(width, height)
-                return picture
-        except GLib.Error:
-            pass
-    icon = Gtk.Image.new_from_icon_name("image-x-generic-symbolic")
-    icon.set_pixel_size(min(width, height) // 2)
-    icon.set_size_request(width, height)
-    return icon
-
-
 class WallpaperWindow(Gtk.ApplicationWindow):
     def __init__(self, app: Gtk.Application):
         super().__init__(application=app, title="Linux Wallpaper Engine")
-        self.set_default_size(1360, 820)
-        self.set_size_request(980, 620)
+        monitor = self.get_display().get_monitors().get_item(0)
+        if monitor is not None:
+            bounds = monitor.get_geometry()
+            self._initial_size = (min(1440, int(bounds.width * 0.9)),
+                                  min(870, int(bounds.height * 0.9)))
+        else:
+            self._initial_size = (1100, 720)
+        self.set_default_size(*self._initial_size)
+        self.set_size_request(680, 440)
 
         self.catalog: dict[str, dict] = {}
-        self.config: dict = {}
+        self.config: dict = model.load_config()
+        self._ui_preferences = model.load_ui_preferences(self.config)
+        self.config.update(self._ui_preferences)
+        set_language(self.config.get("language", "auto"))
         self.status: dict = {}
         self.selected_id: str | None = None
         self.service_available = False
@@ -287,8 +100,20 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._pending_status = False
         self._catalog_generation = 0
         self._cards: dict[str, Gtk.FlowBoxChild] = {}
-        self._favorite_marks: dict[str, Gtk.Label] = {}
+        self._card_badges: dict[str, Gtk.Box] = {}
+        self._selected_ids: set[str] = set()
+        self._selection_anchor_id: str | None = None
+        self._gallery_click_modifiers: Gdk.ModifierType | None = None
+        self._selection_rebuilding = False
         self._toast_timer = 0
+        self.filter_index = 0
+        self._filter_buttons: list[Gtk.Button] = []
+        self._nav_buttons: dict[str, Gtk.Button] = {}
+        self._nav_labels: list[Gtk.Label] = []
+        self._compact_mode: str | None = None
+        self._selection_compact = False
+        self._last_height_band: tuple[bool, bool] | None = None
+        self._last_pane_width: int | None = None
         self.playlist_name: str | None = None
         self._updating_playlists = False
         self._catalog_scan_pending = False
@@ -298,6 +123,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._spin_timers: dict[str, int] = {}
         self._theme_save_timer = 0
         self._theme_updating = False
+        self._ui_language = self.config.get("language", "auto")
 
         self._build()
         self._load_catalog()
@@ -305,200 +131,322 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._refresh_autostart()
         GLib.timeout_add_seconds(2, self._tick)
         GLib.timeout_add_seconds(15, self._check_library_changes)
+        GLib.timeout_add(180, self._update_responsive)
 
     def _build(self) -> None:
-        self.base_provider = Gtk.CssProvider()
-        self.base_provider.load_from_data(CSS.encode())
-        Gtk.StyleContext.add_provider_for_display(
-            self.get_display(), self.base_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        self.theme_provider = Gtk.CssProvider()
-        Gtk.StyleContext.add_provider_for_display(
-            self.get_display(), self.theme_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
+        self._nav_buttons.clear()
+        self._nav_labels.clear()
+        self._filter_buttons.clear()
+        self._cards.clear()
+        self._card_badges.clear()
+        self._language_buttons: dict[str, tuple[Gtk.Button, Gtk.Image]] = {}
+        if not hasattr(self, "_theme_provider"):
+            self._theme_provider = install_theme(self.get_display())
+            self._dynamic_theme_provider = Gtk.CssProvider()
+            Gtk.StyleContext.add_provider_for_display(
+                self.get_display(), self._dynamic_theme_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+            )
+        icon_theme = Gtk.IconTheme.get_for_display(self.get_display())
+        app_icon = (
+            "linux-wallpaperengine-app" if icon_theme.has_icon("linux-wallpaperengine-app")
+            else "preferences-desktop-wallpaper-symbolic"
         )
 
         header = Gtk.HeaderBar()
-        header.set_show_title_buttons(True)
+        header.add_css_class("topbar")
+        header.set_show_title_buttons(False)
         header.set_title_widget(_label("Wallpaper Engine", css="section-title"))
 
+        def window_button(label: str, symbol: str) -> tuple[Gtk.Button, Gtk.DrawingArea]:
+            button = Gtk.Button()
+            button.add_css_class("window-action")
+            button.set_tooltip_text(tr(label))
+            button.update_property([Gtk.AccessibleProperty.LABEL], [tr(label)])
+            icon = Gtk.DrawingArea()
+            icon.set_content_width(16)
+            icon.set_content_height(16)
+
+            def draw_icon(_area: Gtk.DrawingArea, cr: object,
+                          width: int, height: int) -> None:
+                color = button.get_style_context().get_color()
+                cr.set_source_rgba(color.red, color.green, color.blue, color.alpha)
+                cr.set_line_width(1.6)
+                cr.set_line_cap(1)
+                cr.set_line_join(1)
+                cr.translate((width - 16) / 2, (height - 16) / 2)
+                active_symbol = "restore" if symbol == "maximize" and self.is_maximized() else symbol
+                if active_symbol == "minimize":
+                    cr.move_to(3, 11.5)
+                    cr.line_to(13, 11.5)
+                elif active_symbol == "maximize":
+                    cr.rectangle(3.5, 3.5, 9, 9)
+                elif active_symbol == "restore":
+                    cr.move_to(6, 3.5)
+                    cr.line_to(12.5, 3.5)
+                    cr.line_to(12.5, 10)
+                    cr.rectangle(3.5, 5.5, 7, 7)
+                else:
+                    cr.move_to(3.5, 3.5)
+                    cr.line_to(12.5, 12.5)
+                    cr.move_to(12.5, 3.5)
+                    cr.line_to(3.5, 12.5)
+                cr.stroke()
+
+            icon.set_draw_func(draw_icon)
+            button.set_child(icon)
+            return button, icon
+
+        window_actions = _box(spacing=5)
+        window_actions.add_css_class("window-actions")
+        window_actions.set_valign(Gtk.Align.CENTER)
+        minimize_button, _minimize_icon = window_button("Minimizar", "minimize")
+        minimize_button.connect("clicked", lambda *_: self.minimize())
+        window_actions.append(minimize_button)
+
+        maximize_button, maximize_icon = window_button("Maximizar", "maximize")
+
+        def toggle_maximized(*_args: object) -> None:
+            if self.is_maximized():
+                self.unmaximize()
+            else:
+                self.maximize()
+
+        def sync_maximize_button(*_args: object) -> None:
+            maximized = self.is_maximized()
+            label = tr("Restaurar" if maximized else "Maximizar")
+            maximize_icon.queue_draw()
+            maximize_button.set_tooltip_text(label)
+            maximize_button.update_property([Gtk.AccessibleProperty.LABEL], [label])
+
+        maximize_button.connect("clicked", toggle_maximized)
+        window_actions.append(maximize_button)
+
+        close_button, _close_icon = window_button("Fechar", "close")
+        close_button.add_css_class("window-action-close")
+        close_button.connect("clicked", lambda *_: self.close())
+        window_actions.append(close_button)
+        header.pack_end(window_actions)
         self.theme_button = Gtk.MenuButton()
-        self.theme_button.set_icon_name("applications-graphics-symbolic")
-        self.theme_button.set_tooltip_text("Personalizar tema")
+        self.theme_button.add_css_class("theme-trigger")
+        theme_icon = Gtk.DrawingArea()
+        theme_icon.set_content_width(18)
+        theme_icon.set_content_height(18)
+
+        def draw_theme_icon(_area: Gtk.DrawingArea, cr: object,
+                            width: int, height: int) -> None:
+            cr.translate((width - 18) / 2, (height - 18) / 2)
+            cr.set_source_rgb(0.74, 0.82, 0.88)
+            cr.set_line_width(1.5)
+            cr.arc(9, 9, 7, 0, 2 * math.pi)
+            cr.stroke()
+            for x, y, red, green, blue in (
+                (6, 7, 0.46, 0.88, 0.82),
+                (11, 6, 0.97, 0.72, 0.32),
+                (10, 11, 0.68, 0.48, 0.94),
+            ):
+                cr.set_source_rgb(red, green, blue)
+                cr.arc(x, y, 1.5, 0, 2 * math.pi)
+                cr.fill()
+
+        theme_icon.set_draw_func(draw_theme_icon)
+        self.theme_button.set_child(theme_icon)
+        self.theme_button.set_tooltip_text(tr("Personalizar tema"))
+        self.theme_button.update_property(
+            [Gtk.AccessibleProperty.LABEL], [tr("Personalizar tema")]
+        )
         self.theme_button.set_popover(self._build_theme_popover())
+        self.theme_button.set_valign(Gtk.Align.CENTER)
         header.pack_end(self.theme_button)
-
-        self.reload_button = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
-        self.reload_button.set_tooltip_text("Atualizar biblioteca")
-        self.reload_button.connect("clicked", lambda *_: self._reload())
-        header.pack_end(self.reload_button)
-
-        self.next_button = Gtk.Button.new_from_icon_name("media-skip-forward-symbolic")
-        self.next_button.set_tooltip_text("Próximo wallpaper")
-        self.next_button.connect("clicked", lambda *_: self._command("next"))
-        header.pack_end(self.next_button)
-
-        self.power_button = Gtk.Button(label="Iniciar")
-        self.power_button.add_css_class("accent-button")
-        self.power_button.connect("clicked", self._toggle_power)
-        header.pack_end(self.power_button)
+        if hasattr(self, "_maximize_handler_id"):
+            self.disconnect(self._maximize_handler_id)
+        self._maximize_handler_id = self.connect("notify::maximized", sync_maximize_button)
+        sync_maximize_button()
         self.set_titlebar(header)
 
-        root = _box(spacing=0)
-        root.add_css_class("app-root")
-        self.set_child(root)
+        shell = _box(spacing=0)
+        shell.add_css_class("app-shell")
+        shell.add_css_class("app-root")
+        self.set_child(shell)
+
+        sidebar = _box(vertical=True, spacing=8)
+        sidebar.add_css_class("app-sidebar")
+        sidebar.add_css_class("sidebar")
+        sidebar.set_size_request(216, -1)
+        self.sidebar = sidebar
+        shell.append(sidebar)
+
+        brand_block = _box(spacing=10)
+        brand_block.add_css_class("sidebar-brand")
+        brand_icon = Gtk.Image.new_from_icon_name("preferences-desktop-wallpaper-symbolic")
+        brand_icon.set_pixel_size(24)
+        brand_icon.add_css_class("brand-mark")
+        brand_block.append(brand_icon)
+        brand_copy = _box(vertical=True, spacing=0)
+        brand_copy.append(_label("Wallpaper Engine", css="brand-overline"))
+        brand_copy.append(_label("for Linux", css="brand-display"))
+        brand_block.append(brand_copy)
+        sidebar.append(brand_block)
+        self.sidebar_brand = brand_block
+        self.sidebar_compact_logo = Gtk.Image.new_from_icon_name(app_icon)
+        self.sidebar_compact_logo.set_pixel_size(26)
+        self.sidebar_compact_logo.set_visible(False)
+        sidebar.append(self.sidebar_compact_logo)
+        self.sidebar_caption = _label(tr("ESPAÇO DE TRABALHO"), css="nav-caption")
+        self.sidebar_caption.set_visible(False)
+        sidebar.append(self.sidebar_caption)
 
         self.tabs = Gtk.Stack()
+        self.tabs.set_hhomogeneous(False)
+        self.tabs.set_vhomogeneous(False)
         self.tabs.set_hexpand(True)
         self.tabs.set_vexpand(True)
-        self.tabs.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        self.tabs.set_transition_duration(180)
-        self.tabs.add_titled(self._build_library(), "library", "Biblioteca")
-        self.tabs.add_titled(self._build_playlists(), "playlists", "Playlists")
-        self.tabs.add_titled(self._build_settings(), "settings", "Configurações")
+        for name, label, icon in (
+            ("library", "Biblioteca", "view-grid-symbolic"),
+            ("playlists", "Playlists", "view-list-symbolic"),
+            ("languages", "Idiomas", "preferences-desktop-locale-symbolic"),
+            ("settings", "Configurações", "preferences-system-symbolic"),
+        ):
+            button = _icon_button(tr(label), icon)
+            button.add_css_class("nav-item")
+            button.add_css_class("nav-button")
+            button.connect("clicked", lambda _button, target=name: self.tabs.set_visible_child_name(target))
+            button.set_tooltip_text(tr(label))
+            nav_label = button.get_child().get_last_child()
+            nav_label.set_ellipsize(Pango.EllipsizeMode.END)
+            nav_label.set_max_width_chars(17)
+            self._nav_labels.append(nav_label)
+            sidebar.append(button)
+            self._nav_buttons[name] = button
 
-        main = _box(vertical=True, spacing=12)
+        spacer = _box()
+        spacer.set_vexpand(True)
+        sidebar.append(spacer)
+        source = _box(vertical=True, spacing=6)
+        source.add_css_class("sidebar-source")
+        source.append(_badge(tr("BIBLIOTECA STEAM"), "source-badge"))
+        source_text = _label(tr("Assine novos wallpapers no Wallpaper Engine original."), wrap=True)
+        source_text.set_max_width_chars(20)
+        source.append(source_text)
+        sidebar.append(source)
+        self.sidebar_source = source
+        source.set_visible(False)
+        self.sidebar_library_count = _label(tr("Lendo biblioteca…"), css="sidebar-count")
+        self.sidebar_library_count.set_visible(False)
+        sidebar.append(self.sidebar_library_count)
+
+        main = _box(vertical=True, spacing=0)
+        main.add_css_class("workspace")
         main.add_css_class("main-area")
         main.set_hexpand(True)
         main.set_vexpand(True)
+        shell.append(main)
 
-        heading = _box(vertical=True, spacing=2)
-        self.page_title = _label("Biblioteca", css="page-title")
-        self.page_subtitle = _label("Seus wallpapers instalados no Steam Workshop", css="page-subtitle")
-        heading.append(self.page_title)
-        heading.append(self.page_subtitle)
-        main.append(heading)
-        main.append(self.tabs)
+        top = _box(spacing=14)
+        top.add_css_class("workspace-header")
+        titles = _box(vertical=True, spacing=4)
+        titles.set_hexpand(True)
+        self.page_title = _label(tr("Biblioteca"), css="page-title")
+        self.page_subtitle = _label(tr(PAGES["library"][1]), css="subtle")
+        titles.append(self.page_title)
+        titles.append(self.page_subtitle)
+        top.append(titles)
 
-        self.message = _label("")
-        self.message.add_css_class("toast")
-        self.message.set_visible(False)
-        self.message.set_wrap(True)
-        main.append(self.message)
+        self.reload_button = _icon_button(tr("Atualizar"), "view-refresh-symbolic", tooltip=tr("Atualizar biblioteca · Ctrl+R"))
+        self.reload_label = self.reload_button.get_child().get_last_child()
+        self.reload_button.add_css_class("compact-button")
+        self.reload_button.connect("clicked", lambda *_: self._reload())
+        header.pack_end(self.reload_button)
 
-        root.append(self._build_sidebar())
-        root.append(main)
-        self._show_page("library", "library")
-        self._apply_theme_preview()
+        self.next_button = _icon_button(tr("Próximo"), "media-skip-forward-symbolic")
+        self.next_label = self.next_button.get_child().get_last_child()
+        self.next_button.add_css_class("compact-button")
+        self.next_button.connect("clicked", lambda *_: self._command("next"))
+        header.pack_end(self.next_button)
 
-    def _build_sidebar(self) -> Gtk.Widget:
-        sidebar = _box(vertical=True, spacing=8)
-        sidebar.add_css_class("sidebar")
-
-        brand = _box(spacing=10)
-        mark = Gtk.Image.new_from_icon_name("preferences-desktop-wallpaper-symbolic")
-        mark.set_pixel_size(24)
-        mark.add_css_class("brand-mark")
-        brand.append(mark)
-        brand_text = _box(vertical=True, spacing=0)
-        brand_text.append(_label("Wallpaper Engine", css="brand-title"))
-        brand_text.append(_label("for Linux", css="brand-subtitle"))
-        brand.append(brand_text)
-        sidebar.append(brand)
-
-        spacer = Gtk.Box()
-        spacer.set_size_request(-1, 18)
-        sidebar.append(spacer)
-
-        self.nav_buttons: dict[str, Gtk.Button] = {}
-        for key, icon, title in (
-            ("library", "view-grid-symbolic", "Biblioteca"),
-            ("favorites", "emblem-favorite-symbolic", "Favoritos"),
-            ("playlists", "view-list-symbolic", "Playlists"),
-            ("settings", "emblem-system-symbolic", "Configurações"),
-        ):
-            button = Gtk.Button()
-            button.add_css_class("nav-button")
-            content = _box(spacing=11)
-            image = Gtk.Image.new_from_icon_name(icon)
-            image.set_pixel_size(19)
-            content.append(image)
-            label = _label(title)
-            label.set_hexpand(True)
-            content.append(label)
-            button.set_child(content)
-            button.connect("clicked", lambda _button, target=key: self._show_page(
-                "library" if target == "favorites" else target, target
-            ))
-            self.nav_buttons[key] = button
-            sidebar.append(button)
-
-        flexible = Gtk.Box()
-        flexible.set_vexpand(True)
-        sidebar.append(flexible)
+        self.power_button = Gtk.Button(label=tr("Iniciar"))
+        self.power_button.add_css_class("primary-action")
+        self.power_button.connect("clicked", self._toggle_power)
+        header.pack_end(self.power_button)
+        main.append(top)
 
         self.status_strip = _box(vertical=True, spacing=7)
         self.status_strip.add_css_class("status-strip")
         status_head = _box(spacing=7)
-        dot = Gtk.Box()
-        dot.add_css_class("status-dot")
-        status_head.append(dot)
-        status_head.append(_label("Estado do motor", css="section-title"))
+        self.status_dot = _label("●", css="status-dot")
+        status_head.append(self.status_dot)
+        status_head.append(_label(tr("Estado do motor"), css="section-title"))
         self.status_strip.append(status_head)
-
-        self.status_label = _label("Verificando serviço…", wrap=True)
-        self.status_label.add_css_class("subtle")
+        self.status_label = _label(tr("Verificando serviço…"))
+        self.status_label.set_max_width_chars(26)
+        self.status_label.set_wrap(True)
         self.status_strip.append(self.status_label)
         self.countdown_label = _label("")
         self.countdown_label.add_css_class("subtle")
         self.status_strip.append(self.countdown_label)
         sidebar.append(self.status_strip)
-        return sidebar
 
-    def _show_page(self, page: str, nav_key: str) -> None:
-        self.tabs.set_visible_child_name(page)
-        for key, button in self.nav_buttons.items():
-            button.remove_css_class("active")
-            if key == nav_key:
-                button.add_css_class("active")
+        self.tabs.add_titled(self._build_library(), "library", tr("Biblioteca"))
+        self.tabs.add_titled(self._build_playlists(), "playlists", tr("Playlists"))
+        self.tabs.add_titled(self._build_languages(), "languages", tr("Idiomas"))
+        self.tabs.add_titled(self._build_settings(), "settings", tr("Configurações"))
+        self.tabs.connect("notify::visible-child-name", self._page_changed)
+        self.tabs.set_visible_child_name("library")
+        self._page_changed(self.tabs, None)
+        main.append(self.tabs)
 
-        titles = {
-            "library": ("Biblioteca", "Seus wallpapers instalados no Steam Workshop"),
-            "favorites": ("Favoritos", "Os wallpapers que você marcou para encontrar rápido"),
-            "playlists": ("Playlists", "Monte e ordene conjuntos para a rotação automática"),
-            "settings": ("Configurações", "Reprodução, renderização e comportamento do aplicativo"),
-        }
-        title, subtitle = titles.get(nav_key, titles["library"])
-        self.page_title.set_text(title)
-        self.page_subtitle.set_text(subtitle)
+        self.message = _label("")
+        self.message.set_visible(False)
+        self.message.set_wrap(True)
+        self.message.add_css_class("toast")
+        main.append(self.message)
 
-        if page == "library" and hasattr(self, "filter"):
-            self.filter.set_selected(3 if nav_key == "favorites" else 0)
+        if not hasattr(self, "_keys"):
+            self._keys = Gtk.EventControllerKey()
+            self._keys.connect("key-pressed", self._key_pressed)
+            self.add_controller(self._keys)
+        self._apply_theme_preview()
+        # Apply the monitor's compact layout before the first size negotiation.
+        # Otherwise the wide sidebar can force a window larger than a HiDPI screen.
+        self._update_responsive()
 
-    def _build_theme_popover(self) -> Gtk.Widget:
+    def _build_theme_popover(self) -> Gtk.Popover:
         popover = Gtk.Popover()
-        body = _box(vertical=True, spacing=12)
+        popover.add_css_class("theme-popover")
+        body = _box(vertical=True, spacing=11)
         body.add_css_class("theme-popover")
 
-        title = _box(spacing=8)
-        heading = _label("Tema", css="theme-heading")
-        heading.set_hexpand(True)
-        title.append(heading)
-        reset = Gtk.Button(label="Redefinir")
+        heading = _box(spacing=8)
+        title = _label(tr("Tema"), css="section-title")
+        title.set_hexpand(True)
+        heading.append(title)
+        reset = Gtk.Button(label=tr("Redefinir"))
         reset.connect("clicked", lambda *_: self._set_theme_preset(24, 88))
-        title.append(reset)
-        body.append(title)
+        heading.append(reset)
+        body.append(heading)
 
-        preview = Gtk.Box()
+        preview = _box()
         preview.add_css_class("theme-preview")
         body.append(preview)
 
-        body.append(_label("Matiz", css="subtle"))
+        body.append(_label(tr("Matiz"), css="subtle"))
         self.theme_hue = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 360, 1)
         self.theme_hue.set_draw_value(False)
-        self.theme_hue.set_value(24)
+        self.theme_hue.set_has_origin(False)
+        self.theme_hue.set_value(int(self.config.get("ui_hue", 24)))
         self.theme_hue.add_css_class("hue-slider")
         self.theme_hue.connect("value-changed", self._theme_changed)
         body.append(self.theme_hue)
 
-        body.append(_label("Intensidade", css="subtle"))
+        body.append(_label(tr("Intensidade"), css="subtle"))
         self.theme_intensity = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 35, 100, 1)
         self.theme_intensity.set_draw_value(False)
-        self.theme_intensity.set_value(88)
+        self.theme_intensity.set_value(int(self.config.get("ui_intensity", 88)))
         self.theme_intensity.add_css_class("intensity-slider")
         self.theme_intensity.connect("value-changed", self._theme_changed)
         body.append(self.theme_intensity)
 
-        body.append(_label("Predefinições", css="subtle"))
+        body.append(_label(tr("Predefinições"), css="subtle"))
         presets = _box(spacing=8)
         for hue, intensity, name, css_class in (
             (24, 88, "Âmbar", "preset-amber"),
@@ -511,14 +459,13 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             button = Gtk.Button(label="●")
             button.add_css_class("preset-dot")
             button.add_css_class(css_class)
-            button.set_tooltip_text(name)
+            button.set_tooltip_text(tr(name))
+            button.update_property([Gtk.AccessibleProperty.LABEL], [tr(name)])
             button.connect(
-                "clicked",
-                lambda _button, h=hue, i=intensity: self._set_theme_preset(h, i),
+                "clicked", lambda _button, h=hue, i=intensity: self._set_theme_preset(h, i)
             )
             presets.append(button)
         body.append(presets)
-
         popover.set_child(body)
         return popover
 
@@ -527,7 +474,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.theme_intensity.set_value(intensity)
 
     def _theme_changed(self, _widget: Gtk.Scale) -> None:
-        if getattr(self, "_theme_updating", False):
+        if self._theme_updating:
             return
         self._apply_theme_preview()
         if self._theme_save_timer:
@@ -540,14 +487,12 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             "ui_hue": int(round(self.theme_hue.get_value())),
             "ui_intensity": int(round(self.theme_intensity.get_value())),
         }
-        if self.service_available:
-            self._set_settings(**settings)
-        else:
-            try:
-                self.config = model.save_config(dict(self.config, **settings))
-                self._apply_config()
-            except (OSError, ValueError) as exc:
-                self._notice(f"Não foi possível salvar o tema: {exc}", error=True)
+        try:
+            self._ui_preferences = model.save_ui_preferences(settings)
+            self.config.update(self._ui_preferences)
+            self._apply_config()
+        except (OSError, ValueError) as exc:
+            self._notice(tr("Não foi possível salvar o tema: {error}", error=exc), error=True)
         return False
 
     @staticmethod
@@ -556,116 +501,457 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         return f"#{round(red * 255):02x}{round(green * 255):02x}{round(blue * 255):02x}"
 
     def _apply_theme_preview(self) -> None:
-        if hasattr(self, "theme_hue"):
-            hue = float(self.theme_hue.get_value())
-            intensity = float(self.theme_intensity.get_value())
-        else:
-            hue = float(self.config.get("ui_hue", 24))
-            intensity = float(self.config.get("ui_intensity", 88))
-
+        hue = float(self.theme_hue.get_value())
+        intensity = float(self.theme_intensity.get_value())
         value = 0.62 + (max(35.0, min(100.0, intensity)) - 35.0) / 65.0 * 0.38
         accent = self._theme_rgb(hue, 0.92, value)
         accent2 = self._theme_rgb(hue + 26, 0.86, min(1.0, value + 0.04))
         hot = self._theme_rgb(hue - 13, 0.94, min(1.0, value + 0.02))
         glow = self._theme_rgb(hue, 0.75, min(1.0, value))
-
         dynamic_css = f"""
         .accent-button,
+        button.primary-action,
         button.suggested-action,
-        .nav-button.active {{
+        button.filter-chip-active,
+        button.filter-chip-active:hover,
+        button.nav-item-active,
+        button.nav-item-active:hover {{
           color: #ffffff;
           background: linear-gradient(110deg, {accent} 0%, {accent2} 58%, {hot} 100%);
           border-color: {accent};
           box-shadow: 0 4px 18px alpha({glow}, 0.22);
         }}
-        .wallpaper-card.selected {{
+        flowboxchild.wallpaper-card:selected,
+        flowboxchild.wallpaper-card-selected,
+        flowboxchild.wallpaper-card-selected:hover {{
           border: 2px solid {accent};
           box-shadow: 0 0 0 1px alpha({accent2}, 0.32), 0 7px 24px alpha({glow}, 0.22);
         }}
-        .badge {{
-          border: 1px solid alpha({accent}, 0.38);
-        }}
+        .pill-accent, .badge-accent {{ border-color: alpha({accent}, 0.38); }}
         .theme-preview {{
           background: linear-gradient(110deg, {hot} 0%, {accent2} 52%, {accent} 100%);
           box-shadow: inset 0 0 0 1px alpha({accent2}, 0.18);
         }}
+        .selection-count {{ color: {accent}; }}
         scale.intensity-slider highlight {{
           background: linear-gradient(90deg, {accent}, {accent2});
         }}
-        selection {{
-          background-color: {accent};
-        }}
+        selection {{ background-color: {accent}; }}
         """
-        self.theme_provider.load_from_data(dynamic_css.encode())
+        self._dynamic_theme_provider.load_from_data(dynamic_css.encode())
+
+    def _page_changed(self, stack: Gtk.Stack, _property: object) -> None:
+        name = stack.get_visible_child_name() or "library"
+        title, subtitle = PAGES[name]
+        self.page_title.set_text(tr(title))
+        self.page_subtitle.set_text(tr(subtitle))
+        for page, button in self._nav_buttons.items():
+            if page == name:
+                button.add_css_class("nav-item-active")
+                button.add_css_class("active")
+            else:
+                button.remove_css_class("nav-item-active")
+                button.remove_css_class("active")
+
+    def _key_pressed(self, _controller: Gtk.EventControllerKey, keyval: int,
+                     _keycode: int, state: Gdk.ModifierType) -> bool:
+        ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        if ctrl and keyval in (Gdk.KEY_f, Gdk.KEY_F):
+            self.tabs.set_visible_child_name("library")
+            self.search.grab_focus()
+            return True
+        if ctrl and keyval in (Gdk.KEY_r, Gdk.KEY_R):
+            self._reload()
+            return True
+        if ctrl and keyval in (Gdk.KEY_n, Gdk.KEY_N):
+            self.tabs.set_visible_child_name("playlists")
+            self._playlist_name_dialog(tr("Criar playlist"), None)
+            return True
+        if ctrl and keyval in (Gdk.KEY_1, Gdk.KEY_2, Gdk.KEY_3, Gdk.KEY_4):
+            self.tabs.set_visible_child_name(
+                ("library", "playlists", "languages", "settings")[keyval - Gdk.KEY_1]
+            )
+            return True
+        if keyval == Gdk.KEY_Escape and self.search.has_focus():
+            self.search.set_text("")
+            return True
+        return False
+
+    def _update_responsive(self) -> bool:
+        width, height = self.get_width(), self.get_height()
+        if width <= 0:
+            width = self._initial_size[0]
+        if height <= 0:
+            height = self._initial_size[1]
+        mode = "small" if width < 1100 else "compact" if width < 1200 else "wide"
+        pane_width = self.library_panes.get_width()
+        height_band = (height < 700, height < 980)
+        size_changed = (
+            self._last_pane_width is None
+            or abs(pane_width - self._last_pane_width) >= 24
+        )
+        if mode == self._compact_mode and self._last_height_band == height_band and not size_changed:
+            return True
+        previous_mode = self._compact_mode
+        self._compact_mode = mode
+        self._last_height_band = height_band
+        self._last_pane_width = pane_width
+        low_height = height_band[0]
+        if low_height:
+            self.add_css_class("compact-height")
+        else:
+            self.remove_css_class("compact-height")
+        self.library_page.set_spacing(5 if low_height else 16)
+        self.library_page.set_margin_top(6 if low_height else 18)
+        self.library_page.set_margin_bottom(6 if low_height else 18)
+        self.selection_hint.set_visible(not low_height)
+        collapsed = mode != "wide"
+        if collapsed:
+            self.sidebar.add_css_class("app-sidebar-collapsed")
+        else:
+            self.sidebar.remove_css_class("app-sidebar-collapsed")
+        self.sidebar.set_size_request(70 if collapsed else 216, -1)
+        self.sidebar_brand.set_visible(not collapsed)
+        self.sidebar_compact_logo.set_visible(collapsed)
+        self.sidebar_caption.set_visible(False)
+        self.sidebar_source.set_visible(False)
+        self.sidebar_library_count.set_visible(False)
+        self.status_strip.set_visible(not collapsed)
+        for label in self._nav_labels:
+            label.set_visible(not collapsed)
+        self.page_subtitle.set_visible(mode == "wide")
+        self.reload_label.set_visible(False)
+        self.next_label.set_visible(False)
+        self.hero.set_visible(False)
+        self.hero_art.set_visible(mode == "wide")
+        inspector_width = 275 if mode == "small" else 305 if collapsed else 350
+        self.detail_shell.set_size_request(inspector_width, -1)
+        if pane_width > 0:
+            self.library_panes.set_position(max(220, pane_width - inspector_width - 12))
+        selection_compact = mode != "wide" or pane_width - inspector_width < 780
+        self._selection_compact = selection_compact
+        self.selection_count.set_text(
+            str(len(self._selected_ids)) if selection_compact else tr(
+                "{count} selecionado" if len(self._selected_ids) == 1 else "{count} selecionados",
+                count=len(self._selected_ids),
+            )
+        )
+        self.bulk_playlist_label.set_visible(not selection_compact)
+        self.selection_create_button.set_visible(not selection_compact)
+        self.selection_clear_button.set_visible(not selection_compact)
+        if selection_compact:
+            self.selection_bar.add_css_class("selection-bar-compact")
+        else:
+            self.selection_bar.remove_css_class("selection-bar-compact")
+        if previous_mode != mode and self.selected_id:
+            self._show_details(self.selected_id)
+        return True
 
     def _build_library(self) -> Gtk.Widget:
-        page = _box(vertical=True, spacing=12)
+        page = _box(vertical=True, spacing=16)
+        page.add_css_class("library-page")
+        self.library_page = page
+        page.set_margin_top(18)
+        page.set_margin_start(22)
+        page.set_margin_end(22)
+        page.set_margin_bottom(18)
+
+        hero = _box(spacing=22)
+        hero.add_css_class("hero")
+        hero.set_visible(False)
+        self.hero = hero
+        self.hero_art = _box()
+        self.hero_art.add_css_class("hero-preview")
+        self.hero_art.set_size_request(400, 225)
+        self.hero_art.set_hexpand(False)
+        self.hero_art.set_valign(Gtk.Align.CENTER)
+        self.hero_art.append(_preview(None, 400, 225))
+        hero.append(self.hero_art)
+        hero_copy = _box(vertical=True, spacing=8)
+        hero_copy.set_valign(Gtk.Align.CENTER)
+        hero_copy.set_hexpand(True)
+        self.hero_kicker = _label(tr("SUA BIBLIOTECA"), css="page-kicker")
+        self.hero_title = _label(tr("Seus wallpapers, no seu ritmo."), css="hero-title", wrap=True)
+        self.hero_note = _label(tr("Escolha um wallpaper ou monte uma playlist para começar."), css="hero-copy", wrap=True)
+        self.hero_stats = _label(tr("Lendo biblioteca…"), css="hero-copy", wrap=True)
+        self.hero_stats.set_max_width_chars(32)
+        hero_copy.append(self.hero_kicker)
+        hero_copy.append(self.hero_title)
+        hero_copy.append(self.hero_note)
+        hero_copy.append(self.hero_stats)
+        hero.append(hero_copy)
+        page.append(hero)
+        self._hero_id: str | None = None
 
         tools = _box(spacing=10)
         tools.add_css_class("library-tools")
         self.search = Gtk.SearchEntry()
-        self.search.add_css_class("search-entry")
-        self.search.set_placeholder_text("Buscar wallpapers, tags ou IDs…")
+        self.search.set_placeholder_text(tr("Buscar em seus wallpapers…  Ctrl+F"))
         self.search.set_hexpand(True)
         self.search.connect("search-changed", lambda *_: self._filter_cards())
         tools.append(self.search)
-
-        self.filter = Gtk.DropDown.new_from_strings(FILTERS)
-        self.filter.connect("notify::selected", lambda *_: self._filter_cards())
+        self.filter = Gtk.DropDown.new_from_strings([tr(name) for name in FILTERS])
+        self.filter.connect("notify::selected", lambda dropdown, *_: self._set_filter(dropdown.get_selected()))
         tools.append(self.filter)
-
-        self.library_count = _label("Carregando…", css="subtle")
-        self.library_count.set_margin_end(4)
+        self.library_count = _label(tr("Carregando…"), css="subtle")
         tools.append(self.library_count)
+        self._set_filter(0)
         page.append(tools)
+        self.selection_hint = _label(
+            tr("Clique para selecionar · Ctrl+clique para escolher vários · Shift+clique para um intervalo"),
+            css="caption", wrap=True,
+        )
+        page.append(self.selection_hint)
 
         panes = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        panes.set_wide_handle(False)
-        panes.set_position(830)
+        panes.set_wide_handle(True)
+        panes.set_position(600)
+        panes.set_shrink_end_child(False)
         panes.set_hexpand(True)
         panes.set_vexpand(True)
+        self.library_panes = panes
 
         gallery_scroll = Gtk.ScrolledWindow()
         gallery_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        gallery_scroll.set_propagate_natural_width(True)
         self.gallery = Gtk.FlowBox()
         self.gallery.set_valign(Gtk.Align.START)
         self.gallery.set_homogeneous(False)
-        self.gallery.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.gallery.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
+        # GTK's single-click activation bypasses its Ctrl/Shift selection handling.
+        # Let the FlowBox select first, then apply a plain click below.
+        self.gallery.set_activate_on_single_click(False)
+        self.gallery.connect("selected-children-changed", self._selection_changed)
+        self.gallery.connect("child-activated", self._card_activated)
+        gallery_click = Gtk.GestureClick()
+        gallery_click.set_button(1)
+        gallery_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        gallery_click.connect("pressed", self._gallery_pressed)
+        gallery_click.connect("released", self._gallery_released)
+        self.gallery.add_controller(gallery_click)
         self.gallery.set_column_spacing(14)
         self.gallery.set_row_spacing(14)
-        self.gallery.set_min_children_per_line(2)
-        self.gallery.set_max_children_per_line(5)
-        self.gallery.set_margin_top(2)
-        self.gallery.set_margin_bottom(10)
+        self.gallery.set_min_children_per_line(1)
+        self.gallery.set_max_children_per_line(2)
         gallery_scroll.set_child(self.gallery)
-        panes.set_start_child(gallery_scroll)
+        self.gallery_state = Gtk.Stack()
+        self.gallery_state.set_hhomogeneous(False)
+        self.gallery_state.set_vhomogeneous(False)
+        self.gallery_state.add_named(gallery_scroll, "gallery")
+        empty = _box(vertical=True, spacing=12)
+        empty.add_css_class("gallery-empty")
+        empty.set_halign(Gtk.Align.CENTER)
+        empty.set_valign(Gtk.Align.CENTER)
+        empty.append(Gtk.Image.new_from_icon_name("image-x-generic-symbolic"))
+        self.empty_title = _label(tr("Sua biblioteca está vazia"), css="section-title")
+        self.empty_text = _label(tr("Assine wallpapers no Wallpaper Engine original e aguarde o download pela Steam."),
+                                 css="subtle", wrap=True)
+        self.empty_text.set_justify(Gtk.Justification.CENTER)
+        empty.append(self.empty_title)
+        empty.append(self.empty_text)
+        empty_reload = _icon_button(tr("Atualizar biblioteca"), "view-refresh-symbolic")
+        empty_reload.connect("clicked", lambda *_: self._reload())
+        empty.append(empty_reload)
+        self.gallery_state.add_named(empty, "empty")
+        gallery_overlay = Gtk.Overlay()
+        gallery_overlay.set_child(self.gallery_state)
+        panes.set_start_child(gallery_overlay)
 
         detail_scroll = Gtk.ScrolledWindow()
         detail_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        detail_scroll.set_size_request(342, -1)
+        detail_scroll.set_hexpand(True)
+        detail_scroll.set_vexpand(True)
+        detail_shell = _box(vertical=True)
+        detail_shell.add_css_class("inspector")
+        detail_shell.set_size_request(350, -1)
+        self.detail_shell = detail_shell
         self.detail = _box(vertical=True, spacing=12)
-        self.detail.add_css_class("detail-panel")
-        self.detail.set_margin_end(2)
-        self.detail.set_margin_bottom(10)
         detail_scroll.set_child(self.detail)
-        panes.set_end_child(detail_scroll)
+        detail_shell.append(detail_scroll)
+        panes.set_end_child(detail_shell)
         self._show_details(None)
+        self.selection_revealer = Gtk.Revealer()
+        self.selection_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_UP)
+        self.selection_revealer.set_halign(Gtk.Align.CENTER)
+        self.selection_revealer.set_valign(Gtk.Align.END)
+        self.selection_revealer.set_margin_bottom(18)
+        selection_bar = _box(spacing=10)
+        selection_bar.add_css_class("selection-bar")
+        self.selection_bar = selection_bar
+        self.selection_count = _label(tr("0 selecionados"), css="selection-count")
+        selection_bar.append(self.selection_count)
+        self.bulk_playlist_button = Gtk.MenuButton()
+        bulk_label = _box(spacing=7)
+        bulk_label.append(Gtk.Image.new_from_icon_name("list-add-symbolic"))
+        self.bulk_playlist_label = _label(tr("Adicionar à playlist"))
+        bulk_label.append(self.bulk_playlist_label)
+        self.bulk_playlist_button.set_child(bulk_label)
+        self.bulk_playlist_button.set_tooltip_text(tr("Adicionar à playlist"))
+        self.bulk_playlist_button.add_css_class("primary-action")
+        selection_bar.append(self.bulk_playlist_button)
+        create_playlist = _icon_button(tr("Criar playlist"), "list-add-symbolic")
+        create_playlist.connect(
+            "clicked", lambda *_: self._playlist_name_dialog(
+                tr("Criar playlist"), None, initial_ids=self._selected_in_order()
+            )
+        )
+        selection_bar.append(create_playlist)
+        self.selection_create_button = create_playlist
+        clear_selection = Gtk.Button(label=tr("Limpar seleção"))
+        clear_selection.add_css_class("ghost-action")
+        clear_selection.connect("clicked", lambda *_: self.gallery.unselect_all())
+        selection_bar.append(clear_selection)
+        self.selection_clear_button = clear_selection
+        self.selection_revealer.set_child(selection_bar)
+        gallery_overlay.add_overlay(self.selection_revealer)
+        self._refresh_bulk_actions()
         page.append(panes)
         return page
 
+    def _set_filter(self, index: int) -> None:
+        self.filter_index = index
+        if hasattr(self, "filter") and self.filter.get_selected() != index:
+            self.filter.set_selected(index)
+        for position, button in enumerate(self._filter_buttons):
+            if position == index:
+                button.add_css_class("filter-chip-active")
+            else:
+                button.remove_css_class("filter-chip-active")
+        if hasattr(self, "gallery"):
+            self._filter_cards()
+
+    def _card_activated(self, _gallery: Gtk.FlowBox, child: Gtk.FlowBoxChild) -> None:
+        # A pointer double-click reaches FlowBox activation too; the first click
+        # has already queued playback. Keep this signal for keyboard activation.
+        if self._gallery_click_modifiers is not None:
+            return
+        seat = self.get_display().get_default_seat()
+        keyboard = seat.get_keyboard() if seat else None
+        modifiers = keyboard.get_modifier_state() if keyboard else Gdk.ModifierType(0)
+        if modifiers & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK):
+            return
+        self._play_gallery_card(child.wallpaper_id)
+
+    def _play_gallery_card(self, wallpaper_id: str) -> bool:
+        if wallpaper_id in self.catalog:
+            self._selection_anchor_id = wallpaper_id
+            self._show_details(wallpaper_id)
+            self._command("select", id=wallpaper_id)
+        return False
+
+    def _gallery_pressed(self, gesture: Gtk.GestureClick, _count: int,
+                         _x: float, _y: float) -> None:
+        self._gallery_click_modifiers = gesture.get_current_event_state()
+
+    def _gallery_released(self, gesture: Gtk.GestureClick, count: int,
+                          x: float, y: float) -> None:
+        child = self.gallery.get_child_at_pos(int(x), int(y))
+        modifiers = self._gallery_click_modifiers or gesture.get_current_event_state()
+        if child is not None:
+            if modifiers & Gdk.ModifierType.SHIFT_MASK:
+                GLib.idle_add(
+                    self._select_gallery_range, self._selection_anchor_id,
+                    child.wallpaper_id, bool(modifiers & Gdk.ModifierType.CONTROL_MASK),
+                )
+            else:
+                self._selection_anchor_id = child.wallpaper_id
+                if not modifiers & Gdk.ModifierType.CONTROL_MASK and count == 1:
+                    GLib.idle_add(self._play_gallery_card, child.wallpaper_id)
+        GLib.idle_add(self._clear_gallery_click_modifiers)
+
+    def _clear_gallery_click_modifiers(self) -> bool:
+        self._gallery_click_modifiers = None
+        return False
+
+    def _select_gallery_range(self, anchor: str | None, end: str, extend: bool) -> bool:
+        visible = [item_id for item_id, card in self._cards.items() if card.get_visible()]
+        if end not in visible:
+            return False
+        if anchor not in visible:
+            anchor = end
+        first, last = sorted((visible.index(anchor), visible.index(end)))
+        self._selection_rebuilding = True
+        try:
+            if not extend:
+                self.gallery.unselect_all()
+            for item_id in visible[first:last + 1]:
+                self.gallery.select_child(self._cards[item_id])
+        finally:
+            self._selection_rebuilding = False
+        self._selection_changed(self.gallery)
+        return False
+
+    def _selection_changed(self, gallery: Gtk.FlowBox) -> None:
+        if self._selection_rebuilding:
+            return
+        chosen = [child.wallpaper_id for child in gallery.get_selected_children()]
+        self._selected_ids = set(chosen)
+        for item_id, child in self._cards.items():
+            if item_id in self._selected_ids:
+                child.add_css_class("wallpaper-card-selected")
+            else:
+                child.remove_css_class("wallpaper-card-selected")
+        self.selection_revealer.set_reveal_child(len(chosen) > 1)
+        count_text = tr(
+            "{count} selecionado" if len(chosen) == 1 else "{count} selecionados",
+            count=len(chosen),
+        )
+        self.selection_count.set_tooltip_text(count_text)
+        self.selection_count.set_text(str(len(chosen)) if self._selection_compact else count_text)
+        if len(chosen) == 1:
+            self._show_details(chosen[0])
+
+    def _selected_in_order(self) -> list[str]:
+        return [child.wallpaper_id for child in self.gallery.get_selected_children()]
+
+    def _refresh_bulk_actions(self) -> None:
+        popover = Gtk.Popover()
+        choices = _box(vertical=True, spacing=5)
+        choices.set_margin_top(10)
+        choices.set_margin_bottom(10)
+        choices.set_margin_start(10)
+        choices.set_margin_end(10)
+        choices.append(_label(tr("ADICIONAR À PLAYLIST"), css="page-kicker"))
+        playlists = self.config.get("playlists") or {}
+        for name in playlists:
+            button = Gtk.Button(label=name)
+            button.add_css_class("ghost-action")
+            button.connect("clicked", lambda _button, target=name: self._bulk_add_to_playlist(target))
+            choices.append(button)
+        if not playlists:
+            choices.append(_label(tr("Ainda não há playlists."), css="subtle"))
+        create = _icon_button(tr("Criar playlist"), "list-add-symbolic")
+        create.connect("clicked", lambda *_: self._playlist_name_dialog(
+            tr("Criar playlist"), None, initial_ids=self._selected_in_order()
+        ))
+        choices.append(create)
+        clear = Gtk.Button(label=tr("Limpar seleção"))
+        clear.add_css_class("ghost-action")
+        clear.connect("clicked", lambda *_: self.gallery.unselect_all())
+        choices.append(clear)
+        popover.set_child(choices)
+        self.bulk_playlist_button.set_popover(popover)
+
+    def _bulk_add_to_playlist(self, name: str) -> None:
+        self._playlist_add_many(name, self._selected_in_order())
+        self.gallery.unselect_all()
+
     def _build_playlists(self) -> Gtk.Widget:
-        page = _box(vertical=True, spacing=12)
-        page.set_margin_top(8)
+        page = _box(vertical=True, spacing=16)
+        page.set_margin_top(20)
+        page.set_margin_start(22)
+        page.set_margin_end(22)
+        page.set_margin_bottom(18)
 
         toolbar = _box(spacing=10)
-        heading = _label("Playlists", css="section-title")
+        toolbar.add_css_class("library-tools")
+        heading = _label(tr("Suas playlists"), css="section-title")
         heading.set_hexpand(True)
         toolbar.append(heading)
-        self.playlist_active_label = _label("Rotação pela biblioteca", css="subtle")
+        self.playlist_active_label = _badge(tr("Rotação pela biblioteca"))
         toolbar.append(self.playlist_active_label)
-        create = Gtk.Button(label="Criar playlist")
-        create.connect("clicked", lambda *_: self._playlist_name_dialog("Criar playlist", None))
+        create = _icon_button(tr("Nova playlist"), "list-add-symbolic", tooltip=tr("Criar playlist · Ctrl+N"))
+        create.add_css_class("primary-action")
+        create.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Criar playlist"), None))
         toolbar.append(create)
         page.append(toolbar)
 
@@ -677,6 +963,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         left_scroll = Gtk.ScrolledWindow()
         left_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        left_scroll.add_css_class("panel")
         self.playlist_list = Gtk.ListBox()
         self.playlist_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.playlist_list.connect("row-selected", self._playlist_selected)
@@ -685,10 +972,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         right_scroll = Gtk.ScrolledWindow()
         right_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        right_scroll.add_css_class("panel")
         self.playlist_detail = _box(vertical=True, spacing=12)
-        self.playlist_detail.set_margin_start(18)
-        self.playlist_detail.set_margin_end(6)
-        self.playlist_detail.set_margin_bottom(16)
         right_scroll.set_child(self.playlist_detail)
         panes.set_end_child(right_scroll)
         page.append(panes)
@@ -701,7 +986,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         playlists = self.config.get("playlists") or {}
         active = self.config.get("active_playlist")
         self.playlist_active_label.set_text(
-            f"Ativa: {active}" if active else "Rotação pela biblioteca/favoritos"
+            tr("Ativa: {name}", name=active) if active else tr("Rotação pela biblioteca")
         )
         if self.playlist_name not in playlists:
             self.playlist_name = next(iter(playlists), None)
@@ -712,14 +997,18 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         for name, identifiers in playlists.items():
             row = Gtk.ListBoxRow()
             row.playlist_name = name
-            content = _box(vertical=True, spacing=3)
-            content.set_margin_top(10)
-            content.set_margin_bottom(10)
-            content.set_margin_start(12)
-            content.set_margin_end(12)
-            title = name + ("  ✓" if name == active else "")
-            content.append(_label(title))
-            content.append(_label(f"{len(identifiers)} wallpapers", css="subtle"))
+            content = _box(spacing=10)
+            content.add_css_class("playlist-item")
+            first = next((item_id for item_id in identifiers if item_id in self.catalog), None)
+            content.append(_preview(self.catalog[first].get("preview") if first else None, 75, 48))
+            copy = _box(vertical=True, spacing=3)
+            copy.set_valign(Gtk.Align.CENTER)
+            copy.set_hexpand(True)
+            copy.append(_label(name, css="card-title"))
+            copy.append(_label(tr("{count} wallpapers", count=len(identifiers)), css="card-meta"))
+            content.append(copy)
+            if name == active:
+                content.append(_badge(tr("ATIVA"), "pill-accent"))
             row.set_child(content)
             self.playlist_list.append(row)
             if name == self.playlist_name:
@@ -728,6 +1017,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.playlist_list.select_row(chosen_row)
         self._updating_playlists = False
         self._show_playlist_detail()
+        if hasattr(self, "bulk_playlist_button"):
+            self._refresh_bulk_actions()
 
     def _playlist_selected(self, _listbox: Gtk.ListBox, row: Gtk.ListBoxRow | None) -> None:
         if self._updating_playlists:
@@ -742,26 +1033,43 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         playlists = self.config.get("playlists") or {}
         name = self.playlist_name
         if name is None or name not in playlists:
-            self.playlist_detail.append(
-                _label("Crie uma playlist para escolher a ordem da rotação.",
-                       css="empty-state", wrap=True)
-            )
+            self.playlist_detail.append(_label(tr("COMECE POR AQUI"), css="page-kicker"))
+            self.playlist_detail.append(_label(tr("Uma trilha para cada clima."), css="detail-title", wrap=True))
+            self.playlist_detail.append(_label(
+                tr("Crie uma playlist e escolha vários wallpapers instalados de uma vez. Você decide a ordem ou deixa a reprodução aleatória."),
+                css="subtle", wrap=True,
+            ))
+            create = _icon_button(tr("Criar minha primeira playlist"), "list-add-symbolic")
+            create.add_css_class("primary-action")
+            create.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Criar playlist"), None))
+            self.playlist_detail.append(create)
             return
 
+        self.playlist_detail.append(_label(tr("EDITOR DE PLAYLIST"), css="page-kicker"))
         heading = _box(spacing=8)
         label = _label(name, css="detail-title")
         label.set_hexpand(True)
         heading.append(label)
-        rename = Gtk.Button(label="Renomear")
-        rename.connect("clicked", lambda *_: self._playlist_name_dialog("Renomear playlist", name))
+        rename = Gtk.Button(label=tr("Renomear"))
+        rename.add_css_class("compact-button")
+        rename.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Renomear playlist"), name))
         heading.append(rename)
-        delete = Gtk.Button(label="Excluir")
+        delete = Gtk.Button(label=tr("Excluir"))
+        delete.add_css_class("danger-action")
+        delete.add_css_class("compact-button")
         delete.connect("clicked", lambda *_: self._playlist_delete(name))
         heading.append(delete)
         self.playlist_detail.append(heading)
 
         active = self.config.get("active_playlist") == name
-        activation = Gtk.Button(label="Usar biblioteca na rotação" if active else "Usar esta playlist na rotação")
+        playlist_state = (
+            "Selecionada para a rotação" if active and self.config.get("rotation_enabled")
+            else "Selecionada, com rotação pausada" if active else "Pronta para ativar"
+        )
+        self.playlist_detail.append(_label(tr(
+            "{count} itens · {state}", count=len(playlists[name]), state=tr(playlist_state)
+        ), css="subtle"))
+        activation = Gtk.Button(label=tr("Voltar à biblioteca na rotação" if active else "Ativar e iniciar rotação"))
         activation.set_sensitive(active or any(item_id in self.catalog for item_id in playlists[name]))
         if not active:
             activation.add_css_class("suggested-action")
@@ -773,82 +1081,66 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         )
         self.playlist_detail.append(activation)
         self.playlist_detail.append(_label(
-            "A ordem abaixo vale quando a opção aleatória está desligada. "
-            "Itens salvos que não estão instalados serão ignorados até reaparecerem na biblioteca.",
+            tr("A ordem abaixo vale quando a opção aleatória está desligada. Itens salvos que não estão instalados serão ignorados até reaparecerem na biblioteca."),
             css="subtle", wrap=True,
         ))
 
-        available_ids = sorted(
-            (wallpaper_id for wallpaper_id in self.catalog if wallpaper_id not in playlists[name]),
-            key=lambda wallpaper_id: str(self.catalog[wallpaper_id].get("title", wallpaper_id)).casefold(),
-        )
-        if available_ids:
-            add = _box(spacing=8)
-            picker = Gtk.DropDown.new_from_strings([
-                f"{self.catalog[wallpaper_id].get('title') or wallpaper_id} · {wallpaper_id}"
-                for wallpaper_id in available_ids
-            ])
-            picker.set_hexpand(True)
-            add.append(picker)
-            add_button = Gtk.Button(label="Adicionar wallpaper instalado")
-            add_button.connect(
-                "clicked",
-                lambda *_: self._playlist_add_id(
-                    name,
-                    available_ids[picker.get_selected()]
-                    if picker.get_selected() < len(available_ids) else None,
-                ),
-            )
-            add.append(add_button)
-            self.playlist_detail.append(add)
-        else:
-            self.playlist_detail.append(_label(
-                "Nenhum outro wallpaper instalado disponível. Atualize a biblioteca após assinar pelo Wallpaper Engine.",
-                css="subtle", wrap=True,
-            ))
+        add_button = _icon_button(tr("Adicionar wallpapers"), "list-add-symbolic")
+        add_button.add_css_class("primary-action")
+        add_button.set_sensitive(any(item_id not in playlists[name] for item_id in self.catalog))
+        add_button.connect("clicked", lambda *_: self._playlist_add_dialog(name))
+        self.playlist_detail.append(add_button)
 
         if self.selected_id and self.selected_id not in playlists[name]:
             selected_title = self.catalog.get(self.selected_id, {}).get("title", self.selected_id)
-            add_selected = Gtk.Button(label=f"Adicionar selecionado: {selected_title}")
+            add_selected = Gtk.Button(label=tr("Adicionar selecionado: {title}", title=selected_title))
             add_selected.connect("clicked", lambda *_: self._playlist_add_id(name, self.selected_id))
             self.playlist_detail.append(add_selected)
 
+        self.playlist_detail.append(_label(tr("ORDEM DE REPRODUÇÃO"), css="page-kicker"))
+        if not playlists[name]:
+            self.playlist_detail.append(_label(
+                tr("Esta playlist ainda está vazia. Adicione wallpapers instalados para começar."),
+                css="empty-state", wrap=True,
+            ))
         for position, wallpaper_id in enumerate(playlists[name]):
             item = self.catalog.get(wallpaper_id)
             title = item.get("title", wallpaper_id) if item else wallpaper_id
             if not item:
-                title = f"{title} · não instalado"
+                title = tr("{title} · não instalado", title=title)
             row = _box(spacing=7)
             row.add_css_class("settings-row")
+            row.append(_preview(item.get("preview") if item else None, 72, 45))
             caption = _label(f"{position + 1}. {title}", wrap=True)
             caption.set_hexpand(True)
             row.append(caption)
             up = Gtk.Button(label="↑")
             up.set_sensitive(position > 0)
-            up.set_tooltip_text("Mover para cima")
+            up.set_tooltip_text(tr("Mover para cima"))
             up.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, -1))
             row.append(up)
             down = Gtk.Button(label="↓")
             down.set_sensitive(position < len(playlists[name]) - 1)
-            down.set_tooltip_text("Mover para baixo")
+            down.set_tooltip_text(tr("Mover para baixo"))
             down.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, 1))
             row.append(down)
-            remove = Gtk.Button(label="Remover")
+            remove = Gtk.Button(label=tr("Remover"))
             remove.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_remove(name, item_id))
             row.append(remove)
             self.playlist_detail.append(row)
 
-    def _playlist_name_dialog(self, title: str, previous: str | None) -> None:
+    def _playlist_name_dialog(self, title: str, previous: str | None,
+                              initial_ids: list[str] | None = None) -> None:
         dialog = Gtk.Dialog(title=title, transient_for=self, modal=True)
-        dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Salvar", Gtk.ResponseType.ACCEPT)
+        dialog.add_button(tr("Cancelar"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(tr("Salvar"), Gtk.ResponseType.ACCEPT)
         content = dialog.get_content_area()
         content.set_margin_top(15)
         content.set_margin_bottom(15)
         content.set_margin_start(15)
         content.set_margin_end(15)
         entry = Gtk.Entry()
-        entry.set_placeholder_text("Nome da playlist")
+        entry.set_placeholder_text(tr("Nome da playlist"))
         entry.set_text(previous or "")
         entry.set_activates_default(True)
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
@@ -863,7 +1155,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                     return
                 playlists = dict(self.config.get("playlists") or {})
                 if name != previous and name.casefold() in {value.casefold() for value in playlists}:
-                    self._notice("Já existe uma playlist com esse nome.", error=True)
+                    self._notice(tr("Já existe uma playlist com esse nome."), error=True)
                     return
                 else:
                     if previous is not None and previous in playlists:
@@ -877,10 +1169,14 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                             "active_playlist": name if active == previous else active,
                         }
                     else:
-                        playlists[name] = []
+                        playlists[name] = list(dict.fromkeys(
+                            item_id for item_id in (initial_ids or []) if item_id in self.catalog
+                        ))
                         settings = {"playlists": playlists}
                     self.playlist_name = name
                     self._set_settings(**settings)
+                    if initial_ids:
+                        self.gallery.unselect_all()
             dialog.destroy()
 
         dialog.connect("response", response)
@@ -889,16 +1185,16 @@ class WallpaperWindow(Gtk.ApplicationWindow):
     def _playlist_delete(self, name: str) -> None:
         if name not in (self.config.get("playlists") or {}):
             return
-        dialog = Gtk.Dialog(title="Excluir playlist", transient_for=self, modal=True)
-        dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Excluir", Gtk.ResponseType.ACCEPT)
+        dialog = Gtk.Dialog(title=tr("Excluir playlist"), transient_for=self, modal=True)
+        dialog.add_button(tr("Cancelar"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(tr("Excluir"), Gtk.ResponseType.ACCEPT)
         content = dialog.get_content_area()
         content.set_margin_top(15)
         content.set_margin_bottom(15)
         content.set_margin_start(15)
         content.set_margin_end(15)
         content.append(_label(
-            f"Excluir ‘{name}’? Os wallpapers instalados continuarão na biblioteca.",
+            tr("Excluir ‘{name}’? Os wallpapers instalados continuarão na biblioteca.", name=name),
             wrap=True,
         ))
 
@@ -918,17 +1214,123 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         dialog.connect("response", response)
         dialog.present()
 
-    def _playlist_add_id(self, name: str, wallpaper_id: str | None) -> None:
-        if wallpaper_id is None or wallpaper_id not in self.catalog:
+    def _playlist_add_dialog(self, name: str) -> None:
+        playlists = self.config.get("playlists") or {}
+        if name not in playlists:
             return
+        available = sorted(
+            (item_id for item_id in self.catalog if item_id not in playlists[name]),
+            key=lambda item_id: str(self.catalog[item_id].get("title", item_id)).casefold(),
+        )
+        if not available:
+            self._notice(tr("Todos os wallpapers instalados já estão nesta playlist."))
+            return
+
+        dialog = Gtk.Dialog(title=tr("Adicionar a {name}", name=name), transient_for=self, modal=True)
+        dialog.set_default_size(650, 580)
+        dialog.add_button(tr("Cancelar"), Gtk.ResponseType.CANCEL)
+        add_button = dialog.add_button(tr("Adicionar selecionados"), Gtk.ResponseType.ACCEPT)
+        add_button.add_css_class("suggested-action")
+        add_button.set_sensitive(False)
+        content = dialog.get_content_area()
+        content.set_spacing(12)
+        content.set_margin_top(16)
+        content.set_margin_bottom(16)
+        content.set_margin_start(18)
+        content.set_margin_end(18)
+        content.append(_label(tr("Escolha vários wallpapers instalados"), css="section-title"))
+        search = Gtk.SearchEntry()
+        search.set_placeholder_text(tr("Buscar por nome, tag ou ID"))
+        content.append(search)
+        selection_count = _label(tr("Nenhum selecionado"), css="subtle")
+        content.append(selection_count)
+        listing = Gtk.ListBox()
+        listing.set_selection_mode(Gtk.SelectionMode.NONE)
+        rows: dict[str, Gtk.ListBoxRow] = {}
+        checks: dict[str, Gtk.CheckButton] = {}
+
+        def update_selection(_button: Gtk.CheckButton | None = None) -> None:
+            total = sum(button.get_active() for button in checks.values())
+            selection_count.set_text(tr("{count} selecionados", count=total) if total else tr("Nenhum selecionado"))
+            add_button.set_sensitive(bool(total))
+
+        for item_id in available:
+            item = self.catalog[item_id]
+            row = Gtk.ListBoxRow()
+            row.add_css_class("playlist-entry")
+            line = _box(spacing=11)
+            line.set_margin_top(4)
+            line.set_margin_bottom(4)
+            check = Gtk.CheckButton()
+            check.set_valign(Gtk.Align.CENTER)
+            check.set_tooltip_text(tr("Selecionar {title}", title=item.get("title") or item_id))
+            check.connect("toggled", update_selection)
+            checks[item_id] = check
+            line.append(check)
+            line.append(_preview(item.get("preview"), 74, 46))
+            copy = _box(vertical=True, spacing=2)
+            copy.set_valign(Gtk.Align.CENTER)
+            copy.set_hexpand(True)
+            title = _label(str(item.get("title") or item_id), css="card-title")
+            title.set_ellipsize(Pango.EllipsizeMode.END)
+            copy.append(title)
+            copy.append(_label(
+                tr("{kind} · {wallpaper_id}",
+                   kind=tr("Cena" if item.get("type") == "scene" else "Vídeo"), wallpaper_id=item_id),
+                css="card-meta",
+            ))
+            line.append(copy)
+            row.set_child(line)
+            listing.append(row)
+            rows[item_id] = row
+
+        def filter_rows(_entry: Gtk.SearchEntry) -> None:
+            query = search.get_text().strip().casefold()
+            for item_id, row in rows.items():
+                item = self.catalog[item_id]
+                haystack = " ".join(
+                    [str(item.get("title", "")), item_id]
+                    + [str(tag) for tag in item.get("tags", [])]
+                ).casefold()
+                row.set_visible(query in haystack)
+
+        search.connect("search-changed", filter_rows)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        scroll.set_child(listing)
+        content.append(scroll)
+
+        def response(_dialog: Gtk.Dialog, code: int) -> None:
+            if code == Gtk.ResponseType.ACCEPT:
+                self._playlist_add_many(
+                    name, [item_id for item_id in available if checks[item_id].get_active()]
+                )
+            dialog.destroy()
+
+        dialog.connect("response", response)
+        dialog.present()
+        search.grab_focus()
+
+    def _playlist_add_many(self, name: str, identifiers: list[str]) -> None:
         playlists = {key: list(value) for key, value in (self.config.get("playlists") or {}).items()}
         if name not in playlists:
             return
-        if wallpaper_id in playlists[name]:
-            self._notice("Este wallpaper já está na playlist.")
+        added = 0
+        for item_id in identifiers:
+            if item_id in self.catalog and item_id not in playlists[name]:
+                playlists[name].append(item_id)
+                added += 1
+        if added:
+            self._set_settings(playlists=playlists)
+
+    def _playlist_add_id(self, name: str, wallpaper_id: str | None) -> None:
+        if wallpaper_id is None or wallpaper_id not in self.catalog:
             return
-        playlists[name].append(wallpaper_id)
-        self._set_settings(playlists=playlists)
+        if wallpaper_id in (self.config.get("playlists") or {}).get(name, []):
+            self._notice(tr("Este wallpaper já está na playlist."))
+            return
+        self._playlist_add_many(name, [wallpaper_id])
 
     def _playlist_remove(self, name: str, wallpaper_id: str) -> None:
         playlists = {key: list(value) for key, value in (self.config.get("playlists") or {}).items()}
@@ -947,58 +1349,130 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             playlists[name][index], playlists[name][other] = playlists[name][other], playlists[name][index]
             self._set_settings(playlists=playlists)
 
-    def _build_settings(self) -> Gtk.Widget:
+    def _build_languages(self) -> Gtk.Widget:
         scroll = Gtk.ScrolledWindow()
-        body = _box(vertical=True, spacing=12)
-        body.set_margin_top(16)
-        body.set_margin_start(8)
-        body.set_margin_end(8)
-        body.set_margin_bottom(20)
-        body.set_size_request(650, -1)
+        body = _box(vertical=True, spacing=20)
+        body.set_margin_top(24)
+        body.set_margin_start(22)
+        body.set_margin_end(22)
+        body.set_margin_bottom(24)
         body.set_halign(Gtk.Align.CENTER)
         body.set_hexpand(True)
         scroll.set_child(body)
 
-        body.append(_label("Reprodução", css="section-title"))
+        intro = _box(vertical=True, spacing=7)
+        intro.add_css_class("panel")
+        intro.append(_label(tr("IDIOMA DA INTERFACE"), css="page-kicker"))
+        intro.append(_label(tr("Escolha o idioma da interface."), css="section-title"))
+        intro.append(_label(tr("Aplica a tradução imediatamente."), css="subtle", wrap=True))
+        body.append(intro)
+
+        options = _box(vertical=True, spacing=8)
+        body.append(options)
+        selected = self.config.get("language", "auto")
+        detected_language = dict(language_options()).get(system_language(), "English")
+        for code, native_name in language_options():
+            button = Gtk.Button()
+            button.add_css_class("language-choice")
+            button.set_hexpand(True)
+            content = _box(spacing=14)
+            content.set_valign(Gtk.Align.CENTER)
+            name = (
+                f"{tr('Automático (sistema)')} · {detected_language}"
+                if code == "auto" else native_name
+            )
+            name_label = _label(name)
+            name_label.set_hexpand(True)
+            name_label.set_ellipsize(Pango.EllipsizeMode.END)
+            content.append(name_label)
+            code_label = _label(code.replace("_", "-").upper(), css="subtle")
+            content.append(code_label)
+            mark = Gtk.Image.new_from_icon_name("object-select-symbolic")
+            content.append(mark)
+            button.set_child(content)
+            button.set_tooltip_text(name)
+            button.connect("clicked", self._choose_language, code)
+            options.append(button)
+            self._language_buttons[code] = (button, mark)
+        self._refresh_language_choices(selected)
+        return scroll
+
+    def _choose_language(self, _button: Gtk.Button, code: str) -> None:
+        if code != self.config.get("language", "auto"):
+            self._set_settings(language=code)
+
+    def _refresh_language_choices(self, selected: str) -> None:
+        for code, (button, mark) in self._language_buttons.items():
+            active = code == selected
+            if active:
+                button.add_css_class("language-choice-active")
+            else:
+                button.remove_css_class("language-choice-active")
+            mark.set_visible(active)
+
+    def _build_settings(self) -> Gtk.Widget:
+        scroll = Gtk.ScrolledWindow()
+        body = _box(vertical=True, spacing=18)
+        body.set_margin_top(24)
+        body.set_margin_start(22)
+        body.set_margin_end(22)
+        body.set_margin_bottom(24)
+        body.set_halign(Gtk.Align.CENTER)
+        body.set_hexpand(True)
+        scroll.set_child(body)
+
+        def group(kicker: str, title: str, description: str) -> Gtk.Box:
+            section = _box(vertical=True, spacing=10)
+            section.add_css_class("panel")
+            section.append(_label(kicker, css="page-kicker"))
+            section.append(_label(title, css="section-title"))
+            section.append(_label(description, css="subtle", wrap=True))
+            body.append(section)
+            return section
+
+        playback = group(tr("01 · REPRODUÇÃO"), tr("Uma coleção sempre em movimento"),
+                         tr("Controle a troca automática e escolha de onde vêm os próximos wallpapers."))
         self.rotation_switch = self._switch_row(
-            body, "Troca automática", "Escolhe outro wallpaper após o intervalo.",
+            playback, tr("Troca automática"), tr("Escolhe outro wallpaper após o intervalo."),
             "rotation_enabled"
         )
         self.favorites_switch = self._switch_row(
-            body, "Usar só favoritos", "Limita a rotação aos wallpapers marcados.",
+            playback, tr("Usar só favoritos"), tr("Limita a rotação aos wallpapers marcados."),
             "only_favorites"
         )
         self.shuffle_switch = self._switch_row(
-            body, "Ordem aleatória", "Embaralha os wallpapers elegíveis.", "shuffle"
+            playback, tr("Ordem aleatória"), tr("Embaralha os wallpapers elegíveis."), "shuffle"
         )
         self.interval_spin = self._spin_row(
-            body, "Intervalo entre trocas", "Minutos", "interval_minutes", 1, 1440
+            playback, tr("Intervalo entre trocas"), tr("Minutos"), "interval_minutes", 1, 1440
         )
 
-        body.append(_label("Renderização", css="section-title"))
-        self.fps_spin = self._spin_row(body, "Limite de quadros", "FPS", "fps", 10, 240)
+        rendering = group(tr("02 · MOTOR"), tr("Imagem e desempenho"),
+                          tr("Ajustes que afetam a renderização dos wallpapers em cada tela."))
+        self.fps_spin = self._spin_row(rendering, tr("Limite de quadros"), "FPS", "fps", 10, 240)
         self.scaling_drop = Gtk.DropDown.new_from_strings(
-            ("Preencher", "Ajustar", "Esticar", "Padrão")
+            tuple(tr(label) for label in ("Preencher", "Ajustar", "Esticar", "Padrão"))
         )
         self.scaling_drop.connect("notify::selected", self._scaling_changed)
-        self._widget_row(body, "Escala", "Como a imagem ocupa a tela.", self.scaling_drop)
+        self._widget_row(rendering, tr("Escala"), tr("Como a imagem ocupa a tela."), self.scaling_drop)
         self.mute_switch = self._switch_row(
-            body, "Silenciar", "Executa o renderizador sem áudio.", "mute"
+            rendering, tr("Silenciar"), tr("Executa o renderizador sem áudio."), "mute"
         )
 
-        body.append(_label("Aplicativo", css="section-title"))
+        application = group(tr("03 · APLICATIVO"), tr("Sempre pronto quando você entrar"),
+                            tr("Configure o serviço e o caminho do motor instalado neste computador."))
         self.autostart_switch = Gtk.Switch()
         self.autostart_switch.connect("notify::active", self._autostart_changed)
         self._widget_row(
-            body,
-            "Iniciar com a sessão",
-            "Ativa o serviço do usuário quando a sessão gráfica é iniciada.",
+            application,
+            tr("Iniciar com a sessão"),
+            tr("Ativa o serviço do usuário quando a sessão gráfica é iniciada."),
             self.autostart_switch,
         )
         self.renderer_entry = Gtk.Entry()
-        self.renderer_entry.set_placeholder_text("Detectar linux-wallpaperengine no PATH")
+        self.renderer_entry.set_placeholder_text(tr("Detectar linux-wallpaperengine no PATH"))
         self.renderer_entry.set_hexpand(True)
-        renderer_save = Gtk.Button(label="Salvar")
+        renderer_save = Gtk.Button(label=tr("Salvar"))
         renderer_save.connect(
             "clicked",
             lambda *_: self._set_settings(
@@ -1009,18 +1483,15 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         renderer_controls.append(self.renderer_entry)
         renderer_controls.append(renderer_save)
         self._widget_row(
-            body, "Executável do motor", "Caminho personalizado, se necessário.", renderer_controls
+            application, tr("Executável do motor"), tr("Caminho personalizado, se necessário."), renderer_controls
         )
 
         info = _label(
-            "Os wallpapers de cena e vídeo são lidos da biblioteca Steam instalada. "
-            "A detecção de monitores usa KScreen quando disponível e XRandR em X11. "
-            "O motor continua renderizando para preservar a estabilidade do vídeo "
-            "e do áudio da sessão.",
+            tr("Descubra e assine novos itens no Wallpaper Engine original. A Steam faz o download; este app acompanha sua biblioteca local. O motor continua renderizando quando outra janela cobre o wallpaper, preservando a estabilidade do vídeo e do áudio da sessão."),
             css="subtle",
             wrap=True,
         )
-        info.set_margin_top(10)
+        info.add_css_class("panel")
         body.append(info)
         return scroll
 
@@ -1028,7 +1499,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         row = _box(spacing=20)
         row.add_css_class("settings-row")
         text = _box(vertical=True, spacing=3)
+        text.set_hexpand(True)
         heading = _label(title)
+        heading.set_wrap(True)
         heading.set_hexpand(True)
         text.append(heading)
         text.append(_label(note, css="subtle", wrap=True))
@@ -1066,101 +1539,105 @@ class WallpaperWindow(Gtk.ApplicationWindow):
     def _load_catalog(self) -> None:
         self._catalog_generation += 1
         generation = self._catalog_generation
-        self.library_count.set_text("Lendo biblioteca…")
+        self.library_count.set_text(tr("Lendo biblioteca…"))
 
         def done(value: dict | None, error: Exception | None) -> None:
             if generation != self._catalog_generation:
                 return
             if error:
-                self._notice(f"Erro ao ler wallpapers: {error}", error=True)
-                self.library_count.set_text("Falha na leitura")
+                self._notice(tr("Erro ao ler wallpapers: {error}", error=error), error=True)
+                self.library_count.set_text(tr("Falha na leitura"))
                 return
             self.catalog = value or {}
-            self.library_count.set_text(f"{len(self.catalog)} wallpapers")
+            self.library_count.set_text(tr("{count} wallpapers", count=len(self.catalog)))
+            self.sidebar_library_count.set_text(tr("{count} wallpapers instalados", count=len(self.catalog)))
+            selected_ids = self._selected_ids & self.catalog.keys()
+            self._selection_rebuilding = True
             _clear(self.gallery)
             self._cards.clear()
-            self._favorite_marks.clear()
+            self._card_badges.clear()
+            self._selected_ids = set(selected_ids)
             identifiers = sorted(
                 self.catalog, key=lambda item: str(self.catalog[item].get("title", item)).casefold()
             )
             self._append_card_batch(identifiers, 0, generation)
-            self._show_details(self.selected_id)
+            selected = self.selected_id if self.selected_id in self.catalog else None
+            self._show_details(selected)
             self._refresh_playlists()
+            self._refresh_hero()
 
         self._background(model.scan_catalog, done)
 
     def _append_card_batch(self, ids: list[str], offset: int, generation: int) -> bool:
         if generation != self._catalog_generation:
             return False
-        favorites = set(self.config.get("favorites", []))
         for wallpaper_id in ids[offset:offset + 12]:
             item = self.catalog[wallpaper_id]
-            card = Gtk.Button()
-            card.add_css_class("wallpaper-card")
-            card.connect("clicked", lambda _button, chosen=wallpaper_id: self._show_details(chosen))
-
-            content = _box(vertical=True, spacing=0)
-            content.set_size_request(244, 190)
-
-            preview_overlay = Gtk.Overlay()
-            preview_overlay.set_child(_preview(item.get("preview"), 244, 137))
-
-            kind = str(item.get("type", "")).upper()
-            badge = _label("CENA" if kind == "SCENE" else "VÍDEO", css="badge")
-            badge.set_halign(Gtk.Align.START)
-            badge.set_valign(Gtk.Align.START)
-            preview_overlay.add_overlay(badge)
-
-            heart = _label("♥" if wallpaper_id in favorites else "♡")
-            heart.set_halign(Gtk.Align.END)
-            heart.set_valign(Gtk.Align.START)
-            heart.set_margin_top(9)
-            heart.set_margin_end(11)
-            heart.set_tooltip_text("Favorito")
-            preview_overlay.add_overlay(heart)
-            self._favorite_marks[wallpaper_id] = heart
-
-            content.append(preview_overlay)
-
-            copy = _box(vertical=True, spacing=2)
-            copy.add_css_class("card-copy")
+            content = _box(vertical=True, spacing=5)
+            content.set_size_request(300, 205)
+            artwork = Gtk.Overlay()
+            artwork.add_css_class("artwork")
+            artwork.set_child(_preview(item.get("preview"), 300, 169))
+            type_badge = _badge(tr("CENA" if item.get("type") == "scene" else "VÍDEO"))
+            type_badge.add_css_class("type-badge")
+            type_badge.set_halign(Gtk.Align.START)
+            type_badge.set_valign(Gtk.Align.START)
+            type_badge.set_margin_top(9)
+            type_badge.set_margin_start(9)
+            artwork.add_overlay(type_badge)
+            badges = _box(spacing=4)
+            badges.set_halign(Gtk.Align.END)
+            badges.set_valign(Gtk.Align.START)
+            badges.set_margin_top(8)
+            badges.set_margin_end(8)
+            artwork.add_overlay(badges)
+            content.append(artwork)
             title = _label(str(item.get("title") or wallpaper_id), css="card-title")
             title.set_ellipsize(Pango.EllipsizeMode.END)
-            title.set_max_width_chars(29)
-            copy.append(title)
-
-            tags = [str(tag) for tag in item.get("tags", [])[:2]]
-            subtitle_text = " · ".join(tags) if tags else f"Workshop {wallpaper_id}"
-            subtitle = _label(subtitle_text, css="subtle")
+            title.set_max_width_chars(44)
+            title.set_margin_start(10)
+            title.set_margin_end(10)
+            content.append(title)
+            kind = tr("Cena" if item.get("type") == "scene" else "Vídeo")
+            tags = item.get("tags") or []
+            subtitle = _label(" · ".join(str(tag) for tag in tags[:2]) if tags else kind,
+                              css="card-meta")
             subtitle.set_ellipsize(Pango.EllipsizeMode.END)
-            copy.append(subtitle)
-            content.append(copy)
-
-            card.set_child(content)
+            subtitle.set_margin_start(10)
+            subtitle.set_margin_end(10)
+            subtitle.set_margin_bottom(8)
+            content.append(subtitle)
             child = Gtk.FlowBoxChild()
-            child.set_child(card)
+            child.wallpaper_id = wallpaper_id
+            child.add_css_class("wallpaper-card")
+            child.set_child(content)
             self.gallery.insert(child, -1)
             self._cards[wallpaper_id] = child
-
+            self._card_badges[wallpaper_id] = badges
+            if wallpaper_id in self._selected_ids:
+                self.gallery.select_child(child)
+        self._refresh_card_indicators()
         self._filter_cards()
-        if self.selected_id:
-            self._mark_selected_card()
         if offset + 12 < len(ids):
             GLib.idle_add(self._append_card_batch, ids, offset + 12, generation)
+        else:
+            self._selection_rebuilding = False
+            self._selection_changed(self.gallery)
         return False
 
-    def _mark_selected_card(self) -> None:
-        for wallpaper_id, child in self._cards.items():
-            button = child.get_child()
-            if button is None:
-                continue
-            button.remove_css_class("selected")
-            if wallpaper_id == self.selected_id:
-                button.add_css_class("selected")
+    def _refresh_card_indicators(self) -> None:
+        favorites = set(self.config.get("favorites", []))
+        current = self.status.get("current_id") if self.status.get("renderer_running") else None
+        for wallpaper_id, container in self._card_badges.items():
+            _clear(container)
+            if wallpaper_id == current:
+                container.append(_badge(tr("● AO VIVO"), "pill-accent"))
+            heart = _label("♥" if wallpaper_id in favorites else "♡", css="favorite-heart")
+            container.append(heart)
 
     def _filter_cards(self) -> None:
         query = self.search.get_text().strip().casefold()
-        mode = self.filter.get_selected()
+        mode = self.filter_index
         favorites = set(self.config.get("favorites", []))
         visible = 0
         for wallpaper_id, card in self._cards.items():
@@ -1178,114 +1655,155 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 matches &= wallpaper_id in favorites
             card.set_visible(matches)
             visible += bool(matches)
-        self.library_count.set_text(f"{visible} de {len(self.catalog)}")
+        self.library_count.set_text(tr("{visible} de {total}", visible=visible, total=len(self.catalog)))
+        if self.catalog and not visible and len(self._cards) < len(self.catalog):
+            return
+        if visible:
+            self.gallery_state.set_visible_child_name("gallery")
+        else:
+            if self.catalog:
+                self.empty_title.set_text(tr("Nada por aqui"))
+                self.empty_text.set_text(tr("Tente outro termo ou altere o filtro para ver mais wallpapers."))
+            else:
+                self.empty_title.set_text(tr("Sua biblioteca está vazia"))
+                self.empty_text.set_text(
+                    tr("Assine wallpapers no Wallpaper Engine original e aguarde o download pela Steam.")
+                )
+            self.gallery_state.set_visible_child_name("empty")
+
+    def _refresh_hero(self) -> None:
+        current = self.status.get("current_id")
+        playing = bool(self.status.get("renderer_running")) and current in self.catalog
+        hero_id = current if playing else (self.selected_id if self.selected_id in self.catalog else next(iter(self.catalog), None))
+        item = self.catalog.get(hero_id or "", {})
+        self.hero_kicker.set_text(tr("EM REPRODUÇÃO AGORA" if playing else "SUA BIBLIOTECA"))
+        self.hero_title.set_text(
+            str(item.get("title")) if playing else tr("Seus wallpapers, no seu ritmo.")
+        )
+        self.hero_note.set_text(
+            tr("Este wallpaper está ativo na sua área de trabalho.")
+            if playing else tr("Escolha um wallpaper ou monte uma playlist para começar.")
+        )
+        favorites = len(set(self.config.get("favorites", [])) & self.catalog.keys())
+        self.hero_stats.set_text(tr(
+            "{count} instalados   ·   {favorites} favoritos   ·   {screens} telas",
+            count=len(self.catalog), favorites=favorites,
+            screens=len(self.status.get("screens") or []),
+        ))
+        if hero_id != self._hero_id:
+            self._hero_id = hero_id
+            _clear(self.hero_art)
+            self.hero_art.append(_preview(item.get("preview"), 400, 225))
 
     def _show_details(self, wallpaper_id: str | None) -> None:
         self.selected_id = wallpaper_id if wallpaper_id in self.catalog else None
-        self._mark_selected_card()
+        self.detail_shell.set_visible(self.selected_id is not None)
+        self._last_pane_width = None
+        GLib.idle_add(self._update_responsive)
         _clear(self.detail)
-
         if self.selected_id is None:
-            icon = Gtk.Image.new_from_icon_name("preferences-desktop-wallpaper-symbolic")
-            icon.set_pixel_size(46)
-            icon.set_margin_top(42)
-            icon.set_halign(Gtk.Align.CENTER)
-            self.detail.append(icon)
             message = _label(
-                "Escolha um wallpaper para ver os detalhes, aplicar ou fixar em uma tela.",
+                tr("Escolha um wallpaper na biblioteca para ver os detalhes e aplicar na tela."),
                 css="empty-state",
                 wrap=True,
             )
-            message.set_justify(Gtk.Justification.CENTER)
-            message.set_xalign(0.5)
+            message.set_margin_top(40)
             self.detail.append(message)
             return
 
-        item = self.catalog[self.selected_id]
-        preview = _preview(item.get("preview"), 310, 176)
-        preview.add_css_class("detail-hero")
-        self.detail.append(preview)
-
-        kind = str(item.get("type", "")).upper()
-        meta = _box(spacing=7)
-        badge = _label("CENA" if kind == "SCENE" else "VÍDEO", css="badge")
-        meta.append(badge)
-        meta.append(_label(f"Workshop {self.selected_id}", css="subtle"))
-        self.detail.append(meta)
-
-        self.detail.append(
-            _label(str(item.get("title") or self.selected_id), css="detail-title", wrap=True)
-        )
-
+        selected = self.selected_id
+        item = self.catalog[selected]
+        self.detail.append(_label(tr("WALLPAPER SELECIONADO"), css="page-kicker"))
+        preview_width = 310 if self._compact_mode in (None, "wide") else 240
+        self.detail.append(_preview(item.get("preview"), preview_width, round(preview_width * 9 / 16)))
+        self.detail.append(_label(str(item.get("title") or selected), css="detail-title", wrap=True))
+        metadata = Gtk.FlowBox()
+        metadata.set_selection_mode(Gtk.SelectionMode.NONE)
+        metadata.set_min_children_per_line(1)
+        metadata.set_max_children_per_line(3)
+        metadata.set_column_spacing(7)
+        metadata.set_row_spacing(7)
+        metadata.append(_badge(tr("CENA" if item.get("type") == "scene" else "VÍDEO"), "pill-accent"))
+        metadata.append(_badge(tr("ID {wallpaper_id}", wallpaper_id=selected)))
+        if self.status.get("current_id") == selected and self.status.get("renderer_running"):
+            metadata.append(_badge(tr("● EM USO"), "pill-accent"))
+        self.detail.append(metadata)
         tags = item.get("tags", [])
         if tags:
-            self.detail.append(
-                _label("  ·  ".join(str(tag) for tag in tags[:8]), css="subtle", wrap=True)
-            )
+            self.detail.append(_label(" · ".join(str(tag) for tag in tags[:8]), css="subtle", wrap=True))
 
-        applied = Gtk.Button(label="▶  Aplicar em todas as telas")
-        applied.add_css_class("accent-button")
-        applied.connect("clicked", lambda *_: self._command("select", id=self.selected_id))
+        applied = _icon_button(tr("Aplicar agora"), "media-playback-start-symbolic")
+        applied.add_css_class("primary-action")
+        applied.connect("clicked", lambda *_: self._command("select", id=selected))
         self.detail.append(applied)
+        self.detail.append(_label(
+            tr("Aplica em todas as telas, interrompe a playlist ativa e libera fixações por monitor."),
+            css="caption", wrap=True,
+        ))
 
-        actions = _box(spacing=8)
-        favorite = self.selected_id in set(self.config.get("favorites", []))
-        favorite_button = Gtk.Button(label="♥ Favorito" if favorite else "♡ Favoritar")
-        favorite_button.set_hexpand(True)
-        favorite_button.connect("clicked", lambda *_: self._toggle_favorite(self.selected_id))
-        actions.append(favorite_button)
+        favorite = selected in set(self.config.get("favorites", []))
+        favorite_button = _icon_button(
+            tr("Remover dos favoritos" if favorite else "Adicionar aos favoritos"),
+            "starred-symbolic" if favorite else "non-starred-symbolic",
+        )
+        favorite_button.connect("clicked", lambda *_: self._toggle_favorite(selected))
+        self.detail.append(favorite_button)
 
-        if self.playlist_name in (self.config.get("playlists") or {}):
-            add_playlist = Gtk.Button(label="+ Playlist")
-            add_playlist.set_hexpand(True)
-            add_playlist.set_tooltip_text(f"Adicionar à playlist {self.playlist_name}")
+        self.detail.append(_label(tr("PLAYLISTS"), css="page-kicker"))
+        playlist_names = list((self.config.get("playlists") or {}).keys())
+        if playlist_names:
+            add_row = _box(vertical=True, spacing=7)
+            display_names = [name if len(name) <= 25 else name[:24] + "…" for name in playlist_names]
+            playlist_picker = Gtk.DropDown.new_from_strings(display_names)
+            if self.playlist_name in playlist_names:
+                playlist_picker.set_selected(playlist_names.index(self.playlist_name))
+            playlist_picker.set_hexpand(True)
+            add_row.append(playlist_picker)
+            add_playlist = Gtk.Button(label=tr("Adicionar"))
             add_playlist.connect(
-                "clicked", lambda *_: self._playlist_add_id(self.playlist_name, self.selected_id)
+                "clicked", lambda *_: self._playlist_add_id(
+                    playlist_names[playlist_picker.get_selected()], selected
+                )
             )
-            actions.append(add_playlist)
-        self.detail.append(actions)
+            add_row.append(add_playlist)
+            self.detail.append(add_row)
+        else:
+            create_playlist = _icon_button(tr("Criar primeira playlist"), "list-add-symbolic")
+            create_playlist.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Criar playlist"), None))
+            self.detail.append(create_playlist)
 
         screens = self.status.get("screens") or []
         assignments = self.config.get("screen_assignments", {})
         if screens:
-            title = _label("Monitores", css="section-title")
-            title.set_margin_top(8)
-            self.detail.append(title)
+            self.detail.append(_label(tr("TELAS"), css="page-kicker"))
             for screen in screens:
-                row = _box(spacing=8)
+                row = _box(spacing=6)
+                row.set_valign(Gtk.Align.CENTER)
                 row.add_css_class("settings-row")
-                icon = Gtk.Image.new_from_icon_name("video-display-symbolic")
-                row.append(icon)
-
-                text = _box(vertical=True, spacing=2)
                 name = _label(str(screen))
                 name.set_hexpand(True)
-                text.append(name)
+                row.append(name)
                 assigned = assignments.get(screen)
-                if assigned:
-                    other = self.catalog.get(assigned, {}).get("title", assigned)
-                    text.append(_label(f"Atual: {other}", css="subtle", wrap=True))
-                else:
-                    text.append(_label("Segue a rotação", css="subtle"))
-                text.set_hexpand(True)
-                row.append(text)
-
-                if assigned == self.selected_id:
-                    button = Gtk.Button(label="Liberar")
+                if assigned == selected:
+                    button = Gtk.Button(label=tr("Liberar"))
                     button.connect(
                         "clicked", lambda _button, target=screen: self._command(
                             "assign", screen=target, id=None
                         )
                     )
                 else:
-                    button = Gtk.Button(label="Fixar")
+                    button = Gtk.Button(label=tr("Fixar aqui"))
                     button.connect(
                         "clicked", lambda _button, target=screen: self._command(
-                            "assign", screen=target, id=self.selected_id
+                            "assign", screen=target, id=selected
                         )
                     )
                 row.append(button)
                 self.detail.append(row)
+                if assigned and assigned != selected:
+                    other = self.catalog.get(assigned, {}).get("title", assigned)
+                    self.detail.append(_label(tr("Fixado: {title}", title=other), css="caption", wrap=True))
+        self._refresh_hero()
 
     def _toggle_favorite(self, wallpaper_id: str | None) -> None:
         if wallpaper_id is None:
@@ -1296,16 +1814,25 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         else:
             favorites.add(wallpaper_id)
         self._set_settings(favorites=sorted(favorites))
-        self._show_details(wallpaper_id)
+        if self.selected_id == wallpaper_id:
+            self._show_details(wallpaper_id)
 
     def _set_settings(self, **settings: object) -> None:
+        previous_language = self.config.get("language", "auto")
         try:
             self.config = model.validate_config(dict(self.config, **settings))
         except ValueError as exc:
             self._notice(str(exc), error=True)
             self._apply_config()
             return
-        self._apply_config()
+        if self.config.get("language", "auto") != previous_language:
+            set_language(self.config["language"])
+            self._rebuild_localized_ui()
+        else:
+            self._apply_config()
+        if "favorites" in settings:
+            self._refresh_card_indicators()
+            self._refresh_hero()
         if {"playlists", "active_playlist"} & settings.keys():
             self._refresh_playlists()
             self._show_details(self.selected_id)
@@ -1328,13 +1855,45 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self._set_settings(**{key: value})
             return False
 
-        # Spin buttons can emit many value-changed events while held down.
-        # Coalesce them so FPS changes do not repeatedly restart the renderer.
         self._spin_timers[key] = GLib.timeout_add(300, apply)
 
     def _scaling_changed(self, widget: Gtk.DropDown, _property: object) -> None:
         if not self._updating_controls:
             self._set_settings(scaling=SCALINGS[widget.get_selected()])
+
+    def _rebuild_localized_ui(self) -> None:
+        page = self.tabs.get_visible_child_name() or "library"
+        query = self.search.get_text()
+        filter_index = self.filter_index
+        selected = self.selected_id
+        playlist = self.playlist_name
+        self._selected_ids.intersection_update(self.catalog)
+        self._catalog_generation += 1
+        self._compact_mode = None
+        self._last_height_band = None
+        self._last_pane_width = None
+        self._ui_language = self.config.get("language", "auto")
+        self._build()
+        self.selected_id = selected
+        self.playlist_name = playlist
+        self.search.set_text(query)
+        self._set_filter(filter_index)
+        self._apply_config()
+        self._refresh_playlists()
+        self._show_details(selected)
+        self._selection_rebuilding = True
+        identifiers = sorted(
+            self.catalog,
+            key=lambda item: str(self.catalog[item].get("title", item)).casefold(),
+        )
+        self._append_card_batch(identifiers, 0, self._catalog_generation)
+        self.tabs.set_visible_child_name(page)
+        if self.status:
+            self._apply_status(self.status, accept_config=False)
+        else:
+            self._refresh_status()
+        self._refresh_autostart()
+        GLib.idle_add(self._update_responsive)
 
     def _apply_config(self) -> None:
         self._updating_controls = True
@@ -1351,24 +1910,19 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.fps_spin.set_value(int(self.config.get("fps", 30)))
             scaling = self.config.get("scaling", "fill")
             self.scaling_drop.set_selected(SCALINGS.index(scaling) if scaling in SCALINGS else 0)
+            self._refresh_language_choices(self.config.get("language", "auto"))
             if not self.renderer_entry.has_focus():
                 renderer = str(self.config.get("renderer_path") or "auto")
                 self.renderer_entry.set_text("" if renderer == "auto" else renderer)
         finally:
             self._updating_controls = False
-
-        if hasattr(self, "theme_hue"):
-            self._theme_updating = True
-            try:
-                self.theme_hue.set_value(int(self.config.get("ui_hue", 24)))
-                self.theme_intensity.set_value(int(self.config.get("ui_intensity", 88)))
-            finally:
-                self._theme_updating = False
-            self._apply_theme_preview()
-
-        favorites = set(self.config.get("favorites", []))
-        for wallpaper_id, mark in getattr(self, "_favorite_marks", {}).items():
-            mark.set_text("♥" if wallpaper_id in favorites else "♡")
+        self._theme_updating = True
+        try:
+            self.theme_hue.set_value(int(self.config.get("ui_hue", 24)))
+            self.theme_intensity.set_value(int(self.config.get("ui_intensity", 88)))
+        finally:
+            self._theme_updating = False
+        self._apply_theme_preview()
         self._filter_cards()
 
     def _command(self, command: str, **kwargs: object) -> None:
@@ -1385,13 +1939,14 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         def done(value: dict | None, error: Exception | None) -> None:
             self._command_busy = False
             if error:
-                self._notice(f"Não foi possível executar {command}: {error}", error=True)
+                self._notice(tr("Não foi possível executar {command}: {error}",
+                                command=command, error=error), error=True)
                 self._command_queue.clear()
                 self._refresh_status()
                 return
             if value:
                 self._apply_status(value, accept_config=not self._command_queue)
-            self._notice("Alteração aplicada.")
+            self._notice(tr("Alteração aplicada."))
             self._drain_commands()
 
         self._background(lambda: ipc.request(command, **kwargs), done)
@@ -1409,12 +1964,17 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 return
             if error:
                 if self.service_available:
-                    self._notice(f"Serviço indisponível: {error}", error=True)
+                    self._notice(tr("Serviço indisponível: {error}", error=error), error=True)
                 self.service_available = False
-                self.status_label.set_text("Serviço parado ou ainda não instalado")
-                self.power_button.set_label("Iniciar")
+                self.status = {}
+                self.status_strip.add_css_class("error")
+                self.status_dot.set_text("○")
+                self.status_label.set_text(tr("Serviço parado ou ainda não instalado"))
+                self.power_button.set_label(tr("Iniciar"))
                 self.next_button.set_sensitive(False)
                 self.countdown_label.set_text("")
+                self._refresh_hero()
+                self._refresh_card_indicators()
                 return
             self.service_available = True
             self._apply_status(value or {})
@@ -1429,33 +1989,42 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         old_playlists = self.config.get("playlists")
         old_active_playlist = self.config.get("active_playlist")
         self.status = status
+        self.status_strip.remove_css_class("error")
         if accept_config:
             self.config = status.get("config") or self.config
+            self.config.update(self._ui_preferences)
+            if self.config.get("language", "auto") != self._ui_language:
+                set_language(self.config.get("language", "auto"))
+                self._rebuild_localized_ui()
+                return
         self._apply_config()
         running = bool(status.get("renderer_running"))
+        self.status_dot.set_text("●" if running else "○")
         current_id = status.get("current_id")
         if running and current_id:
             item = self.catalog.get(current_id, {})
             title = item.get("title") or current_id
-            self.status_label.set_text(f"Em execução: {title}")
+            self.status_label.set_text(tr("Em execução: {title}", title=title))
         elif status.get("error"):
-            self.status_label.set_text(f"Aguardando: {status['error']}")
+            self.status_label.set_text(tr("Aguardando: {error}", error=status["error"]))
         elif status.get("running"):
-            self.status_label.set_text("Iniciando wallpaper…")
+            self.status_label.set_text(tr("Iniciando wallpaper…"))
         else:
-            self.status_label.set_text("Serviço ativo · wallpaper parado")
-        self.power_button.set_label("Parar" if status.get("running") else "Iniciar")
+            self.status_label.set_text(tr("Serviço ativo · wallpaper parado"))
+        self.power_button.set_label(tr("Parar" if status.get("running") else "Iniciar"))
         screens = status.get("screens") or []
         assignments = self.config.get("screen_assignments", {})
         has_rotating_screen = any(screen not in assignments for screen in screens)
         self.next_button.set_sensitive(bool(status.get("running")) and has_rotating_screen)
         self._update_countdown()
+        self._refresh_hero()
         if (
             current_id != old_current
             or status.get("screens") != old_screens
             or self.config.get("screen_assignments") != old_assignments
             or self.config.get("favorites") != old_favorites
         ):
+            self._refresh_card_indicators()
             self._show_details(self.selected_id)
         if (
             self.config.get("playlists") != old_playlists
@@ -1471,7 +2040,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             return
         remaining = max(0, int(float(deadline) - time.time()))
         minutes, seconds = divmod(remaining, 60)
-        self.countdown_label.set_text(f"Próxima troca em {minutes:02d}:{seconds:02d}")
+        self.countdown_label.set_text(tr("Próxima troca em {minutes:02d}:{seconds:02d}",
+                                         minutes=minutes, seconds=seconds))
 
     def _toggle_power(self, _button: Gtk.Button) -> None:
         if not self.service_available:
@@ -1490,11 +2060,12 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 timeout=15,
             )
             if result.returncode:
-                raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "systemctl falhou")
+                raise RuntimeError(result.stderr.strip() or result.stdout.strip() or tr("systemctl falhou"))
 
         def done(_value: object, error: Exception | None) -> None:
             if error:
-                self._notice(f"Não foi possível {verb} o serviço: {error}", error=True)
+                self._notice(tr("Não foi possível {verb} o serviço: {error}",
+                                verb=verb, error=error), error=True)
             else:
                 self._refresh_status()
                 self._refresh_autostart()
@@ -1529,14 +2100,14 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             return True
         self._catalog_scan_pending = True
 
-        def done(ids: set[str] | None, error: Exception | None) -> None:
+        def done(catalog: dict | None, error: Exception | None) -> None:
             self._catalog_scan_pending = False
             if error:
                 return
-            if ids != set(self.catalog):
+            if catalog != self.catalog:
                 self._load_catalog()
 
-        self._background(lambda: set(model.scan_catalog()), done)
+        self._background(model.scan_catalog, done)
         return True
 
     def _reload(self) -> None:
@@ -1547,6 +2118,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
     def _tick(self) -> bool:
         if not self.get_visible():
             return False
+        if self.config.get("language") == "auto" and current_language() != system_language():
+            set_language("auto")
+            self._rebuild_localized_ui()
         self._update_countdown()
         self._refresh_status()
         return True
