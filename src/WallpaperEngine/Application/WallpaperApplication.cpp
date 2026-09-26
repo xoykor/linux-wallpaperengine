@@ -701,14 +701,10 @@ void WallpaperApplication::setupOutput () {
 }
 
 void WallpaperApplication::setupAudio () {
-    // ensure audioprocessing is required by any background, and we have it enabled
-    const bool audioProcessingRequired = std::ranges::any_of (
-	this->m_backgrounds, [] (const std::pair<const std::string, ProjectUniquePtr>& pair) -> bool {
-	    return pair.second->supportsAudioProcessing;
-	}
-    );
-
-    if (audioProcessingRequired && this->m_context.settings.audio.audioprocessing) {
+    // Playlists can switch from a non-reactive project to an audio-reactive
+    // one after startup. Select the recorder from the user setting rather than
+    // only from the projects that happened to be loaded initially.
+    if (this->m_context.settings.audio.audioprocessing) {
 	this->m_audioRecorder
 	    = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> ();
     } else {
