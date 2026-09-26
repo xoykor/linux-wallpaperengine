@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -287,28 +288,31 @@ def scan_catalog() -> dict[str, dict[str, Any]]:
 
 
 def detect_outputs() -> list[str]:
-    """Discover active KScreen outputs, with an XRandR fallback for X11."""
-    try:
-        result = subprocess.run(
-            ["kscreen-doctor", "-j"], capture_output=True, text=True,
-            timeout=5, check=True,
-        )
-        data = json.loads(result.stdout)
-        names = [
-            output["name"] for output in data.get("outputs", [])
-            if isinstance(output, dict) and output.get("enabled")
-            and output.get("connected") and isinstance(output.get("name"), str)
-        ]
-        if names:
-            return list(dict.fromkeys(names))
-    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
-        pass
+    """Discover active outputs using an available desktop/session backend."""
+    if shutil.which("kscreen-doctor"):
+        try:
+            result = subprocess.run(
+                ["kscreen-doctor", "-j"], capture_output=True, text=True,
+                timeout=5, check=True,
+            )
+            data = json.loads(result.stdout)
+            names = [
+                output["name"] for output in data.get("outputs", [])
+                if isinstance(output, dict) and output.get("enabled")
+                and output.get("connected") and isinstance(output.get("name"), str)
+            ]
+            if names:
+                return list(dict.fromkeys(names))
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+            pass
 
     session_type = os.environ.get("XDG_SESSION_TYPE")
     if session_type == "wayland" or (
         session_type != "x11"
         and (not os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     ):
+        return []
+    if not shutil.which("xrandr"):
         return []
     try:
         result = subprocess.run(
