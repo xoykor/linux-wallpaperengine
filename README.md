@@ -96,8 +96,7 @@ yay -S linux-wallpaperengine-git
 
 You **must own and install Wallpaper Engine** via Steam. This provides the required assets used by many backgrounds.
 
-Right now the application will automatically detect everything for you as long as the official Wallpaper Engine is installed
-in one of these locations:
+The application checks the standard Steam, Flatpak Steam and Snap Steam locations:
 
 ```
 ~/.steam/steam/steamapps/common
@@ -106,7 +105,11 @@ in one of these locations:
 ~/snap/steam/common/.local/share/Steam/steamapps/common
 ```
 
-> ✅ If Wallpaper Engine is installed in one of these paths, the assets will be detected automatically!
+It also reads each installation's `steamapps/libraryfolders.vdf`, so additional Steam
+libraries on other mounted disks are discovered automatically. A custom
+`XDG_DATA_HOME/Steam` location is supported as well.
+
+> ✅ Wallpaper Engine assets and Workshop content can live in a secondary Steam library; they no longer need to be under the default home-directory library.
 
 ---
 
