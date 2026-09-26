@@ -287,6 +287,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._pending_status = False
         self._catalog_generation = 0
         self._cards: dict[str, Gtk.FlowBoxChild] = {}
+        self._favorite_marks: dict[str, Gtk.Label] = {}
         self._toast_timer = 0
         self.playlist_name: str | None = None
         self._updating_playlists = False
@@ -534,10 +535,18 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
     def _commit_theme(self) -> bool:
         self._theme_save_timer = 0
-        self._set_settings(
-            ui_hue=int(round(self.theme_hue.get_value())),
-            ui_intensity=int(round(self.theme_intensity.get_value())),
-        )
+        settings = {
+            "ui_hue": int(round(self.theme_hue.get_value())),
+            "ui_intensity": int(round(self.theme_intensity.get_value())),
+        }
+        if self.service_available:
+            self._set_settings(**settings)
+        else:
+            try:
+                self.config = model.save_config(dict(self.config, **settings))
+                self._apply_config()
+            except (OSError, ValueError) as exc:
+                self._notice(f"Não foi possível salvar o tema: {exc}", error=True)
         return False
 
     @staticmethod
@@ -1069,6 +1078,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.library_count.set_text(f"{len(self.catalog)} wallpapers")
             _clear(self.gallery)
             self._cards.clear()
+            self._favorite_marks.clear()
             identifiers = sorted(
                 self.catalog, key=lambda item: str(self.catalog[item].get("title", item)).casefold()
             )
@@ -1100,14 +1110,14 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             badge.set_valign(Gtk.Align.START)
             preview_overlay.add_overlay(badge)
 
-            if wallpaper_id in favorites:
-                heart = _label("♥")
-                heart.set_halign(Gtk.Align.END)
-                heart.set_valign(Gtk.Align.START)
-                heart.set_margin_top(9)
-                heart.set_margin_end(11)
-                heart.set_tooltip_text("Favorito")
-                preview_overlay.add_overlay(heart)
+            heart = _label("♥" if wallpaper_id in favorites else "♡")
+            heart.set_halign(Gtk.Align.END)
+            heart.set_valign(Gtk.Align.START)
+            heart.set_margin_top(9)
+            heart.set_margin_end(11)
+            heart.set_tooltip_text("Favorito")
+            preview_overlay.add_overlay(heart)
+            self._favorite_marks[wallpaper_id] = heart
 
             content.append(preview_overlay)
 
@@ -1341,6 +1351,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             finally:
                 self._theme_updating = False
             self._apply_theme_preview()
+
+        favorites = set(self.config.get("favorites", []))
+        for wallpaper_id, mark in getattr(self, "_favorite_marks", {}).items():
+            mark.set_text("♥" if wallpaper_id in favorites else "♡")
         self._filter_cards()
 
     def _command(self, command: str, **kwargs: object) -> None:
