@@ -7,12 +7,14 @@
 #include <string>
 #include <vector>
 
+#include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 
 #include "ApplicationState.h"
 #include "WallpaperEngine/Data/JSON.h"
 
 #include "../Render/TextureProvider.h"
+#include "WallpaperEngine/Render/PostProcessSettings.h"
 #include "WallpaperEngine/Render/WallpaperState.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
@@ -100,6 +102,10 @@ public:
 	    std::map<std::string, std::map<std::string, std::string>> screenProperties;
 	    /** The scaling mode for different screens */
 	    std::map<std::string, WallpaperEngine::Render::WallpaperState::TextureUVsScaling> screenScalings;
+	    /** UV offsets for individual outputs and span groups */
+	    std::map<std::string, glm::vec2> screenOffsets;
+	    /** Post-process controls for individual outputs and span groups */
+	    std::map<std::string, WallpaperEngine::Render::PostProcessSettings> screenPostProcess;
 	    /** The clamping mode for different screens */
 	    std::map<std::string, TextureFlags> screenClamps;
 	    /** Playlists selected per screen */
@@ -130,6 +136,8 @@ public:
 	     * Example: "firefox" will match "org.mozilla.firefox".
 	     */
 	    std::vector<std::string> fullscreenPauseIgnoreAppIds;
+	    /** Post-process controls used when no output-specific override exists */
+	    WallpaperEngine::Render::PostProcessSettings postProcess;
 	    /** Render debugging switches for scene compatibility work */
 	    struct {
 		bool baseOnly;
@@ -145,6 +153,7 @@ public:
 		glm::ivec4 geometry;
 		TextureFlags clamp;
 		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode;
+		glm::vec2 uvOffset;
 	    } window;
 
 	    struct {
@@ -199,6 +208,8 @@ public:
             .properties = {},
             .screenProperties = {},
             .screenScalings = {},
+            .screenOffsets = {},
+            .screenPostProcess = {},
             .screenClamps = {},
             .screenPlaylists = {},
             .defaultPlaylist = std::nullopt,
@@ -210,6 +221,7 @@ public:
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
             .fullscreenPauseIgnoreAppIds = {},
+            .postProcess = {},
             .debug = {
                 .baseOnly = false,
                 .noSolidFinal = false,
@@ -222,6 +234,7 @@ public:
                 .geometry = {},
                 .clamp = TextureFlags_ClampUVs,
                 .scalingMode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs,
+                .uvOffset = { 0.0f, 0.0f },
             },
             .wayland = {
                 .layer = WAYLAND_LAYER_BOTTOM,
