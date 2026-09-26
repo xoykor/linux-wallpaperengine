@@ -124,12 +124,45 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
     ResolvedTransform resolved = localTransform (*chain[count - 1]);
     for (int i = count - 2; i >= 0; --i) {
 	ResolvedTransform local = localTransform (*chain[i]);
-	const glm::vec2 offset
-	    = rotateVec2 ({ local.origin.x * resolved.scale.x, local.origin.y * resolved.scale.y }, resolved.angle);
-	local.origin.x = resolved.origin.x + offset.x;
-	local.origin.y = resolved.origin.y + offset.y;
-	local.origin.z = resolved.origin.z + local.origin.z * resolved.scale.z;
-	resolved = { local.origin, local.scale * resolved.scale, local.angle + resolved.angle };
+	bool attached = false;
+
+	if (chain[i]->attachment.has_value () && chain[i]->parent.has_value ()) {
+	    const CObject* parentRender = this->getScene ().getObject (*chain[i]->parent);
+	    if (parentRender != nullptr && parentRender->is<CImage> ()) {
+		const auto* parentImage = parentRender->as<CImage> ();
+		const auto attachmentMatrix = parentImage->getPuppetAttachmentMatrix (*chain[i]->attachment);
+		if (attachmentMatrix.has_value ()) {
+		    const glm::vec3 attachmentOrigin = glm::vec3 ((*attachmentMatrix)[3]);
+		    const float attachmentAngle = std::atan2 ((*attachmentMatrix)[0][1], (*attachmentMatrix)[0][0]);
+
+		    const glm::vec2 attachmentOffset = rotateVec2 (
+			{ attachmentOrigin.x * resolved.scale.x, attachmentOrigin.y * resolved.scale.y }, resolved.angle
+		    );
+		    const glm::vec2 childOffset = rotateVec2 (
+			{ local.origin.x * resolved.scale.x, local.origin.y * resolved.scale.y },
+			resolved.angle + attachmentAngle
+		    );
+
+		    local.origin.x = resolved.origin.x + attachmentOffset.x + childOffset.x;
+		    local.origin.y = resolved.origin.y + attachmentOffset.y + childOffset.y;
+		    local.origin.z = resolved.origin.z
+			+ (attachmentOrigin.z + local.origin.z) * resolved.scale.z;
+		    local.scale *= resolved.scale;
+		    local.angle += resolved.angle + attachmentAngle;
+		    resolved = local;
+		    attached = true;
+		}
+	    }
+	}
+
+	if (!attached) {
+	    const glm::vec2 offset
+		= rotateVec2 ({ local.origin.x * resolved.scale.x, local.origin.y * resolved.scale.y }, resolved.angle);
+	    local.origin.x = resolved.origin.x + offset.x;
+	    local.origin.y = resolved.origin.y + offset.y;
+	    local.origin.z = resolved.origin.z + local.origin.z * resolved.scale.z;
+	    resolved = { local.origin, local.scale * resolved.scale, local.angle + resolved.angle };
+	}
     }
 
     return resolved;
@@ -1158,6 +1191,41 @@ bool CImage::isCompositionLayer () const {
 bool CImage::copiesCompositionBackground () const { return this->m_image.copyBackground; }
 
 std::shared_ptr<const CFBO> CImage::getCompositionFBO () const { return this->m_compositionFBO; }
+
+std::optional<glm::mat4> CImage::getPuppetAttachmentMatrix (const std::string& name) const {
+    if (!this->m_puppetModel.has_value () || this->m_puppetModel->bones.empty ()) {
+	return std::nullopt;
+    }
+
+    const auto* attachment = this->m_puppetModel->findAttachment (name);
+    if (attachment == nullptr) {
+	return std::nullopt;
+    }
+
+    std::vector<PuppetModel::ActiveLayer> active;
+    if (std::getenv ("LWE_PUPPET_BINDPOSE") == nullptr) {
+	active.reserve (this->m_puppetLayers.size ());
+	for (const auto& binding : this->m_puppetLayers) {
+	    if (!binding.layer->visible->value->getBool ()) {
+		continue;
+	    }
+	    active.push_back (
+		PuppetModel::ActiveLayer {
+		    .clip = binding.clip,
+		    .rate = binding.layer->rate->value->getFloat (),
+		    .blend = binding.layer->blend->value->getFloat (),
+		}
+	    );
+	}
+    }
+
+    std::vector<glm::mat4> world;
+    this->m_puppetModel->evaluateWorldPose (active, static_cast<double> (g_Time), world);
+    if (attachment->bone >= world.size ()) {
+	return std::nullopt;
+    }
+    return world[attachment->bone] * attachment->local;
+}
 
 glm::vec2 CImage::getSize () const {
     const glm::vec2 authored = this->getImage ().size;
