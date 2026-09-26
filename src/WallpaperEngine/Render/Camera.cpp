@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "Camera.h"
+#include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -16,9 +18,13 @@ Camera::Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera) :
 
 Camera::~Camera () = default;
 
-const glm::vec3& Camera::getCenter () const { return this->m_camera.configuration.center; }
+const glm::vec3& Camera::getCenter () const {
+    return this->m_hasScriptedView ? this->m_scriptedCenter : this->m_camera.configuration.center;
+}
 
-const glm::vec3& Camera::getEye () const { return this->m_camera.configuration.eye; }
+const glm::vec3& Camera::getEye () const {
+    return this->m_hasScriptedView ? this->m_scriptedEye : this->m_camera.configuration.eye;
+}
 
 const glm::vec3& Camera::getUp () const { return this->m_camera.configuration.up; }
 
@@ -75,4 +81,20 @@ void Camera::setPerspectiveProjection (const float width, const float height) {
     );
     this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
     this->m_isOrthogonal = false;
+}
+
+void Camera::setScriptedView (const glm::vec3& eye, const glm::vec3& center) {
+    const glm::vec3 delta = center - eye;
+    if (!std::isfinite (eye.x + eye.y + eye.z + center.x + center.y + center.z)
+	|| glm::dot (delta, delta) < 1e-12f) {
+	return;
+    }
+
+    this->m_hasScriptedView = true;
+    this->m_scriptedEye = eye;
+    this->m_scriptedCenter = center;
+
+    if (!this->m_isOrthogonal) {
+	this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
+    }
 }
