@@ -744,10 +744,17 @@ void WallpaperApplication::setupOutput () {
 }
 
 void WallpaperApplication::setupAudio () {
-    // Playlists can switch from a non-reactive project to an audio-reactive
-    // one after startup. Select the recorder from the user setting rather than
-    // only from the projects that happened to be loaded initially.
-    if (this->m_context.settings.audio.audioprocessing) {
+    // A native playlist can switch from a non-reactive project to an
+    // audio-reactive one after startup. Keep the Pulse recorder available for
+    // playlist sessions, while static non-reactive wallpapers retain the
+    // lightweight recorder used upstream.
+    const bool audioProcessingMayBeRequired = !this->m_activePlaylists.empty () || std::ranges::any_of (
+	this->m_backgrounds, [] (const std::pair<const std::string, ProjectUniquePtr>& pair) -> bool {
+	    return pair.second->supportsAudioProcessing;
+	}
+    );
+
+    if (audioProcessingMayBeRequired && this->m_context.settings.audio.audioprocessing) {
 	this->m_audioRecorder
 	    = std::make_unique<WallpaperEngine::Audio::Drivers::Recorders::PulseAudioPlaybackRecorder> ();
     } else {
