@@ -61,6 +61,7 @@ public:
     [[nodiscard]] bool isCompositionLayer () const;
     [[nodiscard]] bool copiesCompositionBackground () const;
     [[nodiscard]] std::shared_ptr<const CFBO> getCompositionFBO () const;
+    [[nodiscard]] std::optional<glm::mat4> getPuppetAttachmentMatrix (const std::string& name) const;
 
 protected:
     void setupPasses ();
