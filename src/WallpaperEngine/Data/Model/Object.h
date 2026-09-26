@@ -625,4 +625,41 @@ public:
 	Object (std::move (data)), TextData (std::move (textData)) { };
     ~Text () override = default;
 };
+
+struct AnimationKey {
+    float frame;
+    float value;
+    float frontX;
+    float backX;
+};
+
+struct AnimationChannel {
+    std::vector<AnimationKey> keys;
+};
+
+struct PropertyAnimation {
+    AnimationChannel channels[3];
+    float maxFrame = 0.0f;
+    static constexpr float FPS = 30.0f;
+};
+
+struct ModelObjectData {
+    UserSettingUniquePtr scale;
+    UserSettingUniquePtr angles;
+    UserSettingUniquePtr visible;
+    UserSettingUniquePtr alpha;
+    UserSettingUniquePtr color;
+    std::string modelFile;
+    MaterialUniquePtr material;
+    std::vector<MaterialUniquePtr> extraMaterials;
+    bool perspective = false;
+    std::unique_ptr<PropertyAnimation> anglesAnimation;
+};
+
+class ModelObject : public Object, public ModelObjectData {
+public:
+    explicit ModelObject (ObjectData data, ModelObjectData modelData) noexcept :
+	Object (std::move (data)), ModelObjectData (std::move (modelData)) { };
+    ~ModelObject () override = default;
+};
 } // namespace WallpaperEngine::Data::Model
