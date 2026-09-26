@@ -183,36 +183,51 @@ ObjectParser::parseModelObject (const JSON& it, const Project& project, ObjectDa
 	sLog.exception ("Truncated MDLV header in model ", modelFile);
     }
 
-    size_t offset = magicEnd + 1;
-    uint32_t headerTag = 0;
-    uint32_t materialCount = 0;
+    size_t offset = magicEnd + 1 + 2 * sizeof (uint32_t);
     uint32_t submeshCount = 0;
-    std::memcpy (&headerTag, data.data () + offset, sizeof (headerTag));
-    offset += sizeof (headerTag);
-    std::memcpy (&materialCount, data.data () + offset, sizeof (materialCount));
-    offset += sizeof (materialCount);
     std::memcpy (&submeshCount, data.data () + offset, sizeof (submeshCount));
     offset += sizeof (submeshCount);
 
-    if (submeshCount == 0 || submeshCount > 16 || materialCount == 0 || materialCount > 16) {
-	sLog.exception (
-	    "Unexpected MDLV counts materials=", materialCount, " submeshes=", submeshCount, " in model ", modelFile
-	);
+    if (submeshCount == 0 || submeshCount > 16) {
+	sLog.exception ("Unexpected submesh count ", submeshCount, " in model ", modelFile);
     }
 
     std::vector<std::string> materialPaths;
-    materialPaths.reserve (materialCount);
-    for (uint32_t i = 0; i < materialCount; i++) {
+    materialPaths.reserve (submeshCount);
+
+    for (uint32_t i = 0; i < submeshCount; i++) {
+	if (offset >= data.size ()) {
+	    sLog.exception ("Truncated submesh record in model ", modelFile);
+	}
 	const size_t nameEnd = data.find ('\0', offset);
 	if (nameEnd == std::string::npos) {
 	    sLog.exception ("Unterminated material name in model ", modelFile);
 	}
 	materialPaths.push_back (data.substr (offset, nameEnd - offset));
 	offset = nameEnd + 1;
-    }
 
-    if (materialPaths.empty ()) {
-	sLog.exception ("Model has no material paths: ", modelFile);
+	// [u32 flags/zero][bounds 6f][u32 vertex-layout tag]
+	constexpr size_t fixedHeader = sizeof (uint32_t) + 6 * sizeof (float) + sizeof (uint32_t);
+	if (offset + fixedHeader + sizeof (uint32_t) > data.size ()) {
+	    sLog.exception ("Truncated submesh header in model ", modelFile);
+	}
+	offset += fixedHeader;
+
+	uint32_t vertexBytes = 0;
+	std::memcpy (&vertexBytes, data.data () + offset, sizeof (vertexBytes));
+	offset += sizeof (vertexBytes);
+	if (vertexBytes == 0 || offset + vertexBytes + sizeof (uint32_t) > data.size ()) {
+	    sLog.exception ("Truncated submesh vertices in model ", modelFile);
+	}
+	offset += vertexBytes;
+
+	uint32_t indexBytes = 0;
+	std::memcpy (&indexBytes, data.data () + offset, sizeof (indexBytes));
+	offset += sizeof (indexBytes);
+	if (indexBytes == 0 || offset + indexBytes > data.size ()) {
+	    sLog.exception ("Truncated submesh indices in model ", modelFile);
+	}
+	offset += indexBytes;
     }
 
     const auto& properties = project.properties;
