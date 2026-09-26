@@ -445,13 +445,21 @@ void WallpaperApplication::advancePlaylist (
 	const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
 	    ? clampIt->second
 	    : this->m_context.settings.render.window.clamp;
+	const auto offsetIt = this->m_context.settings.general.screenOffsets.find (screen);
+	const auto postIt = this->m_context.settings.general.screenPostProcess.find (screen);
+	const auto offset = offsetIt != this->m_context.settings.general.screenOffsets.end ()
+	    ? offsetIt->second
+	    : this->m_context.settings.render.window.uvOffset;
+	const auto postProcess = postIt != this->m_context.settings.general.screenPostProcess.end ()
+	    ? postIt->second
+	    : this->m_context.settings.render.postProcess;
 
 	if (this->m_renderContext) {
 	    this->m_renderContext->setWallpaper (
 		screen,
 		WallpaperEngine::Render::CWallpaper::fromWallpaper (
 		    *this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
-		    this->m_browserContext.get (), scaling, clamp
+		    this->m_browserContext.get (), scaling, clamp, offset, postProcess
 		)
 	    );
 	}
@@ -744,11 +752,20 @@ void WallpaperApplication::prepareOutputs () {
 	const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
 	    ? clampIt->second
 	    : this->m_context.settings.render.window.clamp;
+	const auto offsetIt = this->m_context.settings.general.screenOffsets.find (background);
+	const auto postIt = this->m_context.settings.general.screenPostProcess.find (background);
+	const auto offset = offsetIt != this->m_context.settings.general.screenOffsets.end ()
+	    ? offsetIt->second
+	    : this->m_context.settings.render.window.uvOffset;
+	const auto postProcess = postIt != this->m_context.settings.general.screenPostProcess.end ()
+	    ? postIt->second
+	    : this->m_context.settings.render.postProcess;
 
 	m_renderContext->setWallpaper (
 	    background,
 	    WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		*info->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), scaling, clamp
+		*info->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), scaling, clamp, offset,
+		postProcess
 	    )
 	);
     }
@@ -805,9 +822,17 @@ void WallpaperApplication::prepareOutputs () {
 	spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
 
 	// Create one shared wallpaper with the span group's scaling mode
+	const auto offsetIt = this->m_context.settings.general.screenOffsets.find (groupKey);
+	const auto postIt = this->m_context.settings.general.screenPostProcess.find (groupKey);
+	const auto offset = offsetIt != this->m_context.settings.general.screenOffsets.end ()
+	    ? offsetIt->second
+	    : this->m_context.settings.render.window.uvOffset;
+	const auto postProcess = postIt != this->m_context.settings.general.screenPostProcess.end ()
+	    ? postIt->second
+	    : this->m_context.settings.render.postProcess;
 	auto sharedWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
 	    *bgIt->second->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), spanGroup.scaling,
-	    spanGroup.clamp
+	    spanGroup.clamp, offset, postProcess
 	);
 
 	// Convert to shared_ptr so it can be registered for multiple viewports
