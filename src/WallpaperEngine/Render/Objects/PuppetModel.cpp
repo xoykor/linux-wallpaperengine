@@ -412,6 +412,43 @@ bool parseAnimations (const std::vector<char>& data, PuppetModel& model) {
     return true;
 }
 
+bool parseAttachments (const std::vector<char>& data, PuppetModel& model) {
+    const size_t mdat = findMarker (data, "MDAT");
+    if (mdat >= data.size ()) {
+	return false;
+    }
+
+    const auto* headerEnd = static_cast<const char*> (
+	std::memchr (data.data () + mdat, 0, data.size () - mdat)
+    );
+    if (headerEnd == nullptr) {
+	return false;
+    }
+
+    Cursor cur { data.data (), data.size (), static_cast<size_t> (headerEnd - data.data ()) + 1 };
+    const uint32_t blockEnd = cur.read<uint32_t> ();
+    const uint16_t count = cur.read<uint16_t> ();
+    if (!cur.ok || count > 256 || blockEnd > data.size () || blockEnd <= cur.off) {
+	return false;
+    }
+
+    std::vector<PuppetModel::Attachment> parsed;
+    parsed.reserve (count);
+    for (uint16_t i = 0; i < count; i++) {
+	const uint16_t bone = cur.read<uint16_t> ();
+	const std::string name = cur.readCString ();
+	const glm::mat4 local = readFileMatrix (cur);
+	if (!cur.ok || bone >= model.bones.size () || name.empty () || cur.off > blockEnd) {
+	    return false;
+	}
+	parsed.push_back (PuppetModel::Attachment { .bone = bone, .name = name, .local = local });
+    }
+
+    model.attachments = std::move (parsed);
+    sLog.out ("Puppet attachments parsed count=", model.attachments.size ());
+    return !model.attachments.empty ();
+}
+
 /** Wrap into [0, period) handling negative phases (rate can be user-driven negative) */
 double wrapPhase (double phase, double period) {
     double cycle = std::fmod (phase, period);
@@ -462,11 +499,20 @@ const PuppetModel::Clip* PuppetModel::findClip (uint32_t id) const {
     return nullptr;
 }
 
-void PuppetModel::evaluateSkinning (
-    const std::vector<ActiveLayer>& layers, double time, std::vector<glm::mat4>& out
+const PuppetModel::Attachment* PuppetModel::findAttachment (const std::string& name) const {
+    for (const auto& attachment : attachments) {
+	if (attachment.name == name) {
+	    return &attachment;
+	}
+    }
+    return nullptr;
+}
+
+void PuppetModel::evaluateWorldPose (
+    const std::vector<ActiveLayer>& layers, double time, std::vector<glm::mat4>& outWorld
 ) const {
     const size_t boneCount = bones.size ();
-    out.resize (boneCount);
+    outWorld.resize (boneCount);
 
     std::vector<Key> accumulated (boneCount);
     std::vector<bool> hasRest (boneCount, false);
@@ -495,7 +541,6 @@ void PuppetModel::evaluateSkinning (
 	}
     }
 
-    std::vector<glm::mat4> world (boneCount);
     for (size_t b = 0; b < boneCount; b++) {
 	glm::mat4 local;
 	if (hasRest[b]) {
@@ -508,7 +553,17 @@ void PuppetModel::evaluateSkinning (
 	} else {
 	    local = bones[b].bindLocal;
 	}
-	world[b] = bones[b].parent >= 0 ? world[bones[b].parent] * local : local;
+	outWorld[b] = bones[b].parent >= 0 ? outWorld[bones[b].parent] * local : local;
+    }
+}
+
+void PuppetModel::evaluateSkinning (
+    const std::vector<ActiveLayer>& layers, double time, std::vector<glm::mat4>& out
+) const {
+    std::vector<glm::mat4> world;
+    this->evaluateWorldPose (layers, time, world);
+    out.resize (bones.size ());
+    for (size_t b = 0; b < bones.size (); b++) {
 	out[b] = world[b] * bones[b].bindWorldInverse;
     }
 }
@@ -769,6 +824,7 @@ std::optional<PuppetModel> PuppetModel::parse (const std::vector<char>& data, st
 
     // Skeleton + animations degrade gracefully: a puppet without them renders bind pose
     if (parseSkeleton (data, model)) {
+	parseAttachments (data, model);
 	if (!parseAnimations (data, model)) {
 	    model.clips.clear ();
 	}
