@@ -11,6 +11,8 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
+#include <cstring>
 #include <glm/gtc/constants.hpp>
 #include <sstream>
 
@@ -22,6 +24,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto soundIt = it.find ("sound");
     const auto particleIt = it.find ("particle");
     const auto textIt = it.find ("text");
+    const auto modelIt = it.find ("model");
     const auto lightIt = it.find ("light");
     // use shape to refer to VolumeLight
     const auto shapeIt = it.find ("shape");
@@ -35,6 +38,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .name = it.require<std::string> ("name", "Object must have a name"),
 	    .dependencies = parseDependencies (it),
 	    .parent = it.optional<int> ("parent"),
+	    .attachment = it.optional<std::string> ("attachment"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
@@ -58,6 +62,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .name = name,
 	    .dependencies = parseDependencies (it),
 	    .parent = it.optional<int> ("parent"),
+	    .attachment = it.optional<std::string> ("attachment"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
@@ -73,6 +78,24 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	return parseParticle (it, project, std::move (basedata));
     } else if (textIt != it.end ()) {
 	return parseText (it, project, std::move (basedata));
+    } else if (modelIt != it.end () && modelIt->is_string ()) {
+	try {
+	    return parseModelObject (it, project, std::move (basedata), modelIt->get<std::string> ());
+	} catch (const std::exception& e) {
+	    sLog.error ("Cannot parse model object: ", e.what ());
+	    const auto idIt = it.find ("id");
+	    basedata = ObjectData {
+		.id = (idIt != it.end () && idIt->is_number ()) ? idIt->get<int> () : -1,
+		.name = "model-parse-failed",
+		.dependencies = parseDependencies (it),
+		.parent = it.optional<int> ("parent"),
+		.attachment = it.optional<std::string> ("attachment"),
+		.origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
+		.groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
+		.groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
+		.groupVisible = it.user ("visible", project.properties, true),
+	    };
+	}
     } else if (lightIt != it.end ()) {
 	sLog.error ("Light objects are not supported yet");
     } else if (shapeIt != it.end ()) {
@@ -99,7 +122,14 @@ std::vector<int> ObjectParser::parseDependencies (const JSON& it) {
     std::vector<int> result = {};
 
     for (const auto& cur : *dependenciesIt) {
-	result.push_back (cur);
+	if (cur.is_number ()) {
+	    result.push_back (cur.get<int> ());
+	} else if (cur.is_object ()) {
+	    const auto id = cur.find ("id");
+	    if (id != cur.end () && id->is_number ()) {
+		result.push_back (id->get<int> ());
+	    }
+	}
     }
 
     return result;
@@ -147,6 +177,114 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
     );
 }
 
+ModelObjectUniquePtr
+ObjectParser::parseModelObject (const JSON& it, const Project& project, ObjectData base, const std::string& modelFile) {
+    const auto data = project.assetLocator->readString (modelFile);
+    if (data.size () < 32 || data.compare (0, 4, "MDLV") != 0) {
+	sLog.exception ("Not an MDLV model file: ", modelFile);
+    }
+
+    const size_t magicEnd = data.find ('\0');
+    if (magicEnd == std::string::npos || magicEnd + 3 * sizeof (uint32_t) > data.size ()) {
+	sLog.exception ("Truncated MDLV header in model ", modelFile);
+    }
+
+    size_t offset = magicEnd + 1 + 2 * sizeof (uint32_t);
+    uint32_t submeshCount = 0;
+    std::memcpy (&submeshCount, data.data () + offset, sizeof (submeshCount));
+    offset += sizeof (submeshCount);
+
+    if (submeshCount == 0 || submeshCount > 16) {
+	sLog.exception ("Unexpected submesh count ", submeshCount, " in model ", modelFile);
+    }
+
+    std::vector<std::string> materialPaths;
+    materialPaths.reserve (submeshCount);
+
+    for (uint32_t i = 0; i < submeshCount; i++) {
+	if (offset >= data.size ()) {
+	    sLog.exception ("Truncated submesh record in model ", modelFile);
+	}
+	const size_t nameEnd = data.find ('\0', offset);
+	if (nameEnd == std::string::npos) {
+	    sLog.exception ("Unterminated material name in model ", modelFile);
+	}
+	materialPaths.push_back (data.substr (offset, nameEnd - offset));
+	offset = nameEnd + 1;
+
+	// [u32 flags/zero][bounds 6f][u32 vertex-layout tag]
+	constexpr size_t fixedHeader = sizeof (uint32_t) + 6 * sizeof (float) + sizeof (uint32_t);
+	if (offset + fixedHeader + sizeof (uint32_t) > data.size ()) {
+	    sLog.exception ("Truncated submesh header in model ", modelFile);
+	}
+	offset += fixedHeader;
+
+	uint32_t vertexBytes = 0;
+	std::memcpy (&vertexBytes, data.data () + offset, sizeof (vertexBytes));
+	offset += sizeof (vertexBytes);
+	if (vertexBytes == 0 || offset + vertexBytes + sizeof (uint32_t) > data.size ()) {
+	    sLog.exception ("Truncated submesh vertices in model ", modelFile);
+	}
+	offset += vertexBytes;
+
+	uint32_t indexBytes = 0;
+	std::memcpy (&indexBytes, data.data () + offset, sizeof (indexBytes));
+	offset += sizeof (indexBytes);
+	if (indexBytes == 0 || offset + indexBytes > data.size ()) {
+	    sLog.exception ("Truncated submesh indices in model ", modelFile);
+	}
+	offset += indexBytes;
+    }
+
+    const auto& properties = project.properties;
+    std::unique_ptr<PropertyAnimation> anglesAnimation;
+
+    if (const auto anglesIt = it.find ("angles"); anglesIt != it.end () && anglesIt->is_object ()) {
+	if (const auto animIt = anglesIt->find ("animation"); animIt != anglesIt->end () && animIt->is_object ()) {
+	    anglesAnimation = std::make_unique<PropertyAnimation> ();
+	    for (int channel = 0; channel < 3; channel++) {
+		const std::string name = "c" + std::to_string (channel);
+		const auto chanIt = animIt->find (name);
+		if (chanIt == animIt->end () || !chanIt->is_array ()) {
+		    continue;
+		}
+		for (const auto& key : *chanIt) {
+		    AnimationKey k {};
+		    k.frame = key.value ("frame", 0.0f);
+		    k.value = key.value ("value", 0.0f);
+		    k.frontX = key.contains ("front") && key["front"].is_object ()
+			? key["front"].value ("x", 1.0f) : 1.0f;
+		    k.backX = key.contains ("back") && key["back"].is_object ()
+			? key["back"].value ("x", -1.0f) : -1.0f;
+		    anglesAnimation->channels[channel].keys.push_back (k);
+		    anglesAnimation->maxFrame = std::max (anglesAnimation->maxFrame, k.frame);
+		}
+	    }
+	}
+    }
+
+    std::vector<MaterialUniquePtr> extraMaterials;
+    for (size_t i = 1; i < materialPaths.size (); i++) {
+	extraMaterials.push_back (MaterialParser::load (project, materialPaths[i]));
+    }
+
+    return std::make_unique<ModelObject> (
+	std::move (base),
+	ModelObjectData {
+	    .scale = it.user ("scale", properties, glm::vec3 (1.0f)),
+	    .angles = it.user ("angles", properties, glm::vec3 (0.0f)),
+	    .visible = it.user ("visible", properties, true),
+	    .alpha = it.user ("alpha", properties, 1.0f),
+	    .color = it.color ("color", properties, Builders::ColorBuilder::White),
+	    .modelFile = modelFile,
+	    .material = MaterialParser::load (project, materialPaths.front ()),
+	    .extraMaterials = std::move (extraMaterials),
+	    .perspective = it.optional ("perspective", false),
+	    .anglesAnimation = std::move (anglesAnimation),
+	}
+    );
+}
+
 ImageUniquePtr
 ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData base, const std::string& image) {
     const auto& properties = project.properties;
@@ -166,6 +304,7 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
 	    .brightness = it.user ("brightness", properties, 1.0f),
+	    .copyBackground = it.optional ("copybackground", false),
 	    .model = ModelParser::load (project, image),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	    .animationLayers = animationLayers.has_value () ? parseAnimationLayers (*animationLayers, project)

@@ -62,6 +62,7 @@ public:
     void addUniform (const std::string& name, const float* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec3* value);
     void addUniform (const std::string& name, const glm::vec4* value);
+    void addUniform (const std::string& name, const glm::mat3* value);
     void addUniform (const std::string& name, const glm::mat4* value);
 
 private:
@@ -142,7 +143,6 @@ private:
     void addUniform (const std::string& name, const int* value, int count = 1);
     void addUniform (const std::string& name, const double* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec2* value);
-    void addUniform (const std::string& name, const glm::mat3* value);
     void addUniform (const std::string& name, const int** value);
     void addUniform (const std::string& name, const double** value);
     void addUniform (const std::string& name, const float** value);
@@ -198,6 +198,7 @@ private:
     Render::Shaders::Shader* m_shader = nullptr;
 
     std::shared_ptr<const CFBO> m_drawTo = nullptr;
+    std::shared_ptr<const CFBO> m_resolvedDrawTo = nullptr;
     std::shared_ptr<const TextureProvider> m_input = nullptr;
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};

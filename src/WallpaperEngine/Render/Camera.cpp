@@ -1,7 +1,10 @@
+#include <algorithm>
+#include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "Camera.h"
+#include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -15,13 +18,19 @@ Camera::Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera) :
 
 Camera::~Camera () = default;
 
-const glm::vec3& Camera::getCenter () const { return this->m_camera.configuration.center; }
+const glm::vec3& Camera::getCenter () const {
+    return this->m_hasScriptedView ? this->m_scriptedCenter : this->m_camera.configuration.center;
+}
 
-const glm::vec3& Camera::getEye () const { return this->m_camera.configuration.eye; }
+const glm::vec3& Camera::getEye () const {
+    return this->m_hasScriptedView ? this->m_scriptedEye : this->m_camera.configuration.eye;
+}
 
 const glm::vec3& Camera::getUp () const { return this->m_camera.configuration.up; }
 
 const glm::mat4& Camera::getProjection () const { return this->m_projection; }
+
+const glm::mat4& Camera::getScreenProjection () const { return this->m_screenProjection; }
 
 const glm::mat4& Camera::getLookAt () const { return this->m_lookat; }
 
@@ -34,6 +43,8 @@ float Camera::getWidth () const { return this->m_width; }
 float Camera::getHeight () const { return this->m_height; }
 
 float Camera::getFov () const { return this->m_camera.projection.fov->value->getFloat (); }
+
+float Camera::getOverrideFov () const { return this->m_camera.projection.overrideFov->value->getFloat (); }
 
 float Camera::getNearZ () const { return this->m_camera.projection.nearz->value->getFloat (); }
 
@@ -48,5 +59,42 @@ void Camera::setOrthogonalProjection (const float width, const float height) {
 
     this->m_projection = glm::ortho<float> (-width / 2.0, width / 2.0, -height / 2.0, height / 2.0, nearz, farz);
     this->m_projection = glm::translate (this->m_projection, this->getEye ());
+    this->m_screenProjection = this->m_projection;
     this->m_isOrthogonal = true;
+}
+
+void Camera::setPerspectiveProjection (const float width, const float height) {
+    const float safeWidth = std::max (width, 1.0f);
+    const float safeHeight = std::max (height, 1.0f);
+    this->m_width = safeWidth;
+    this->m_height = safeHeight;
+
+    const float nearz = std::max (this->getNearZ (), 0.01f);
+    const float farz = std::max (this->getFarZ (), nearz + 1.0f);
+
+    this->m_projection = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
+        * glm::perspective (glm::radians (this->getFov ()), safeWidth / safeHeight, nearz, farz);
+
+    const float halfRange = std::max (farz, 1000.0f);
+    this->m_screenProjection = glm::ortho<float> (
+        -safeWidth / 2.0f, safeWidth / 2.0f, -safeHeight / 2.0f, safeHeight / 2.0f, -halfRange, halfRange
+    );
+    this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
+    this->m_isOrthogonal = false;
+}
+
+void Camera::setScriptedView (const glm::vec3& eye, const glm::vec3& center) {
+    const glm::vec3 delta = center - eye;
+    if (!std::isfinite (eye.x + eye.y + eye.z + center.x + center.y + center.z)
+	|| glm::dot (delta, delta) < 1e-12f) {
+	return;
+    }
+
+    this->m_hasScriptedView = true;
+    this->m_scriptedEye = eye;
+    this->m_scriptedCenter = center;
+
+    if (!this->m_isOrthogonal) {
+	this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
+    }
 }

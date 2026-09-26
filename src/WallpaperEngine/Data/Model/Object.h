@@ -25,6 +25,8 @@ struct ObjectData {
     std::string name;
     std::vector<int> dependencies;
     std::optional<int> parent;
+    /** Optional puppet/model attachment point on the parent. */
+    std::optional<std::string> attachment;
     /** The point of origin of the object */
     UserSettingUniquePtr origin;
     /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
@@ -117,6 +119,8 @@ struct ImageData {
     UserSettingUniquePtr colorBlendMode;
     /** The brightness of the image */
     UserSettingUniquePtr brightness;
+    /** Whether a composition layer starts with a copy of the scene behind it. */
+    bool copyBackground = false;
     /** The material in use for this image */
     ModelUniquePtr model;
     /** The effects applied to this image after the material is rendered */
@@ -620,5 +624,42 @@ public:
     explicit Text (ObjectData data, TextData textData) noexcept :
 	Object (std::move (data)), TextData (std::move (textData)) { };
     ~Text () override = default;
+};
+
+struct AnimationKey {
+    float frame;
+    float value;
+    float frontX;
+    float backX;
+};
+
+struct AnimationChannel {
+    std::vector<AnimationKey> keys;
+};
+
+struct PropertyAnimation {
+    AnimationChannel channels[3];
+    float maxFrame = 0.0f;
+    static constexpr float FPS = 30.0f;
+};
+
+struct ModelObjectData {
+    UserSettingUniquePtr scale;
+    UserSettingUniquePtr angles;
+    UserSettingUniquePtr visible;
+    UserSettingUniquePtr alpha;
+    UserSettingUniquePtr color;
+    std::string modelFile;
+    MaterialUniquePtr material;
+    std::vector<MaterialUniquePtr> extraMaterials;
+    bool perspective = false;
+    std::unique_ptr<PropertyAnimation> anglesAnimation;
+};
+
+class ModelObject : public Object, public ModelObjectData {
+public:
+    explicit ModelObject (ObjectData data, ModelObjectData modelData) noexcept :
+	Object (std::move (data)), ModelObjectData (std::move (modelData)) { };
+    ~ModelObject () override = default;
 };
 } // namespace WallpaperEngine::Data::Model
