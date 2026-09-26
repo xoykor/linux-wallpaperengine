@@ -162,10 +162,8 @@ bool parseSkeletonCandidate (
 }
 
 bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
-    // MDLS framing differs between Wallpaper Engine revisions. Some assets use
-    // the classic [pad][blockEnd][boneCount][pad] preamble, while newer/older
-    // exports shift those fields. Scan all MDLS containers and validate the
-    // actual bone-record structure rather than trusting one fixed offset.
+    // MDLS framing differs between Wallpaper Engine revisions. First try to
+    // discover an explicit bone-count field near every MDLS marker.
     size_t searchFrom = 0;
     while (searchFrom < data.size ()) {
 	const size_t mdls = findMarker (data, "MDLS", searchFrom);
@@ -174,7 +172,7 @@ bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
 	}
 
 	const size_t payload = std::min (mdls + 8, data.size ());
-	const size_t countLimit = std::min (payload + 64, data.size ());
+	const size_t countLimit = std::min (payload + 256, data.size ());
 	for (size_t countOff = payload; countOff + sizeof (uint32_t) <= countLimit; countOff++) {
 	    uint32_t count = 0;
 	    std::memcpy (&count, data.data () + countOff, sizeof (count));
@@ -183,13 +181,13 @@ bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
 	    }
 
 	    const size_t recordMin = countOff + sizeof (uint32_t);
-	    const size_t recordLimit = std::min (recordMin + 32, data.size ());
+	    const size_t recordLimit = std::min (recordMin + 64, data.size ());
 	    for (size_t recordOff = recordMin; recordOff + 12 <= recordLimit; recordOff++) {
 		PuppetModel candidate;
 		if (parseSkeletonCandidate (data, countOff, recordOff, candidate)) {
 		    model.bones = std::move (candidate.bones);
 		    sLog.out (
-			"Puppet skeleton parsed via MDLS scan offset=", mdls, " bones=", model.bones.size ()
+			"Puppet skeleton parsed via MDLS count scan offset=", mdls, " bones=", model.bones.size ()
 		    );
 		    return true;
 		}
@@ -199,89 +197,192 @@ bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
 	searchFrom = mdls + 4;
     }
 
-    return false;
-}
+    // Some Workshop puppets do not expose the count using the framing above.
+    // Infer the skeleton from the longest structurally valid chain of bone
+    // records. A record is [flags:u32][parent:i32][matrixBytes:u32=64][mat4].
+    std::vector<PuppetModel::Bone> best;
+    searchFrom = 0;
+    while (searchFrom < data.size ()) {
+	const size_t mdls = findMarker (data, "MDLS", searchFrom);
+	if (mdls >= data.size ()) {
+	    break;
+	}
+	const size_t nextMdla = findMarker (data, "MDLA", mdls + 4);
+	const size_t limit = nextMdla < data.size () ? nextMdla : data.size ();
+	const size_t scanBegin = std::min (mdls + 8, limit);
+	const size_t scanEnd = std::min (scanBegin + 4096, limit);
 
-bool parseAnimations (const std::vector<char>& data, PuppetModel& model) {
-    const size_t mdla = findMarker (data, "MDLA");
-    if (mdla >= data.size () || model.bones.empty ()) {
-	return false;
-    }
-
-    Cursor cur { data.data (), data.size (), mdla + 8 };
-    cur.skip (1); // pad
-    cur.read<uint32_t> (); // block end
-    const auto animCount = cur.read<uint32_t> ();
-    if (!cur.ok || animCount == 0 || animCount > 64) {
-	return false;
-    }
-
-    for (uint32_t a = 0; a < animCount && cur.ok; a++) {
-	if (a > 0) {
-	    const size_t padStart = cur.off;
-	    while (cur.off < cur.size && data[cur.off] == 0 && cur.off - padStart < 64) {
-		cur.off++;
+	for (size_t start = scanBegin; start + 12 + 64 <= scanEnd; start++) {
+	    int32_t firstParent = 0;
+	    uint32_t firstMatrixBytes = 0;
+	    std::memcpy (&firstParent, data.data () + start + 4, sizeof (firstParent));
+	    std::memcpy (&firstMatrixBytes, data.data () + start + 8, sizeof (firstMatrixBytes));
+	    if (firstParent != -1 || firstMatrixBytes != 64) {
+		continue;
 	    }
-	    size_t chosen = cur.off;
-	    for (size_t back = 0; back <= 3 && cur.off >= padStart + back; back++) {
-		Cursor probe { cur.data, cur.size, cur.off - back };
-		probe.read<uint32_t> (); // candidate id
-		const auto zero = probe.read<uint32_t> ();
-		probe.readCString (); // name (any UTF-8)
-		const std::string mode = probe.readCString ();
-		if (probe.ok && zero == 0 && (mode == "loop" || mode == "mirror" || mode == "single")) {
-		    chosen = cur.off - back;
+
+	    Cursor cur { data.data (), data.size (), start };
+	    std::vector<PuppetModel::Bone> parsed;
+	    std::vector<glm::mat4> bindWorld;
+	    for (uint32_t index = 0; index < 512; index++) {
+		if (cur.off + 12 + 64 > limit) {
+		    break;
+		}
+		int32_t parent = 0;
+		uint32_t matrixBytes = 0;
+		std::memcpy (&parent, data.data () + cur.off + 4, sizeof (parent));
+		std::memcpy (&matrixBytes, data.data () + cur.off + 8, sizeof (matrixBytes));
+		if (matrixBytes != 64 || parent < -1 || parent >= static_cast<int32_t> (index)) {
+		    break;
+		}
+
+		cur.read<uint32_t> ();
+		parent = cur.read<int32_t> ();
+		cur.read<uint32_t> ();
+		const glm::mat4 bindLocal = readFileMatrix (cur);
+		if (!cur.ok) {
+		    break;
+		}
+
+		bindWorld.push_back (parent >= 0 ? bindWorld[parent] * bindLocal : bindLocal);
+		parsed.push_back (
+		    PuppetModel::Bone {
+			.parent = parent, .bindLocal = bindLocal, .bindWorldInverse = glm::inverse (bindWorld.back ()) }
+		);
+
+		// Locate the next valid record, allowing revision-specific padding.
+		bool foundNext = false;
+		for (size_t pad = 0; pad <= 64 && cur.off + pad + 12 <= limit; pad++) {
+		    int32_t p = 0;
+		    uint32_t bytes = 0;
+		    std::memcpy (&p, data.data () + cur.off + pad + 4, sizeof (p));
+		    std::memcpy (&bytes, data.data () + cur.off + pad + 8, sizeof (bytes));
+		    if (bytes == 64 && p >= -1 && p <= static_cast<int32_t> (index)) {
+			cur.off += pad;
+			foundNext = true;
+			break;
+		    }
+		}
+		if (!foundNext) {
 		    break;
 		}
 	    }
-	    cur.off = chosen;
-	}
-	if (!cur.ok || cur.off + 8 >= cur.size) {
-	    break;
-	}
 
-	PuppetModel::Clip clip;
-	clip.id = cur.read<uint32_t> ();
-	cur.read<uint32_t> (); // zero
-	clip.name = cur.readCString ();
-	clip.mode = parseMode (cur.readCString ());
-	clip.fps = cur.read<float> ();
-	clip.frameCount = cur.read<uint32_t> ();
-	cur.read<uint32_t> (); // zero
-	const auto channelCount = cur.read<uint32_t> ();
-	if (!cur.ok || clip.frameCount == 0 || clip.fps <= 0.0f || channelCount == 0
-	    || channelCount > model.bones.size ()) {
-	    sLog.error ("Puppet animation ", a, " has unexpected framing, keeping ", model.clips.size (), " clips");
-	    return !model.clips.empty ();
-	}
-
-	clip.channels.resize (channelCount);
-	for (uint32_t c = 0; c < channelCount && cur.ok; c++) {
-	    cur.read<uint32_t> (); // pad
-	    const auto byteSize = cur.read<uint32_t> ();
-	    // bound BEFORE reserving: a hostile byteSize must not drive a multi-GB reserve
-	    if (!cur.ok || byteSize % 36 != 0 || byteSize == 0 || byteSize > cur.size - cur.off) {
-		sLog.error ("Puppet animation ", a, " channel ", c, " framing broke");
-		return !model.clips.empty ();
-	    }
-	    const size_t records = byteSize / 36;
-	    auto& channel = clip.channels[c];
-	    channel.reserve (records);
-	    for (size_t r = 0; r < records && cur.ok; r++) {
-		PuppetModel::Key key;
-		key.position = { cur.read<float> (), cur.read<float> (), cur.read<float> () };
-		key.rotation = { cur.read<float> (), cur.read<float> (), cur.read<float> () };
-		key.scale = { cur.read<float> (), cur.read<float> (), cur.read<float> () };
-		channel.push_back (key);
+	    if (parsed.size () > best.size ()) {
+		best = std::move (parsed);
 	    }
 	}
 
-	if (cur.ok) {
-	    model.clips.push_back (std::move (clip));
+	if (!best.empty ()) {
+	    model.bones = std::move (best);
+	    sLog.out (
+		"Puppet skeleton parsed via inferred MDLS chain offset=", mdls, " bones=", model.bones.size ()
+	    );
+	    return true;
+	}
+
+	searchFrom = mdls + 4;
+    }
+
+    return false;
+}
+
+bool parseAnimationCandidate (
+    const std::vector<char>& data, size_t start, const PuppetModel& model, PuppetModel::Clip& clip, size_t& endOffset
+) {
+    Cursor cur { data.data (), data.size (), start };
+    clip = {};
+    clip.id = cur.read<uint32_t> ();
+    const uint32_t zero0 = cur.read<uint32_t> ();
+    clip.name = cur.readCString ();
+    const std::string mode = cur.readCString ();
+    clip.mode = parseMode (mode);
+    clip.fps = cur.read<float> ();
+    clip.frameCount = cur.read<uint32_t> ();
+    const uint32_t zero1 = cur.read<uint32_t> ();
+    const auto channelCount = cur.read<uint32_t> ();
+
+    if (!cur.ok || zero0 != 0 || zero1 != 0 || (mode != "loop" && mode != "mirror" && mode != "single")
+	|| !std::isfinite (clip.fps) || clip.fps <= 0.0f || clip.fps > 1000.0f
+	|| clip.frameCount == 0 || clip.frameCount > 1000000 || channelCount == 0
+	|| channelCount > model.bones.size ()) {
+	return false;
+    }
+
+    clip.channels.resize (channelCount);
+    for (uint32_t channelIndex = 0; channelIndex < channelCount; channelIndex++) {
+	if (cur.off + 8 > cur.size) {
+	    return false;
+	}
+	cur.read<uint32_t> (); // channel flags/pad
+	const auto byteSize = cur.read<uint32_t> ();
+	if (!cur.ok || byteSize == 0 || byteSize % 36 != 0 || byteSize > cur.size - cur.off) {
+	    return false;
+	}
+
+	const size_t records = byteSize / 36;
+	auto& channel = clip.channels[channelIndex];
+	channel.reserve (records);
+	for (size_t record = 0; record < records; record++) {
+	    PuppetModel::Key key;
+	    key.position = { cur.read<float> (), cur.read<float> (), cur.read<float> () };
+	    key.rotation = { cur.read<float> (), cur.read<float> (), cur.read<float> () };
+	    key.scale = { cur.read<float> (), cur.read<float> (), cur.read<float> () };
+	    if (!cur.ok) {
+		return false;
+	    }
+	    channel.push_back (key);
 	}
     }
 
-    return !model.clips.empty ();
+    endOffset = cur.off;
+    return true;
+}
+
+bool parseAnimations (const std::vector<char>& data, PuppetModel& model) {
+    if (model.bones.empty ()) {
+	return false;
+    }
+
+    // Scan MDLA sections for structurally valid clip headers. This avoids relying
+    // on one revision-specific animation-count preamble.
+    size_t searchFrom = 0;
+    std::vector<PuppetModel::Clip> found;
+    while (searchFrom < data.size ()) {
+	const size_t mdla = findMarker (data, "MDLA", searchFrom);
+	if (mdla >= data.size ()) {
+	    break;
+	}
+
+	const size_t scanBegin = std::min (mdla + 4, data.size ());
+	const size_t scanEnd = std::min (data.size (), scanBegin + 1024 * 1024);
+	size_t offset = scanBegin;
+	while (offset + 24 < scanEnd) {
+	    PuppetModel::Clip candidate;
+	    size_t candidateEnd = offset;
+	    if (parseAnimationCandidate (data, offset, model, candidate, candidateEnd)) {
+		const bool duplicate = std::any_of (
+		    found.begin (), found.end (), [&candidate] (const auto& existing) { return existing.id == candidate.id; }
+		);
+		if (!duplicate) {
+		    found.push_back (std::move (candidate));
+		}
+		offset = std::max (candidateEnd, offset + 1);
+	    } else {
+		offset++;
+	    }
+	}
+
+	searchFrom = mdla + 4;
+    }
+
+    if (found.empty ()) {
+	return false;
+    }
+
+    model.clips = std::move (found);
+    sLog.out ("Puppet animations parsed via MDLA scan clips=", model.clips.size ());
+    return true;
 }
 
 /** Wrap into [0, period) handling negative phases (rate can be user-driven negative) */
