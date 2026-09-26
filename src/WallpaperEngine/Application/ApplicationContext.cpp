@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <glm/common.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -431,6 +432,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    lastScreen = value;
 	    this->settings.general.screenBackgrounds[lastScreen] = "";
 	    this->settings.general.screenScalings[lastScreen] = this->settings.render.window.scalingMode;
+	    this->settings.general.screenOffsets[lastScreen] = this->settings.render.window.uvOffset;
+	    this->settings.general.screenPostProcess[lastScreen] = this->settings.render.postProcess;
 	    this->settings.general.screenClamps[lastScreen] = this->settings.render.window.clamp;
 	})
 	.append ();
@@ -480,6 +483,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    // Use the same key WallpaperApplication uses while loading and rendering the group.
 	    lastScreen = groupKey;
 	    this->settings.general.screenBackgrounds[lastScreen] = "";
+	    this->settings.general.screenOffsets[lastScreen] = this->settings.render.window.uvOffset;
+	    this->settings.general.screenPostProcess[lastScreen] = this->settings.render.postProcess;
 	})
 	.append ();
     backgroundGroup.add_argument ("-b", "--bg")
@@ -551,6 +556,27 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	})
 	.append ();
+    backgroundGroup.add_argument ("--offset-x")
+	.help ("UV X offset for the preceding output/span, or the default window when no output is selected")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const float offset = std::stof (value);
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenOffsets[lastScreen].x = offset;
+	    else
+		this->settings.render.window.uvOffset.x = offset;
+	})
+	.append ();
+    backgroundGroup.add_argument ("--offset-y")
+	.help ("UV Y offset for the preceding output/span, or the default window when no output is selected")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const float offset = std::stof (value);
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenOffsets[lastScreen].y = offset;
+	    else
+		this->settings.render.window.uvOffset.y = offset;
+	})
+	.append ();
+
     backgroundGroup.add_argument ("--clamp")
 	.help (
 	    "Clamp mode to use when rendering the background, this applies to the previous --window, --screen-root, "
@@ -698,6 +724,42 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.help ("Disables parallax effect for the backgrounds")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.mouse.disableparallax = true; });
+
+    configurationGroup.add_argument ("--contrast")
+	.help ("Post-process contrast for the preceding output/span, or globally when no output is selected")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const float v = std::stof (value);
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenPostProcess[lastScreen].contrast = v;
+	    else
+		this->settings.render.postProcess.contrast = v;
+	});
+    configurationGroup.add_argument ("--saturation")
+	.help ("Post-process saturation for the preceding output/span, or globally when no output is selected")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const float v = std::stof (value);
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenPostProcess[lastScreen].saturation = v;
+	    else
+		this->settings.render.postProcess.saturation = v;
+	});
+    configurationGroup.add_argument ("--border-colour")
+	.help ("RGB border colour as r,g,b with components from 0 to 1")
+	.action ([this, &lastScreen] (const std::string& value) -> void {
+	    const auto first = value.find (',');
+	    const auto second = first == std::string::npos ? std::string::npos : value.find (',', first + 1);
+	    if (first == std::string::npos || second == std::string::npos
+		|| value.find (',', second + 1) != std::string::npos)
+		sLog.exception ("--border-colour expects exactly three comma-separated values");
+	    glm::vec3 colour { std::stof (value.substr (0, first)),
+		std::stof (value.substr (first + 1, second - first - 1)),
+		std::stof (value.substr (second + 1)) };
+	    colour = glm::clamp (colour, glm::vec3 (0.0f), glm::vec3 (1.0f));
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+		this->settings.general.screenPostProcess[lastScreen].borderColour = colour;
+	    else
+		this->settings.render.postProcess.borderColour = colour;
+	});
 
     configurationGroup.add_argument ("-l", "--list-properties")
 	.help ("List all the available properties and their configuration")
