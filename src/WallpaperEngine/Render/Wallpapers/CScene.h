@@ -1,5 +1,7 @@
 #pragma once
 
+#include <unordered_set>
+
 #include "WallpaperEngine/Render/Camera.h"
 
 #include "WallpaperEngine/Render/CWallpaper.h"
@@ -27,6 +29,11 @@ public:
     [[nodiscard]] Camera& getCamera () const;
 
     [[nodiscard]] const Scene& getScene () const;
+
+    [[nodiscard]] std::shared_ptr<const CFBO> getActiveRenderTarget () const;
+    [[nodiscard]] std::shared_ptr<const CFBO> resolveRenderTarget (const std::shared_ptr<const CFBO>& requested) const;
+    [[nodiscard]] bool isRenderingToComposition () const;
+    [[nodiscard]] bool hasAuthoredChildren (int parentId) const;
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
@@ -62,6 +69,8 @@ private:
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
     std::map<int, CObject*> m_objects = {};
+    std::unordered_set<int> m_objectsBeingResolved = {};
+    std::shared_ptr<const CFBO> m_compositionRenderTarget = nullptr;
     std::vector<CObject*> m_objectsByRenderOrder = {};
     std::vector<DynamicValue*> m_scriptedValues = {};
     glm::vec2 m_mousePosition = {};
