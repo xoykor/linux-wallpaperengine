@@ -39,8 +39,9 @@ CScene::CScene (
     float width = scene->camera.projection.width;
     float height = scene->camera.projection.height;
 
-    // detect size if the orthogonal project is auto
-    if (scene->camera.projection.isAuto) {
+    // Auto orthographic scenes and perspective scenes need canvas dimensions
+    // inferred from authored content (falling back to the output size).
+    if (scene->camera.projection.isAuto || scene->camera.projection.isPerspective) {
 	glm::vec2 maxExtent = { 0.0f, 0.0f };
 
 	for (const auto& object : scene->objects) {
@@ -72,8 +73,13 @@ CScene::CScene (
 
     this->m_parallaxDisplacement = { 0, 0 };
 
-    // TODO: CONVERSION
-    this->m_camera->setOrthogonalProjection (width, height);
+    // Perspective scenes are encoded by Wallpaper Engine as
+    // general.orthogonalprojection = null.
+    if (scene->camera.projection.isPerspective) {
+	this->m_camera->setPerspectiveProjection (width, height);
+    } else {
+	this->m_camera->setOrthogonalProjection (width, height);
+    }
 
     // setup framebuffers here as they're required for the scene setup
     this->setupFramebuffers ();
