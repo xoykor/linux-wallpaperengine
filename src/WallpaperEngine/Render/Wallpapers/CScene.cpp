@@ -12,6 +12,7 @@
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 
 #include <ranges>
+#include <set>
 
 extern float g_Time;
 extern float g_TimeLast;
@@ -187,6 +188,17 @@ Render::CObject* CScene::createObject (const Object& object) {
 	return current->second;
     }
 
+    // Parent/dependency cycles are malformed Workshop data; avoid infinite recursion.
+    if (!this->m_objectsBeingResolved.insert (object.id).second) {
+	sLog.error ("Object dependency/parent cycle while resolving id=", object.id);
+	return nullptr;
+    }
+    struct ResolutionGuard {
+	std::unordered_set<int>& ids;
+	int id;
+	~ResolutionGuard () { ids.erase (id); }
+    } guard { this->m_objectsBeingResolved, object.id };
+
     // check dependencies too!
     for (const auto& cur : object.dependencies) {
 	// self-dependency is a possibility...
@@ -349,16 +361,119 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    for (const auto& cur : this->m_objectsByRenderOrder) {
-	const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
-	if (debug.objectFilter.has_value () && cur->getId () != debug.objectFilter.value ()) {
-	    continue;
+    const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
+    const auto enabledByDebug = [&debug] (const CObject* object) {
+	if (debug.objectFilter.has_value () && object->getId () != debug.objectFilter.value ()) {
+	    return false;
 	}
-	if (std::ranges::find (debug.skipObjects, cur->getId ()) != debug.skipObjects.end ()) {
+	return std::ranges::find (debug.skipObjects, object->getId ()) == debug.skipObjects.end ();
+    };
+
+    const auto findAuthored = [this] (const int id) -> const Object* {
+	const auto it = std::ranges::find_if (this->getScene ().objects, [id] (const auto& object) {
+	    return object != nullptr && object->id == id;
+	});
+	return it == this->getScene ().objects.end () ? nullptr : it->get ();
+    };
+
+    // Return the nearest authored composition-layer ancestor of a render object.
+    const auto compositionAncestor = [this, &findAuthored] (const CObject* object) -> Objects::CImage* {
+	const Object* current = findAuthored (object->getId ());
+	for (int depth = 0; current != nullptr && current->parent.has_value () && depth < 32; depth++) {
+	    const auto parentIt = this->m_objects.find (*current->parent);
+	    if (parentIt == this->m_objects.end ()) {
+		break;
+	    }
+	    if (auto* image = dynamic_cast<Objects::CImage*> (parentIt->second);
+		image != nullptr && image->isCompositionLayer () && image->getCompositionFBO () != nullptr) {
+		return image;
+	    }
+	    current = findAuthored (parentIt->second->getId ());
+	}
+	return nullptr;
+    };
+
+    std::set<int> compositionSubmitted;
+    const auto renderCompositionImpl = [&] (Objects::CImage* composition, const auto& self) -> void {
+	if (composition == nullptr || !compositionSubmitted.insert (composition->getId ()).second) {
+	    return;
+	}
+
+	const auto target = composition->getCompositionFBO ();
+	if (target == nullptr) {
+	    if (enabledByDebug (composition)) {
+		composition->render ();
+	    }
+	    return;
+	}
+
+	const auto previousTarget = this->m_compositionRenderTarget;
+	const auto source = this->getActiveRenderTarget ();
+
+	GLfloat previousClearColor[4] = {};
+	glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+	glBindFramebuffer (GL_FRAMEBUFFER, target->getFramebuffer ());
+	glViewport (0, 0, target->getRealWidth (), target->getRealHeight ());
+	glColorMask (true, true, true, true);
+	glDepthMask (true);
+	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+
+	if (composition->copiesCompositionBackground () && source != nullptr && source != target) {
+	    glBindFramebuffer (GL_READ_FRAMEBUFFER, source->getFramebuffer ());
+	    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, target->getFramebuffer ());
+	    glBlitFramebuffer (
+		0, 0, source->getRealWidth (), source->getRealHeight (),
+		0, 0, target->getRealWidth (), target->getRealHeight (),
+		GL_COLOR_BUFFER_BIT, GL_LINEAR
+	    );
+	}
+
+	this->m_compositionRenderTarget = target;
+	for (CObject* child : this->m_objectsByRenderOrder) {
+	    if (compositionSubmitted.contains (child->getId ()) || compositionAncestor (child) != composition) {
+		continue;
+	    }
+	    if (auto* nested = dynamic_cast<Objects::CImage*> (child);
+		nested != nullptr && nested->isCompositionLayer () && nested->getCompositionFBO () != nullptr) {
+		self (nested, self);
+	    } else {
+		compositionSubmitted.insert (child->getId ());
+		if (enabledByDebug (child)) {
+		    child->render ();
+		}
+	    }
+	}
+
+	this->m_compositionRenderTarget = previousTarget;
+	if (enabledByDebug (composition)) {
+	    composition->render ();
+	}
+    };
+
+    const auto renderComposition
+	= [&] (Objects::CImage* composition) { renderCompositionImpl (composition, renderCompositionImpl); };
+
+    for (const auto& cur : this->m_objectsByRenderOrder) {
+	if (compositionSubmitted.contains (cur->getId ())) {
 	    continue;
 	}
 
-	cur->render ();
+	if (auto* ancestor = compositionAncestor (cur); ancestor != nullptr) {
+	    renderComposition (ancestor);
+	    continue;
+	}
+
+	if (auto* image = dynamic_cast<Objects::CImage*> (cur);
+	    image != nullptr && image->isCompositionLayer () && image->getCompositionFBO () != nullptr) {
+	    renderComposition (image);
+	    continue;
+	}
+
+	if (enabledByDebug (cur)) {
+	    cur->render ();
+	}
     }
 }
 
@@ -392,6 +507,25 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
 }
 
 const Scene& CScene::getScene () const { return *this->getWallpaperData ().as<Scene> (); }
+
+std::shared_ptr<const CFBO> CScene::getActiveRenderTarget () const {
+    return this->m_compositionRenderTarget != nullptr ? this->m_compositionRenderTarget : this->getFBO ();
+}
+
+std::shared_ptr<const CFBO> CScene::resolveRenderTarget (const std::shared_ptr<const CFBO>& requested) const {
+    if (requested == this->getFBO () && this->m_compositionRenderTarget != nullptr) {
+	return this->m_compositionRenderTarget;
+    }
+    return requested;
+}
+
+bool CScene::isRenderingToComposition () const { return this->m_compositionRenderTarget != nullptr; }
+
+bool CScene::hasAuthoredChildren (int parentId) const {
+    return std::ranges::any_of (this->getScene ().objects, [parentId] (const auto& object) {
+	return object != nullptr && object->parent.has_value () && *object->parent == parentId;
+    });
+}
 
 int CScene::getWidth () const { return this->m_camera->getWidth (); }
 
