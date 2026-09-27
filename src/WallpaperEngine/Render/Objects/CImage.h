@@ -88,6 +88,7 @@ private:
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
     void uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::vec2& size);
     void updatePuppetAnimation ();
+    void updateAlphaAnimation ();
     ResolvedTransform updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
     void updateScenePosition (
@@ -151,6 +152,7 @@ private:
     glm::vec4 m_pos = {};
     glm::vec3 m_sceneCenter = {};
     glm::vec2 m_size = {};
+    float m_animatedAlpha = 1.0f;
 
     bool m_initialized = false;
 

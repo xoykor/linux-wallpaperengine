@@ -18,7 +18,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf, GLib, Gtk
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
 
 _PreviewKey = tuple[str, int, int]
@@ -48,28 +48,30 @@ def _signature(path: str) -> _Signature | None:
     return info.st_mtime_ns, info.st_size
 
 
+def _fit_pixbuf(frame: GdkPixbuf.Pixbuf, width: int, height: int) -> GdkPixbuf.Pixbuf | None:
+    """Center-crop a frame to the card's preview ratio and scale it down."""
+    source_width, source_height = frame.get_width(), frame.get_height()
+    if source_width <= 0 or source_height <= 0:
+        return None
+    if source_width * height > source_height * width:
+        crop_width = max(1, source_height * width // height)
+        crop_height = source_height
+    else:
+        crop_width = source_width
+        crop_height = max(1, source_width * height // width)
+    left = (source_width - crop_width) // 2
+    top = (source_height - crop_height) // 2
+    cropped = GdkPixbuf.Pixbuf.new_subpixbuf(frame, left, top, crop_width, crop_height)
+    return cropped.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
+
+
 def _decode(path: str, width: int, height: int) -> GdkPixbuf.Pixbuf | None:
     """Read the first frame, then center-crop without distorting its aspect."""
     try:
         frame = GdkPixbuf.PixbufAnimation.new_from_file(path).get_static_image()
         if frame is None:
             return None
-        source_width, source_height = frame.get_width(), frame.get_height()
-        if source_width <= 0 or source_height <= 0:
-            return None
-
-        if source_width * height > source_height * width:
-            crop_width = max(1, source_height * width // height)
-            crop_height = source_height
-        else:
-            crop_width = source_width
-            crop_height = max(1, source_width * height // width)
-        left = (source_width - crop_width) // 2
-        top = (source_height - crop_height) // 2
-        cropped = GdkPixbuf.Pixbuf.new_subpixbuf(
-            frame, left, top, crop_width, crop_height
-        )
-        return cropped.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
+        return _fit_pixbuf(frame, width, height)
     except Exception:
         # A missing or malformed Workshop preview should leave its placeholder.
         return None
@@ -142,7 +144,14 @@ def _start_workers() -> None:
         Thread(target=_worker, name=f"wallpaper-preview-{index}", daemon=True).start()
 
 
-def preview(path: str | None, width: int, height: int) -> Gtk.Widget:
+def preview(
+    path: str | None,
+    width: int,
+    height: int,
+    *,
+    animation_path: str | None = None,
+    hover_target: Gtk.Widget | None = None,
+) -> Gtk.Widget:
     """Return a fixed-size widget that fills asynchronously with a first frame.
 
     Repeated requests for the same file and dimensions share decoding work and
@@ -155,8 +164,10 @@ def preview(path: str | None, width: int, height: int) -> Gtk.Widget:
     stack.set_size_request(width, height)
     stack.set_hexpand(False)
     stack.set_vexpand(False)
-    stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-    stack.set_transition_duration(150)
+    # Leaving a GIF must detach its picture without an in-flight transition;
+    # doing both at once can leave GTK drawing a removed child.
+    stack.set_transition_type(Gtk.StackTransitionType.NONE)
+    stack.set_transition_duration(0)
     placeholder = Gtk.Image.new_from_icon_name("image-x-generic-symbolic")
     placeholder.set_pixel_size(min(width, height) // 2)
     placeholder.add_css_class("dim-label")
@@ -169,40 +180,93 @@ def preview(path: str | None, width: int, height: int) -> Gtk.Widget:
         return stack
 
     def enable_gif_hover() -> None:
-        if Path(path).suffix.casefold() != ".gif":
+        gif_path = animation_path or (path if Path(path).suffix.casefold() == ".gif" else None)
+        if not gif_path or Path(gif_path).suffix.casefold() != ".gif":
             return
         controller = Gtk.EventControllerMotion()
+        # The preview sits below overlays (badges and controls). Capture the
+        # pointer event at the preview surface so those children cannot hide
+        # hover transitions.
+        controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         state: dict[str, object] = {
             "animation": None,
+            "iterator": None,
+            "animated_picture": None,
+            "ticker": 0,
+            "last_frame": None,
             "loading": False,
             "hovering": False,
         }
 
+        def start_animation(animation: GdkPixbuf.PixbufAnimation) -> None:
+            if not state["hovering"]:
+                return
+            ticker = state.get("ticker")
+            if isinstance(ticker, int) and ticker:
+                GLib.source_remove(ticker)
+                state["ticker"] = 0
+            picture = Gtk.Picture()
+            picture.set_size_request(width, height)
+            picture.set_hexpand(True)
+            picture.set_vexpand(True)
+            picture.set_can_shrink(True)
+            if hasattr(Gtk, "ContentFit"):
+                picture.set_content_fit(Gtk.ContentFit.COVER)
+            else:
+                picture.set_keep_aspect_ratio(True)
+            iterator = animation.get_iter(None)
+            state["iterator"] = iterator
+            state["animated_picture"] = picture
+            stack.add_named(picture, "animated-preview")
+            stack.set_visible_child(picture)
+
+            def advance_frame() -> bool:
+                state["ticker"] = 0
+                if not state["hovering"]:
+                    return False
+                current = state["iterator"]
+                target = state["animated_picture"]
+                if current is None or target is None:
+                    return False
+                changed = current.advance(None)
+                frame = current.get_pixbuf()
+                # GdkPixbuf may return the same Pixbuf wrapper while mutating
+                # its pixels for the next GIF frame. Use the iterator's
+                # changed flag instead of Python object identity.
+                if changed or state["last_frame"] is None:
+                    fitted = _fit_pixbuf(frame, width, height)
+                    if fitted is not None:
+                        texture = Gdk.Texture.new_for_pixbuf(fitted)
+                        target.set_paintable(texture)
+                    state["last_frame"] = frame
+                # Follow the GIF's frame delay instead of waking GTK on a
+                # fixed 40 ms loop for animations with fewer frames.
+                delay = max(20, int(current.get_delay_time()))
+                state["ticker"] = GLib.timeout_add(delay, advance_frame)
+                return False
+
+            advance_frame()
+
         def deliver_animation(animation: GdkPixbuf.PixbufAnimation | None) -> bool:
             state["loading"] = False
-            if animation is None:
+            if animation is None or animation.is_static_image():
                 return False
-            image = Gtk.Image.new_from_animation(animation)
-            image.set_size_request(width, height)
-            image.set_hexpand(True)
-            image.set_vexpand(True)
-            state["animation"] = image
-            stack.add_named(image, "animated-preview")
-            if state["hovering"]:
-                stack.set_visible_child(image)
+            state["animation"] = animation
+            start_animation(animation)
             return False
 
         def load_animation() -> None:
             try:
-                animation = GdkPixbuf.PixbufAnimation.new_from_file(path)
+                animation = GdkPixbuf.PixbufAnimation.new_from_file(gif_path)
             except Exception:
                 animation = None
             GLib.idle_add(deliver_animation, animation)
 
-        def enter(_controller: Gtk.EventControllerMotion) -> None:
+        def enter(_controller: Gtk.EventControllerMotion, _x: float, _y: float) -> None:
             state["hovering"] = True
-            if state["animation"] is not None:
-                stack.set_visible_child(state["animation"])
+            animation = state["animation"]
+            if isinstance(animation, GdkPixbuf.PixbufAnimation):
+                start_animation(animation)
                 return
             if state["loading"]:
                 return
@@ -211,12 +275,25 @@ def preview(path: str | None, width: int, height: int) -> Gtk.Widget:
 
         def leave(_controller: Gtk.EventControllerMotion) -> None:
             state["hovering"] = False
+            ticker = state.get("ticker")
+            if isinstance(ticker, int) and ticker:
+                GLib.source_remove(ticker)
+                state["ticker"] = 0
             if stack.get_child_by_name("preview") is not None:
                 stack.set_visible_child_name("preview")
+            else:
+                stack.set_visible_child_name("placeholder")
+            animated_picture = state.get("animated_picture")
+            if isinstance(animated_picture, Gtk.Widget):
+                stack.remove(animated_picture)
+            state["animation"] = None
+            state["iterator"] = None
+            state["animated_picture"] = None
+            state["last_frame"] = None
 
         controller.connect("enter", enter)
         controller.connect("leave", leave)
-        stack.add_controller(controller)
+        (hover_target if hover_target is not None else stack).add_controller(controller)
 
     # Attach hover handling before cache/pending early returns, so duplicate
     # requests for the same preview behave exactly like the first one.

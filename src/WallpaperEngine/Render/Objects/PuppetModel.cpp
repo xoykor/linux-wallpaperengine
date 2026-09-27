@@ -161,6 +161,84 @@ bool parseSkeletonCandidate (
     return true;
 }
 
+/**
+ * MDLS0004 stores an absolute MDLA offset, the bone count, and variable-sized
+ * bone records (name, flags, parent, matrix, metadata). The legacy heuristic
+ * below assumes adjacent fixed-size records and cannot walk this layout.
+ */
+bool parseMdls0004Skeleton (
+    const std::vector<char>& data, size_t mdlsOffset, size_t requiredBones, std::vector<PuppetModel::Bone>& bones
+) {
+    constexpr size_t markerLength = 8;
+    if (mdlsOffset + markerLength + 1 + 2 * sizeof (uint32_t) > data.size ()
+	|| std::memcmp (data.data () + mdlsOffset, "MDLS0004", markerLength) != 0
+	|| data[mdlsOffset + markerLength] != '\0') {
+	return false;
+    }
+
+    Cursor header { data.data (), data.size (), mdlsOffset + markerLength + 1 };
+    const uint32_t mdlaOffset = header.read<uint32_t> ();
+    const uint32_t boneCount = header.read<uint32_t> ();
+    if (!header.ok || mdlaOffset <= header.off || mdlaOffset > data.size () || boneCount < requiredBones
+	|| boneCount == 0 || boneCount > 512 || mdlaOffset + 4 > data.size ()
+	|| std::memcmp (data.data () + mdlaOffset, "MDLA", 4) != 0) {
+	return false;
+    }
+
+    Cursor cur { data.data (), mdlaOffset, header.off };
+    std::vector<PuppetModel::Bone> parsed;
+    std::vector<glm::mat4> bindWorld;
+    parsed.reserve (boneCount);
+    bindWorld.reserve (boneCount);
+
+    for (uint32_t index = 0; index < boneCount; ++index) {
+	const std::string name = cur.readCString ();
+	const uint32_t flags = cur.read<uint32_t> ();
+	const int32_t parent = cur.read<int32_t> ();
+	const uint32_t matrixBytes = cur.read<uint32_t> ();
+	if (!cur.ok || name.empty () || matrixBytes != 64 || parent < -1 || parent >= static_cast<int32_t> (index)) {
+	    return false;
+	}
+	(void)flags;
+
+	const glm::mat4 bindLocal = readFileMatrix (cur);
+	if (!cur.ok) {
+	    return false;
+	}
+	for (int column = 0; column < 4; ++column) {
+	    for (int row = 0; row < 4; ++row) {
+		if (!std::isfinite (bindLocal[column][row])) {
+		    return false;
+		}
+	    }
+	}
+
+	// Per-bone JSON metadata follows the matrix before the next bone name.
+	const std::string metadata = cur.readCString ();
+	if (!cur.ok || (!metadata.empty () && metadata.front () != '{')) {
+	    return false;
+	}
+
+	const glm::mat4 world = parent >= 0 ? bindWorld[static_cast<size_t> (parent)] * bindLocal : bindLocal;
+	const glm::mat4 inverse = glm::inverse (world);
+	for (int column = 0; column < 4; ++column) {
+	    for (int row = 0; row < 4; ++row) {
+		if (!std::isfinite (inverse[column][row])) {
+		    return false;
+		}
+	    }
+	}
+	bindWorld.push_back (world);
+	parsed.push_back (PuppetModel::Bone { .parent = parent, .bindLocal = bindLocal, .bindWorldInverse = inverse });
+    }
+
+    if (parsed.size () < requiredBones) {
+	return false;
+    }
+    bones = std::move (parsed);
+    return true;
+}
+
 bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
     // The mesh tells us a hard lower bound for the real skeleton size: every
     // non-zero blend weight must reference an existing bone. Use this to reject
@@ -174,6 +252,26 @@ bool parseSkeleton (const std::vector<char>& data, PuppetModel& model) {
 	}
     }
     requiredBones = std::max<size_t> (requiredBones, 1);
+
+    // MDLS0004 records are variable length. Prefer its explicit format parser,
+    // then retain the structural heuristics for earlier and unknown revisions.
+    size_t searchV4 = 0;
+    while (searchV4 < data.size ()) {
+	const size_t mdls = findMarker (data, "MDLS0004", searchV4);
+	if (mdls >= data.size ()) {
+	    break;
+	}
+	std::vector<PuppetModel::Bone> parsed;
+	if (parseMdls0004Skeleton (data, mdls, requiredBones, parsed)) {
+	    model.bones = std::move (parsed);
+	    sLog.out (
+		"Puppet MDLS0004 skeleton parsed offset=", mdls, " bones=", model.bones.size (),
+		" requiredByMesh=", requiredBones
+	    );
+	    return true;
+	}
+	searchV4 = mdls + 8;
+    }
 
     std::vector<PuppetModel::Bone> best;
     size_t bestMdls = data.size ();

@@ -42,6 +42,51 @@ glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
 
 bool isMagentaNeonTint (const glm::vec3& color) { return color.r > 0.55f && color.g < 0.25f && color.b > 0.45f; }
 
+float bezierEase (const float t, const float x1, const float x2) {
+    const auto bx = [x1, x2] (const float s) {
+	const float inv = 1.0f - s;
+	return 3.0f * inv * inv * s * x1 + 3.0f * inv * s * s * x2 + s * s * s;
+    };
+
+    float s = t;
+    for (int i = 0; i < 6; i++) {
+	const float inv = 1.0f - s;
+	const float dx
+	    = 3.0f * inv * inv * x1 + 6.0f * inv * s * (x2 - x1) + 3.0f * s * s * (1.0f - x2);
+	if (std::abs (dx) < 1e-6f) {
+	    break;
+	}
+	s = std::clamp (s - (bx (s) - t) / dx, 0.0f, 1.0f);
+    }
+    return 3.0f * (1.0f - s) * s * s + s * s * s;
+}
+
+float evalAnimationChannel (const AnimationChannel& channel, const float frame, const float fallback) {
+    if (channel.keys.empty ()) {
+	return fallback;
+    }
+    if (channel.keys.size () == 1 || frame <= channel.keys.front ().frame) {
+	return channel.keys.front ().value;
+    }
+    if (frame >= channel.keys.back ().frame) {
+	return channel.keys.back ().value;
+    }
+
+    for (size_t i = 0; i + 1 < channel.keys.size (); i++) {
+	const auto& k0 = channel.keys[i];
+	const auto& k1 = channel.keys[i + 1];
+	if (frame < k0.frame || frame > k1.frame) {
+	    continue;
+	}
+	const float span = std::max (k1.frame - k0.frame, 1e-6f);
+	const float t = (frame - k0.frame) / span;
+	const float x1 = std::clamp (k0.frontX * 0.5f, 0.0f, 1.0f);
+	const float x2 = std::clamp (1.0f + k1.backX * 0.5f, 0.0f, 1.0f);
+	return k0.value + (k1.value - k0.value) * bezierEase (t, x1, x2);
+    }
+    return fallback;
+}
+
 std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std::vector<int>& skippedEffectIds) {
     for (const auto& effect : image.effects) {
 	if (std::find (skippedEffectIds.begin (), skippedEffectIds.end (), static_cast<int> (effect->id))
@@ -175,6 +220,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     m_modelViewProjectionPass (glm::mat4 (1.0)), m_modelViewProjectionCopy (), m_modelViewProjectionScreenInverse (),
     m_modelViewProjectionPassInverse (glm::inverse (m_modelViewProjectionPass)), m_modelViewProjectionCopyInverse (),
     m_modelMatrix (), m_viewProjectionMatrix (), m_image (image), m_pos (), m_initialized (false) {
+    this->m_animatedAlpha = image.alpha->value->getFloat ();
     // register any properties in use on this object
     this->registerProperty ("origin", *image.origin->value);
     this->registerProperty ("scale", *image.scale->value);
@@ -539,7 +585,12 @@ void CImage::uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::
 	    positions.push_back (localX);
 	    positions.push_back (localY);
 	}
-	positions.push_back (raw[index + 2]);
+	// Puppet mesh Z values are local to the model. The local image target and the
+	// orthographic scene projection use a [-1, 1] clip-depth range, so carrying
+	// those values through clips much of a 2D puppet. Scene-level depth is carried
+	// by the image object; preserve local Z only for direct perspective output.
+	const bool orthographic = this->getScene ().getCamera ().isOrthogonal ();
+	positions.push_back (this->m_puppetScreenSpace && !orthographic ? raw[index + 2] : 0.0f);
     }
 
     if (this->m_puppetSpacePosition == GL_NONE) {
@@ -967,6 +1018,8 @@ void CImage::render () {
 	return;
     }
 
+    this->updateAlphaAnimation ();
+
     glColorMask (true, true, true, true);
 
     // Always update screen transform (handles rotation + parallax dynamically)
@@ -1006,11 +1059,26 @@ void CImage::render () {
 #endif /* DEBUG */
 }
 
+void CImage::updateAlphaAnimation () {
+    if (!this->m_image.alphaAnimation) {
+	return;
+    }
+
+    const auto& animation = *this->m_image.alphaAnimation;
+    const float frame = std::clamp (g_Time * PropertyAnimation::FPS, 0.0f, animation.maxFrame);
+    const float authoredAlpha = this->m_image.alpha->value->getFloat ();
+    this->m_animatedAlpha = evalAnimationChannel (animation.channels[0], frame, authoredAlpha);
+}
+
 const float& CImage::getBrightness () const { return this->m_image.brightness->value->getFloat (); }
 
-const float& CImage::getUserAlpha () const { return this->m_image.alpha->value->getFloat (); }
+const float& CImage::getUserAlpha () const {
+    return this->m_image.alphaAnimation ? this->m_animatedAlpha : this->m_image.alpha->value->getFloat ();
+}
 
-const float& CImage::getAlpha () const { return this->m_image.alpha->value->getFloat (); }
+const float& CImage::getAlpha () const {
+    return this->m_image.alphaAnimation ? this->m_animatedAlpha : this->m_image.alpha->value->getFloat ();
+}
 
 const glm::vec3& CImage::getColor () const { return this->m_image.color->value->getVec3 (); }
 

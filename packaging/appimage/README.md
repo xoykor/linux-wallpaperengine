@@ -6,6 +6,8 @@ The AppImage puts the desktop frontend, C++ wallpaper engine, and CEF runtime in
 
 The AppImage includes the project binaries and Python frontend. The host still needs Python 3, PyGObject, GTK 4 and GdkPixbuf introspection, GTK 3/NSS for CEF, OpenGL drivers, and the shared system libraries used by the engine (including SDL2, FFmpeg, mpv, PulseAudio, Wayland/X11, ALSA, CUPS, and FreeType). The AppRun checks the Python/GTK requirements and gives an error if they are missing. Opening the AppImage starts its user daemon for that GUI session; closing the window stops a daemon started by that AppImage. Session autostart remains disabled in AppImage mode. The AppImage does not include Steam or wallpaper downloads.
 
+The bundled renderer takes precedence over paths saved by an earlier system installation. On KDE X11/XWayland, the window requests native compositor backdrop blur; other compositors retain the tinted dark surface without the compositor blur effect.
+
 ## Build
 
 Configure and build the CMake target first, then install `appimagetool` 1.9.1 or set `APPIMAGETOOL` to its executable:

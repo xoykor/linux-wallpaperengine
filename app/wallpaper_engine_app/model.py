@@ -29,10 +29,12 @@ def _xdg_dir(variable: str, fallback: Path) -> Path:
 CONFIG_DIR = _xdg_dir("XDG_CONFIG_HOME", Path.home() / ".config") / APP_NAME
 STATE_DIR = _xdg_dir("XDG_STATE_HOME", Path.home() / ".local/state") / APP_NAME
 _runtime = os.environ.get("XDG_RUNTIME_DIR")
-SOCKET_FILE = (Path(_runtime) if _runtime else STATE_DIR) / "linux-wallpaperengine-app.sock"
+_appimage_mode = os.environ.get("LINUX_WALLPAPERENGINE_APPIMAGE") == "1"
+_instance_suffix = "-appimage" if _appimage_mode else ""
+SOCKET_FILE = (Path(_runtime) if _runtime else STATE_DIR) / f"linux-wallpaperengine{_instance_suffix}-app.sock"
 CONFIG_FILE = CONFIG_DIR / "app.json"
 UI_PREFERENCES_FILE = CONFIG_DIR / "ui.json"
-STATUS_FILE = STATE_DIR / "status.json"
+STATUS_FILE = STATE_DIR / f"status{_instance_suffix}.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "rotation_enabled": True,
@@ -401,6 +403,20 @@ def _preview_for(project_dir: Path, raw: Any) -> str | None:
     return None
 
 
+def _animation_for(project_dir: Path, raw: Any) -> str | None:
+    """Return the Workshop GIF preview, even when project.json names a still."""
+    candidates = [raw] if isinstance(raw, str) and Path(raw).suffix.casefold() == ".gif" else []
+    candidates.append("preview.gif")
+    directory = project_dir.resolve()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = (directory / candidate).resolve()
+        if path.is_relative_to(directory) and path.is_file() and path.suffix.casefold() == ".gif":
+            return str(path)
+    return None
+
+
 def _tags_for(raw: Any) -> list[str]:
     if isinstance(raw, list):
         return [item for item in raw if isinstance(item, str) and item]
@@ -442,6 +458,7 @@ def scan_catalog() -> dict[str, dict[str, Any]]:
                 "path": str(project.parent),
                 "assets": str(assets),
                 "preview": _preview_for(project.parent, data.get("preview")),
+                "preview_animation": _animation_for(project.parent, data.get("preview")),
                 "tags": _tags_for(data.get("tags")),
             }
     return result

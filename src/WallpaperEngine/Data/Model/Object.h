@@ -112,6 +112,8 @@ struct ImageAnimationLayer {
     UserSettingUniquePtr animation;
 };
 
+struct PropertyAnimation;
+
 struct ImageData {
     /** The scale of the image */
     UserSettingUniquePtr scale;
@@ -121,6 +123,8 @@ struct ImageData {
     UserSettingUniquePtr visible;
     /** The alpha of the image */
     UserSettingUniquePtr alpha;
+    /** Optional animated alpha curve from the scene file. */
+    std::unique_ptr<PropertyAnimation> alphaAnimation;
     /** The color of the image */
     UserSettingUniquePtr color;
     // TODO: WRITE A COUPLE OF ENUMS FOR THIS

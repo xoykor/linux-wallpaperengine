@@ -14,6 +14,11 @@ export PYTHONPATH="${APPDIR}/usr/lib${PYTHONPATH:+:${PYTHONPATH}}"
 export LD_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PYTHONDONTWRITEBYTECODE=1
 export LINUX_WALLPAPERENGINE_APPIMAGE=1
+export LINUX_WALLPAPERENGINE_RENDERER_PATH="${ENGINE_DIR}/linux-wallpaperengine"
+# Some Mesa/KWin combinations crash GTK's GL scene renderer while repainting
+# the large preview gallery. Cairo keeps the frontend stable; honor an explicit
+# user override when one is already set.
+export GSK_RENDERER="${GSK_RENDERER:-cairo}"
 
 if ! command -v python3 >/dev/null 2>&1; then
     printf 'Linux Wallpaper Engine requires Python 3 and GTK 4 introspection (PyGObject).\n' >&2

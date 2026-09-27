@@ -153,10 +153,14 @@ class WallpaperDaemon:
         return self._next_id()
 
     def _resolve_renderer(self) -> str:
-        configured = self.config["renderer_path"]
-        path = shutil.which("linux-wallpaperengine") if configured == "auto" else configured
-        if not path and configured == "auto" and Path("/usr/bin/linux-wallpaperengine").is_file():
-            path = "/usr/bin/linux-wallpaperengine"
+        bundled = os.environ.get("LINUX_WALLPAPERENGINE_RENDERER_PATH")
+        if bundled:
+            path = bundled
+        else:
+            configured = self.config["renderer_path"]
+            path = shutil.which("linux-wallpaperengine") if configured == "auto" else configured
+            if not path and configured == "auto" and Path("/usr/bin/linux-wallpaperengine").is_file():
+                path = "/usr/bin/linux-wallpaperengine"
         if not path or not Path(path).is_file() or not os.access(path, os.X_OK):
             raise RuntimeError(tr("Renderizador linux-wallpaperengine não encontrado ou sem permissão de execução."))
         return path

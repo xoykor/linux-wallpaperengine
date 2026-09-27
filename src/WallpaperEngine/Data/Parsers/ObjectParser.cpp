@@ -19,6 +19,35 @@
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
+namespace {
+std::unique_ptr<PropertyAnimation> parsePropertyAnimation (const JSON& property) {
+    const auto animationIt = property.find ("animation");
+    if (animationIt == property.end () || !animationIt->is_object ()) {
+	return nullptr;
+    }
+
+    auto animation = std::make_unique<PropertyAnimation> ();
+    for (int channel = 0; channel < 3; channel++) {
+	const auto channelIt = animationIt->find ("c" + std::to_string (channel));
+	if (channelIt == animationIt->end () || !channelIt->is_array ()) {
+	    continue;
+	}
+	for (const auto& key : *channelIt) {
+	    AnimationKey parsed {};
+	    parsed.frame = key.value ("frame", 0.0f);
+	    parsed.value = key.value ("value", 0.0f);
+	    parsed.frontX = key.contains ("front") && key["front"].is_object ()
+		? key["front"].value ("x", 1.0f) : 1.0f;
+	    parsed.backX = key.contains ("back") && key["back"].is_object ()
+		? key["back"].value ("x", -1.0f) : -1.0f;
+	    animation->channels[channel].keys.push_back (parsed);
+	    animation->maxFrame = std::max (animation->maxFrame, parsed.frame);
+	}
+    }
+    return animation;
+}
+} // namespace
+
 ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto imageIt = it.find ("image");
     const auto soundIt = it.find ("sound");
@@ -331,6 +360,10 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .angles = it.user ("angles", properties, glm::vec3 (0.0f)),
 	    .visible = it.user ("visible", properties, true),
 	    .alpha = it.user ("alpha", properties, 1.0f),
+	    .alphaAnimation = [&it] {
+		const auto alphaIt = it.find ("alpha");
+		return alphaIt != it.end () && alphaIt->is_object () ? parsePropertyAnimation (*alphaIt) : nullptr;
+	    } (),
 	    .color = it.color ("color", properties, Builders::ColorBuilder::White),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .size = it.user ("size", properties, glm::vec2 (0.0f))->value->getVec2 (),

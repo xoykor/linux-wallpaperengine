@@ -17,12 +17,16 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 
 from . import ipc, model
+from .backdrop import enable_backdrop_blur
 from .i18n import current_language, language_options, set_language, system_language, tr
 from .previews import preview as _preview
 from .theme import install_theme
 
 
 SERVICE = "linux-wallpaperengine-app.service"
+CARD_WIDTH = 240
+CARD_PREVIEW_HEIGHT = round(CARD_WIDTH * 9 / 16)
+CARD_HEIGHT = CARD_PREVIEW_HEIGHT + 56
 FILTERS = ("Todos", "Cenas", "Vídeos", "Favoritos")
 SCALINGS = ("fill", "fit", "stretch", "default")
 PAGES = {
@@ -88,6 +92,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self._initial_size = (1100, 720)
         self.set_default_size(*self._initial_size)
         self.set_size_request(680, 440)
+        self.add_css_class("glass-window")
+        self._appimage_renderer_path = os.environ.get("LINUX_WALLPAPERENGINE_RENDERER_PATH")
+        self.connect("realize", lambda *_: enable_backdrop_blur(self))
 
         self.catalog: dict[str, dict] = {}
         self.config: dict = model.load_config()
@@ -105,6 +112,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._selected_ids: set[str] = set()
         self._selection_anchor_id: str | None = None
         self._gallery_click_modifiers: Gdk.ModifierType | None = None
+        self._gallery_click_on_button = False
         self._selection_rebuilding = False
         self._toast_timer = 0
         self.filter_index = 0
@@ -648,6 +656,11 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self._show_details(self.selected_id)
         return True
 
+    def _update_responsive_once(self) -> bool:
+        """Run one responsive layout pass from an idle callback."""
+        self._update_responsive()
+        return False
+
     def _build_library(self) -> Gtk.Widget:
         page = _box(vertical=True, spacing=16)
         page.add_css_class("library-page")
@@ -716,7 +729,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         gallery_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.gallery = Gtk.FlowBox()
         self.gallery.set_valign(Gtk.Align.START)
-        self.gallery.set_homogeneous(False)
+        self.gallery.set_homogeneous(True)
         self.gallery.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         # GTK's single-click activation bypasses its Ctrl/Shift selection handling.
         # Let the FlowBox select first, then apply a plain click below.
@@ -840,11 +853,21 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         return False
 
     def _gallery_pressed(self, gesture: Gtk.GestureClick, _count: int,
-                         _x: float, _y: float) -> None:
+                         x: float, y: float) -> None:
         self._gallery_click_modifiers = gesture.get_current_event_state()
+        target = self.gallery.pick(x, y, Gtk.PickFlags.DEFAULT)
+        self._gallery_click_on_button = False
+        while target is not None and target is not self.gallery:
+            if isinstance(target, Gtk.Button):
+                self._gallery_click_on_button = True
+                break
+            target = target.get_parent()
 
     def _gallery_released(self, gesture: Gtk.GestureClick, count: int,
                           x: float, y: float) -> None:
+        if self._gallery_click_on_button:
+            GLib.idle_add(self._clear_gallery_click_modifiers)
+            return
         child = self.gallery.get_child_at_pos(int(x), int(y))
         modifiers = self._gallery_click_modifiers or gesture.get_current_event_state()
         if child is not None:
@@ -861,6 +884,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
     def _clear_gallery_click_modifiers(self) -> bool:
         self._gallery_click_modifiers = None
+        self._gallery_click_on_button = False
         return False
 
     def _select_gallery_range(self, anchor: str | None, end: str, extend: bool) -> bool:
@@ -1475,7 +1499,13 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.renderer_entry = Gtk.Entry()
         self.renderer_entry.set_placeholder_text(tr("Detectar linux-wallpaperengine no PATH"))
         self.renderer_entry.set_hexpand(True)
+        if self._appimage_renderer_path:
+            self.renderer_entry.set_text(tr("Motor incluído nesta AppImage"))
+            self.renderer_entry.set_editable(False)
+            self.renderer_entry.set_tooltip_text(self._appimage_renderer_path)
         renderer_save = Gtk.Button(label=tr("Salvar"))
+        if self._appimage_renderer_path:
+            renderer_save.set_visible(False)
         renderer_save.connect(
             "clicked",
             lambda *_: self._set_settings(
@@ -1486,7 +1516,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         renderer_controls.append(self.renderer_entry)
         renderer_controls.append(renderer_save)
         self._widget_row(
-            application, tr("Executável do motor"), tr("Caminho personalizado, se necessário."), renderer_controls
+            application,
+            tr("Executável do motor"),
+            tr("Motor integrado à AppImage." if self._appimage_renderer_path else "Caminho personalizado, se necessário."),
+            renderer_controls,
         )
 
         info = _label(
@@ -1577,10 +1610,20 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         for wallpaper_id in ids[offset:offset + 12]:
             item = self.catalog[wallpaper_id]
             content = _box(vertical=True, spacing=5)
-            content.set_size_request(244, 178)
+            content.set_size_request(CARD_WIDTH, CARD_HEIGHT - 2)
+            content.set_halign(Gtk.Align.START)
+            content.set_valign(Gtk.Align.START)
+            content.set_hexpand(False)
             artwork = Gtk.Overlay()
             artwork.add_css_class("artwork")
-            artwork.set_child(_preview(item.get("preview"), 244, 137))
+            artwork.set_size_request(CARD_WIDTH, CARD_PREVIEW_HEIGHT)
+            artwork.set_halign(Gtk.Align.START)
+            artwork.set_hexpand(False)
+            artwork.set_child(_preview(
+                item.get("preview"), CARD_WIDTH, CARD_PREVIEW_HEIGHT,
+                animation_path=item.get("preview_animation"),
+                hover_target=artwork,
+            ))
             type_badge = _badge(tr("CENA" if item.get("type") == "scene" else "VÍDEO"))
             type_badge.add_css_class("type-badge")
             type_badge.set_halign(Gtk.Align.START)
@@ -1597,7 +1640,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             content.append(artwork)
             title = _label(str(item.get("title") or wallpaper_id), css="card-title")
             title.set_ellipsize(Pango.EllipsizeMode.END)
-            title.set_max_width_chars(44)
+            title.set_single_line_mode(True)
+            title.set_size_request(CARD_WIDTH - 20, -1)
+            title.set_max_width_chars(32)
             title.set_margin_start(10)
             title.set_margin_end(10)
             content.append(title)
@@ -1606,6 +1651,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             subtitle = _label(" · ".join(str(tag) for tag in tags[:2]) if tags else kind,
                               css="card-meta")
             subtitle.set_ellipsize(Pango.EllipsizeMode.END)
+            subtitle.set_single_line_mode(True)
+            subtitle.set_size_request(CARD_WIDTH - 20, -1)
             subtitle.set_margin_start(10)
             subtitle.set_margin_end(10)
             subtitle.set_margin_bottom(8)
@@ -1613,6 +1660,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             child = Gtk.FlowBoxChild()
             child.wallpaper_id = wallpaper_id
             child.add_css_class("wallpaper-card")
+            child.set_size_request(CARD_WIDTH, CARD_HEIGHT)
+            child.set_halign(Gtk.Align.START)
+            child.set_hexpand(False)
             child.set_child(content)
             self.gallery.insert(child, -1)
             self._cards[wallpaper_id] = child
@@ -1641,6 +1691,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             heart.set_tooltip_text(tr("Remover dos favoritos" if wallpaper_id in favorites else "Adicionar aos favoritos"))
             heart.connect("clicked", lambda *_args, item_id=wallpaper_id: self._toggle_favorite(item_id))
             container.append(heart)
+
+    def _refresh_card_indicators_once(self) -> bool:
+        self._refresh_card_indicators()
+        return False
 
     def _filter_cards(self) -> None:
         query = self.search.get_text().strip().casefold()
@@ -1706,7 +1760,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.selected_id = wallpaper_id if wallpaper_id in self.catalog else None
         self.detail_shell.set_visible(self.selected_id is not None)
         self._last_pane_width = None
-        GLib.idle_add(self._update_responsive)
+        GLib.idle_add(self._update_responsive_once)
         _clear(self.detail)
         if self.selected_id is None:
             message = _label(
@@ -1838,7 +1892,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         else:
             self._apply_config()
         if "favorites" in settings:
-            self._refresh_card_indicators()
+            GLib.idle_add(self._refresh_card_indicators_once)
             self._refresh_hero()
         if {"playlists", "active_playlist"} & settings.keys():
             self._refresh_playlists()
@@ -1900,7 +1954,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         else:
             self._refresh_status()
         self._refresh_autostart()
-        GLib.idle_add(self._update_responsive)
+        GLib.idle_add(self._update_responsive_once)
 
     def _apply_config(self) -> None:
         self._updating_controls = True
@@ -1919,8 +1973,11 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.scaling_drop.set_selected(SCALINGS.index(scaling) if scaling in SCALINGS else 0)
             self._refresh_language_choices(self.config.get("language", "auto"))
             if not self.renderer_entry.has_focus():
-                renderer = str(self.config.get("renderer_path") or "auto")
-                self.renderer_entry.set_text("" if renderer == "auto" else renderer)
+                if self._appimage_renderer_path:
+                    self.renderer_entry.set_text(tr("Motor incluído nesta AppImage"))
+                else:
+                    renderer = str(self.config.get("renderer_path") or "auto")
+                    self.renderer_entry.set_text("" if renderer == "auto" else renderer)
         finally:
             self._updating_controls = False
         self._theme_updating = True

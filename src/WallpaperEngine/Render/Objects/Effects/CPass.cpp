@@ -9,6 +9,7 @@
 #include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Object.h"
+#include "WallpaperEngine/Data/Model/Property.h"
 
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
@@ -853,6 +854,25 @@ void CPass::setupAttributes () {
 }
 
 void CPass::setupTextureUniforms () {
+
+    // Material usertextures name a wallpaper property, not necessarily an
+    // asset path. SceneTexture properties resolve to the selected texture;
+    // an empty selection leaves the shader's existing texture chain intact.
+    const auto resolveUserTextureSelection = [this] (const std::string& propertyOrTexture)
+	-> std::optional<std::string> {
+	const auto& properties = this->m_renderable.getScene ().getScene ().project.properties;
+	const auto property = properties.find (propertyOrTexture);
+	if (property == properties.end () || !property->second->is<PropertySceneTexture> ()) {
+	    return propertyOrTexture;
+	}
+
+	const std::string& selectedTexture = property->second->getString ();
+	if (selectedTexture.empty ()) {
+	    return std::nullopt;
+	}
+	return selectedTexture;
+    };
+
     // first set default textures extracted from the shader
     // vertex shader doesn't seem to have texture info
     // but for now just set first vertex's textures
@@ -911,9 +931,13 @@ void CPass::setupTextureUniforms () {
 
     for (const auto& [index, textureName] : this->m_pass.usertextures) {
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+	    const auto selectedTexture = resolveUserTextureSelection (textureName);
+	    if (!selectedTexture.has_value ()) {
+		continue;
+	    }
+	    auto texture = selectedTexture->find ("_rt_") == 0 || selectedTexture->find ("_alias_") == 0
+		? this->resolveFBO (*selectedTexture)
+		: this->getContext ().resolveTexture (*selectedTexture);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -948,9 +972,13 @@ void CPass::setupTextureUniforms () {
 
     for (const auto& [index, textureName] : this->m_override.usertextures) {
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+	    const auto selectedTexture = resolveUserTextureSelection (textureName);
+	    if (!selectedTexture.has_value ()) {
+		continue;
+	    }
+	    auto texture = selectedTexture->find ("_rt_") == 0 || selectedTexture->find ("_alias_") == 0
+		? this->resolveFBO (*selectedTexture)
+		: this->getContext ().resolveTexture (*selectedTexture);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1016,8 +1044,8 @@ void CPass::setupUniforms () {
     this->addUniform ("g_LightSkylightColor", sceneData.colors.skylight->value->getVec3 ());
     // register variables like brightness and alpha with some default value
     this->addUniform ("g_Brightness", renderable.getBrightness ());
-    this->addUniform ("g_UserAlpha", renderable.getUserAlpha ());
-    this->addUniform ("g_Alpha", renderable.getAlpha ());
+    this->addUniform ("g_UserAlpha", &renderable.getUserAlpha ());
+    this->addUniform ("g_Alpha", &renderable.getAlpha ());
     this->addUniform ("g_Color", renderable.getColor ());
     this->addUniform ("g_Color4", renderable.getColor4 ());
     if (!this->m_uniforms.contains ("g_CompositeColor")) {
