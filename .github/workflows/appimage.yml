@@ -39,7 +39,7 @@ jobs:
       - name: Configure and build engine
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-          cmake --build build --target linux-wallpaperengine --parallel 2
+          cmake --build build --parallel 2
 
       - name: Download appimagetool
         run: |

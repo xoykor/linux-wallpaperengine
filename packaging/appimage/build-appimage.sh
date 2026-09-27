@@ -91,7 +91,9 @@ mkdir -p -- "${ENGINE_DIR}" "${FRONTEND_DIR}" \
     "${APPDIR}/usr/share/applications" \
     "${APPDIR}/usr/share/icons/hicolor/scalable/apps"
 
-cmake --install "${BUILD_DIR}" --prefix "${ENGINE_DIR}"
+if ! cmake --install "${BUILD_DIR}" --prefix "${ENGINE_DIR}"; then
+    fail 'CMake install failed; build all CMake targets before packaging.'
+fi
 python3 - "${ROOT}/app/wallpaper_engine_app" "${FRONTEND_DIR}" <<'PY'
 from pathlib import Path
 import shutil

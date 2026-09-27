@@ -12,7 +12,7 @@ Configure and build the CMake target first, then install `appimagetool` 1.9.1 or
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target linux-wallpaperengine --parallel 2
+cmake --build build --parallel 2
 packaging/appimage/build-appimage.sh \
   --build-dir build \
   --output-dir outputs \
