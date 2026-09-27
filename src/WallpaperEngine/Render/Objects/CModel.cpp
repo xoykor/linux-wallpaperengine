@@ -10,10 +10,13 @@
 #include <cstring>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <string_view>
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
+
+extern float g_Time;
 
 CModel::CModel (Wallpapers::CScene& scene, const ModelObject& model) :
     CObject (scene, model), CRenderable (scene, model, *model.material), ScriptableObject (scene, model),
@@ -24,6 +27,19 @@ CModel::CModel (Wallpapers::CScene& scene, const ModelObject& model) :
     this->registerProperty ("visible", *model.visible->value);
     this->registerProperty ("alpha", *model.alpha->value);
     this->registerProperty ("color", *model.color->value);
+
+    for (const auto& layer : model.animationLayers) {
+	const std::string prefix = "animationLayer" + std::to_string (layer->id) + "_";
+	this->registerProperty (prefix + "rate", *layer->rate->value);
+	this->registerProperty (prefix + "visible", *layer->visible->value);
+	this->registerProperty (prefix + "blend", *layer->blend->value);
+	this->registerProperty (prefix + "animation", *layer->animation->value);
+    }
+
+    this->registerMaterialProperties ("material", *model.material);
+    for (size_t materialIndex = 0; materialIndex < model.extraMaterials.size (); materialIndex++) {
+	this->registerMaterialProperties ("extraMaterial" + std::to_string (materialIndex), *model.extraMaterials[materialIndex]);
+    }
 
     this->detectTexture ();
 }
@@ -122,8 +138,7 @@ bool CModel::loadMesh () {
 	    break;
 	}
 
-	const auto* nameEnd
-	    = static_cast<const char*> (std::memchr (data.data () + offset, 0, data.size () - offset));
+	const auto* nameEnd = static_cast<const char*> (std::memchr (data.data () + offset, 0, data.size () - offset));
 	if (nameEnd == nullptr) {
 	    sLog.error ("Unterminated submesh material name in ", m_model.modelFile);
 	    break;
@@ -202,6 +217,10 @@ bool CModel::loadMesh () {
 	submesh.indexCount = indexCount;
 	submesh.stride = static_cast<GLsizei> (vertexStride);
 	submesh.uvOffset = uvOffset;
+	submesh.skinned = vertexTag == 0x0180000fu;
+	if (submesh.skinned) {
+	    submesh.bindVertices.assign (data.data () + verticesOffset, data.data () + verticesOffset + vertexBytes);
+	}
 
 	if (index == 0) {
 	    submesh.material = m_model.material.get ();
@@ -228,7 +247,134 @@ bool CModel::loadMesh () {
     }
 
     glBindVertexArray (static_cast<GLuint> (previousVAO));
+    this->setupAnimationLayers (data);
     return !m_submeshes.empty ();
+}
+
+void CModel::setupAnimationLayers (const std::vector<char>& modelData) {
+    if (m_model.animationLayers.empty ()) {
+	return;
+    }
+
+    std::string error;
+    auto parsed = PuppetModel::parse (modelData, error);
+    if (!parsed.has_value () || !parsed->hasAnimation ()) {
+	sLog.out ("Skinned model ", m_model.modelFile, " has no usable skeleton/animation: ", error);
+	return;
+    }
+    m_puppetModel = std::move (*parsed);
+
+    for (const auto& layer : m_model.animationLayers) {
+	const auto animationId = static_cast<uint32_t> (layer->animation->value->getInt ());
+	const auto* clip = m_puppetModel->findClip (animationId);
+	if (clip == nullptr) {
+	    sLog.out ("Model ", m_model.modelFile, " has no animation clip ", animationId, "; layer ignored");
+	    continue;
+	}
+	m_animationLayers.push_back ({ .clip = clip, .layer = layer.get () });
+    }
+
+    sLog.out (
+	"Loaded skinned model ", m_model.modelFile, " bones=", m_puppetModel->bones.size (),
+	" clips=", m_puppetModel->clips.size (), " activeLayers=", m_animationLayers.size ()
+    );
+}
+
+void CModel::updateSkinning () {
+    if (!m_puppetModel.has_value () || m_animationLayers.empty ()) {
+	return;
+    }
+
+    m_activeAnimationLayers.clear ();
+    for (const auto& binding : m_animationLayers) {
+	if (!binding.layer->visible->value->getBool ()) {
+	    continue;
+	}
+	m_activeAnimationLayers.push_back (
+	    {
+		.clip = binding.clip,
+		.rate = binding.layer->rate->value->getFloat (),
+		.blend = binding.layer->blend->value->getFloat (),
+		.additive = binding.layer->additive,
+	    }
+	);
+    }
+    if (m_activeAnimationLayers.empty ()) {
+	for (auto& submesh : m_submeshes) {
+	    if (!submesh.skinned || submesh.bindVertices.empty ()) {
+		continue;
+	    }
+	    glBindBuffer (GL_ARRAY_BUFFER, submesh.vbo);
+	    glBufferSubData (
+		GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr> (submesh.bindVertices.size ()), submesh.bindVertices.data ()
+	    );
+	}
+	return;
+    }
+
+    m_puppetModel->evaluateSkinning (m_activeAnimationLayers, static_cast<double> (g_Time), m_skinMatrices);
+    for (auto& submesh : m_submeshes) {
+	if (!submesh.skinned || submesh.bindVertices.empty ()) {
+	    continue;
+	}
+	constexpr size_t stride = 80;
+	constexpr size_t normalOffset = 12;
+	constexpr size_t tangentOffset = 24;
+	constexpr size_t indicesOffset = 40;
+	constexpr size_t weightsOffset = 56;
+	m_skinnedVertexScratch = submesh.bindVertices;
+	const size_t vertexCount = m_skinnedVertexScratch.size () / stride;
+	for (size_t vertex = 0; vertex < vertexCount; vertex++) {
+	    char* v = m_skinnedVertexScratch.data () + vertex * stride;
+	    float position[3], normal[3], tangent[4], weights[4];
+	    uint32_t indices[4];
+	    std::memcpy (position, v, sizeof (position));
+	    std::memcpy (normal, v + normalOffset, sizeof (normal));
+	    std::memcpy (tangent, v + tangentOffset, sizeof (tangent));
+	    std::memcpy (indices, v + indicesOffset, sizeof (indices));
+	    std::memcpy (weights, v + weightsOffset, sizeof (weights));
+
+	    glm::vec4 skinnedPosition (0.0f);
+	    glm::vec3 skinnedNormal (0.0f);
+	    glm::vec3 skinnedTangent (0.0f);
+	    float totalWeight = 0.0f;
+	    for (int influence = 0; influence < 4; influence++) {
+		const float weight = weights[influence];
+		const uint32_t bone = indices[influence];
+		if (weight <= 0.0f || bone >= m_skinMatrices.size ()) {
+		    continue;
+		}
+		const auto& skin = m_skinMatrices[bone];
+		skinnedPosition += skin * glm::vec4 (position[0], position[1], position[2], 1.0f) * weight;
+		skinnedNormal += glm::mat3 (skin) * glm::vec3 (normal[0], normal[1], normal[2]) * weight;
+		skinnedTangent += glm::mat3 (skin) * glm::vec3 (tangent[0], tangent[1], tangent[2]) * weight;
+		totalWeight += weight;
+	    }
+	    if (totalWeight <= 1e-6f) {
+		continue;
+	    }
+	    const float inverseWeight = 1.0f / totalWeight;
+	    skinnedPosition *= inverseWeight;
+	    if (glm::length (skinnedNormal) > 1e-6f) {
+		skinnedNormal = glm::normalize (skinnedNormal);
+	    } else {
+		skinnedNormal = glm::vec3 (normal[0], normal[1], normal[2]);
+	    }
+	    if (glm::length (skinnedTangent) > 1e-6f) {
+		skinnedTangent = glm::normalize (skinnedTangent);
+	    } else {
+		skinnedTangent = glm::vec3 (tangent[0], tangent[1], tangent[2]);
+	    }
+	    const glm::vec3 outPosition (skinnedPosition);
+	    std::memcpy (v, glm::value_ptr (outPosition), sizeof (position));
+	    std::memcpy (v + normalOffset, glm::value_ptr (skinnedNormal), sizeof (normal));
+	    std::memcpy (v + tangentOffset, glm::value_ptr (skinnedTangent), sizeof (tangent) - sizeof (float));
+	}
+	glBindBuffer (GL_ARRAY_BUFFER, submesh.vbo);
+	glBufferSubData (
+	    GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr> (m_skinnedVertexScratch.size ()), m_skinnedVertexScratch.data ()
+	);
+    }
 }
 
 void CModel::setupPass (Submesh& submesh) {
@@ -243,9 +389,8 @@ void CModel::setupPass (Submesh& submesh) {
     // authored albedo/material path as the global fallback instead.
     submesh.passOverride->combos["LIGHTING"] = 0;
 
-    submesh.pass = new Effects::CPass (
-	*this, submesh.fboProvider, firstPass, *submesh.passOverride, std::nullopt, std::nullopt
-    );
+    submesh.pass
+	= new Effects::CPass (*this, submesh.fboProvider, firstPass, *submesh.passOverride, std::nullopt, std::nullopt);
 
     submesh.pass->setDestination (this->getScene ().getFBO ());
     submesh.pass->setInput (this->getTexture ());
@@ -317,8 +462,7 @@ float bezierEase (const float t, const float x1, const float x2) {
     float s = t;
     for (int i = 0; i < 6; i++) {
 	const float inv = 1.0f - s;
-	const float dx
-	    = 3.0f * inv * inv * x1 + 6.0f * inv * s * (x2 - x1) + 3.0f * s * s * (1.0f - x2);
+	const float dx = 3.0f * inv * inv * x1 + 6.0f * inv * s * (x2 - x1) + 3.0f * s * s * (1.0f - x2);
 	if (std::abs (dx) < 1e-6f) {
 	    break;
 	}
@@ -357,8 +501,6 @@ float evalChannel (const AnimationChannel& channel, const float frame, const flo
     return fallback;
 }
 }
-
-extern float g_Time;
 
 glm::vec3 CModel::effectiveAngles () const {
     const glm::vec3 authored = m_model.angles->value->getVec3 ();
@@ -416,11 +558,9 @@ void CModel::updateMatrices () {
 	    const float nearz = std::max (camera.getNearZ (), 1.0f);
 	    const float farz = std::max (camera.getFarZ (), eyeZ + 10.0f * sceneHeight);
 
-	    const glm::mat4 projection
-		= glm::perspective (projectionFov, sceneWidth / sceneHeight, nearz, farz);
-	    const glm::mat4 view = glm::lookAt (
-		glm::vec3 (0.0f, 0.0f, eyeZ), glm::vec3 (0.0f), glm::vec3 (0.0f, 1.0f, 0.0f)
-	    );
+	    const glm::mat4 projection = glm::perspective (projectionFov, sceneWidth / sceneHeight, nearz, farz);
+	    const glm::mat4 view
+		= glm::lookAt (glm::vec3 (0.0f, 0.0f, eyeZ), glm::vec3 (0.0f), glm::vec3 (0.0f, 1.0f, 0.0f));
 	    m_viewProjectionMatrix = projection * view;
 	    m_eyePosition = glm::vec3 (0.0f, 0.0f, eyeZ);
 	} else {
@@ -440,6 +580,7 @@ void CModel::render () {
     }
 
     this->updateMatrices ();
+    this->updateSkinning ();
     for (const auto& submesh : m_submeshes) {
 	submesh.pass->render ();
     }

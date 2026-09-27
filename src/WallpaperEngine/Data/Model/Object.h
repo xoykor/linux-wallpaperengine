@@ -106,6 +106,7 @@ struct ImageEffect {
  */
 struct ImageAnimationLayer {
     int id;
+    bool additive = false;
     UserSettingUniquePtr rate;
     UserSettingUniquePtr visible;
     UserSettingUniquePtr blend;
@@ -671,8 +672,25 @@ struct ModelObjectData {
     std::string modelFile;
     MaterialUniquePtr material;
     std::vector<MaterialUniquePtr> extraMaterials;
+    /** Skeletal animation layers authored for skinned .mdl models. */
+    std::vector<ImageAnimationLayerUniquePtr> animationLayers;
     bool perspective = false;
     std::unique_ptr<PropertyAnimation> anglesAnimation;
+};
+
+struct CameraObjectData {
+    std::string camera;
+    std::string path;
+    std::string queueMode;
+    UserSettingUniquePtr fov;
+    UserSettingUniquePtr zoom;
+};
+
+class CameraObject final : public Object, public CameraObjectData {
+public:
+    explicit CameraObject (ObjectData data, CameraObjectData cameraData) noexcept :
+	Object (std::move (data)), CameraObjectData (std::move (cameraData)) { }
+    ~CameraObject () override = default;
 };
 
 class ModelObject : public Object, public ModelObjectData {

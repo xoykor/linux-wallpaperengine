@@ -3,7 +3,6 @@
 #include "CRenderable.h"
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <optional>
@@ -51,8 +50,7 @@ float bezierEase (const float t, const float x1, const float x2) {
     float s = t;
     for (int i = 0; i < 6; i++) {
 	const float inv = 1.0f - s;
-	const float dx
-	    = 3.0f * inv * inv * x1 + 6.0f * inv * s * (x2 - x1) + 3.0f * s * s * (1.0f - x2);
+	const float dx = 3.0f * inv * inv * x1 + 6.0f * inv * s * (x2 - x1) + 3.0f * s * s * (1.0f - x2);
 	if (std::abs (dx) < 1e-6f) {
 	    break;
 	}
@@ -190,8 +188,7 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 
 		    local.origin.x = resolved.origin.x + attachmentOffset.x + childOffset.x;
 		    local.origin.y = resolved.origin.y + attachmentOffset.y + childOffset.y;
-		    local.origin.z = resolved.origin.z
-			+ (attachmentOrigin.z + local.origin.z) * resolved.scale.z;
+		    local.origin.z = resolved.origin.z + (attachmentOrigin.z + local.origin.z) * resolved.scale.z;
 		    local.scale *= resolved.scale;
 		    local.angle += resolved.angle + attachmentAngle;
 		    resolved = local;
@@ -221,6 +218,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     m_modelViewProjectionPassInverse (glm::inverse (m_modelViewProjectionPass)), m_modelViewProjectionCopyInverse (),
     m_modelMatrix (), m_viewProjectionMatrix (), m_image (image), m_pos (), m_initialized (false) {
     this->m_animatedAlpha = image.alpha->value->getFloat ();
+    this->m_color4Cache = image.color->value->getVec4 ();
+    this->m_color4Cache.a *= this->m_animatedAlpha;
     // register any properties in use on this object
     this->registerProperty ("origin", *image.origin->value);
     this->registerProperty ("scale", *image.scale->value);
@@ -229,6 +228,40 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("alpha", *image.alpha->value);
     this->registerProperty ("color", *image.color->value);
     this->registerProperty ("parallaxDepth", *image.parallaxDepth->value);
+
+    for (const auto& layer : image.animationLayers) {
+	const std::string prefix = "animationLayer" + std::to_string (layer->id) + "_";
+	this->registerProperty (prefix + "rate", *layer->rate->value);
+	this->registerProperty (prefix + "visible", *layer->visible->value);
+	this->registerProperty (prefix + "blend", *layer->blend->value);
+	this->registerProperty (prefix + "animation", *layer->animation->value);
+    }
+
+    this->registerMaterialProperties ("material", *image.model->material);
+
+    for (const auto& effect : image.effects) {
+	const std::string effectPrefix = "effect" + std::to_string (effect->id);
+	this->registerProperty (effectPrefix + "_visible", *effect->visible->value);
+	for (size_t overrideIndex = 0; overrideIndex < effect->passOverrides.size (); overrideIndex++) {
+	    const auto& passOverride = *effect->passOverrides[overrideIndex];
+	    for (const auto& [name, setting] : passOverride.constants) {
+		if (setting != nullptr && setting->value != nullptr) {
+		    this->registerProperty (
+			effectPrefix + "_override" + std::to_string (overrideIndex) + "_" + name,
+			*setting->value
+		    );
+		}
+	    }
+	}
+	for (size_t passIndex = 0; passIndex < effect->effect->passes.size (); passIndex++) {
+	    const auto& pass = *effect->effect->passes[passIndex];
+	    if (pass.material.has_value ()) {
+		this->registerMaterialProperties (
+		    effectPrefix + "_pass" + std::to_string (passIndex), **pass.material
+		);
+	    }
+	}
+    }
 
     // get scene width and height to calculate positions
     auto scene_width = static_cast<float> (scene.getWidth ());
@@ -242,12 +275,11 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     // Composition layers render their authored child subtree into a private full-frame
     // target. Their material samples _rt_FullFrameBuffer, so shadow that name locally.
     if (this->isCompositionLayer () && scene.hasAuthoredChildren (image.id)) {
-	const glm::vec2 compositionSize {
-	    static_cast<float> (scene.getWidth ()), static_cast<float> (scene.getHeight ())
-	};
+	const glm::vec2 compositionSize { static_cast<float> (scene.getWidth ()),
+					  static_cast<float> (scene.getHeight ()) };
 	auto composition = scene.create (
-	    "_rt_compositionLayer_" + std::to_string (image.id),
-	    TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, compositionSize, compositionSize
+	    "_rt_compositionLayer_" + std::to_string (image.id), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f,
+	    compositionSize, compositionSize
 	);
 	this->m_compositionFBO = composition;
 	this->alias ("_rt_FullFrameBuffer", composition);
@@ -601,12 +633,6 @@ void CImage::uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::
 }
 
 void CImage::updatePuppetAnimation () {
-    // Diagnostic switch: keep the uploaded puppet mesh in its authored bind pose.
-    // Useful for separating mesh/material issues from skeletal animation issues.
-    if (std::getenv ("LWE_PUPPET_BINDPOSE") != nullptr) {
-	return;
-    }
-
     if (!this->m_hasPuppetMesh || !this->m_puppetModel.has_value () || this->m_puppetLayers.empty ()
 	|| !this->m_puppetModel->hasAnimation ()) {
 	return;
@@ -622,6 +648,7 @@ void CImage::updatePuppetAnimation () {
 		.clip = binding.clip,
 		.rate = binding.layer->rate->value->getFloat (),
 		.blend = binding.layer->blend->value->getFloat (),
+		.additive = binding.layer->additive,
 	    }
 	);
     }
@@ -897,7 +924,7 @@ void CImage::setupPasses () {
 	std::shared_ptr<const CFBO> prevDrawTo = drawTo;
 	bool writesToTarget = false;
 	const bool isFirstPass = first;
-	const bool usePuppetGeometry = this->m_hasPuppetMesh && std::getenv ("LWE_PUPPET_QUAD") == nullptr;
+	const bool usePuppetGeometry = this->m_hasPuppetMesh;
 	GLuint spacePosition = (isFirstPass)
 	    ? (usePuppetGeometry ? this->m_puppetSpacePosition : this->getCopySpacePosition ())
 	    : this->getPassSpacePosition ();
@@ -1019,6 +1046,8 @@ void CImage::render () {
     }
 
     this->updateAlphaAnimation ();
+    this->m_color4Cache = this->m_image.color->value->getVec4 ();
+    this->m_color4Cache.a *= this->getAlpha ();
 
     glColorMask (true, true, true, true);
 
@@ -1045,10 +1074,7 @@ void CImage::render () {
 
     for (const auto end = this->m_passes.end (); cur != end; ++cur) {
 	if (std::next (cur) == end) {
-	    glColorMask (
-		true, true, true,
-		this->getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE
-	    );
+	    glColorMask (true, true, true, this->getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE);
 	}
 
 	(*cur)->render ();
@@ -1082,7 +1108,7 @@ const float& CImage::getAlpha () const {
 
 const glm::vec3& CImage::getColor () const { return this->m_image.color->value->getVec3 (); }
 
-const glm::vec4& CImage::getColor4 () const { return this->m_image.color->value->getVec4 (); }
+const glm::vec4& CImage::getColor4 () const { return this->m_color4Cache; }
 
 const glm::vec3& CImage::getCompositeColor () const { return this->m_image.color->value->getVec3 (); }
 
@@ -1232,8 +1258,8 @@ void CImage::updateScreenSpacePosition () {
     }
 
     const auto& camera = this->getScene ().getCamera ();
-    glm::mat4 mvp = camera.isOrthogonal () ? camera.getProjection () * camera.getLookAt ()
-						       : camera.getScreenProjection ();
+    glm::mat4 mvp
+	= camera.isOrthogonal () ? camera.getProjection () * camera.getLookAt () : camera.getScreenProjection ();
 
     // Apply parallax displacement if enabled
     if (this->getScene ().getScene ().camera.parallax.enabled
@@ -1246,7 +1272,6 @@ void CImage::updateScreenSpacePosition () {
 	const float y = (depth.y + parallaxAmount) * displacement->y * this->m_size.y;
 	mvp = glm::translate (mvp, { x, y, 0.0f });
     }
-
 
     // Rotate the image first so parallax stays aligned with the screen axes.
     mvp *= rotModel;
@@ -1279,20 +1304,19 @@ std::optional<glm::mat4> CImage::getPuppetAttachmentMatrix (const std::string& n
     }
 
     std::vector<PuppetModel::ActiveLayer> active;
-    if (std::getenv ("LWE_PUPPET_BINDPOSE") == nullptr) {
-	active.reserve (this->m_puppetLayers.size ());
-	for (const auto& binding : this->m_puppetLayers) {
-	    if (!binding.layer->visible->value->getBool ()) {
-		continue;
-	    }
-	    active.push_back (
-		PuppetModel::ActiveLayer {
-		    .clip = binding.clip,
-		    .rate = binding.layer->rate->value->getFloat (),
-		    .blend = binding.layer->blend->value->getFloat (),
-		}
-	    );
+    active.reserve (this->m_puppetLayers.size ());
+    for (const auto& binding : this->m_puppetLayers) {
+	if (!binding.layer->visible->value->getBool ()) {
+	    continue;
 	}
+	active.push_back (
+	    PuppetModel::ActiveLayer {
+		.clip = binding.clip,
+		.rate = binding.layer->rate->value->getFloat (),
+		.blend = binding.layer->blend->value->getFloat (),
+		.additive = binding.layer->additive,
+	    }
+	);
     }
 
     std::vector<glm::mat4> world;

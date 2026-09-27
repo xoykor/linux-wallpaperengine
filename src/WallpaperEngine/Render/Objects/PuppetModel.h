@@ -48,6 +48,7 @@ public:
 	const Clip* clip { nullptr };
 	float rate { 1.0f };
 	float blend { 1.0f };
+	bool additive { false };
     };
 
     // mesh (bind pose, image-local coordinates)
@@ -65,9 +66,8 @@ public:
     [[nodiscard]] const Attachment* findAttachment (const std::string& name) const;
     [[nodiscard]] bool hasAnimation () const { return !bones.empty () && !clips.empty (); }
 
-    void evaluateWorldPose (
-	const std::vector<ActiveLayer>& layers, double time, std::vector<glm::mat4>& outWorld
-    ) const;
+    void
+    evaluateWorldPose (const std::vector<ActiveLayer>& layers, double time, std::vector<glm::mat4>& outWorld) const;
     void evaluateSkinning (const std::vector<ActiveLayer>& layers, double time, std::vector<glm::mat4>& out) const;
 
     void skinPositions (const std::vector<glm::mat4>& skin, std::vector<glm::vec3>& out) const;

@@ -116,6 +116,7 @@ private:
      *  may need to be remapped from texture-local space into the image quad. */
     bool m_puppetScreenSpace = false;
     std::vector<GLfloat> m_puppetRawPositions = {};
+    mutable glm::vec4 m_color4Cache = glm::vec4 (1.0f);
 
     std::optional<PuppetModel> m_puppetModel = std::nullopt;
     struct PuppetLayerBinding {

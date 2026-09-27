@@ -22,6 +22,8 @@ public:
     void setOrthogonalProjection (const float width, const float height);
     void setPerspectiveProjection (const float width, const float height);
     void setScriptedView (const glm::vec3& eye, const glm::vec3& center);
+    void setScriptedView (const glm::vec3& eye, const glm::vec3& center, const glm::vec3& up, float fov);
+    void clearScriptedView ();
 
     [[nodiscard]] const glm::vec3& getCenter () const;
     [[nodiscard]] const glm::vec3& getEye () const;
@@ -48,6 +50,8 @@ private:
     bool m_hasScriptedView = false;
     glm::vec3 m_scriptedEye = {};
     glm::vec3 m_scriptedCenter = {};
+    glm::vec3 m_scriptedUp = { 0.0f, 1.0f, 0.0f };
+    float m_scriptedFov = 0.0f;
     const SceneData::Camera& m_camera;
     Wallpapers::CScene& m_scene;
 };

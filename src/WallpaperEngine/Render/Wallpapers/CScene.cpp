@@ -1,3 +1,4 @@
+#include "WallpaperEngine/Render/Objects/CCameraObject.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
 #include "WallpaperEngine/Render/Objects/CModel.h"
 #include "WallpaperEngine/Render/Objects/CParticle.h"
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <glm/gtc/matrix_transform.hpp>
 #include <ranges>
 #include <set>
 
@@ -142,7 +144,7 @@ CScene::CScene (
 	std::vector<CObject*> eyeLayers;
 	eyeLayers.reserve (eyeLayerPositions.size ());
 	for (const auto& [index, role] : eyeLayerPositions) {
-	    (void) role;
+	    (void)role;
 	    eyeLayers.push_back (this->m_objectsByRenderOrder[index]);
 	}
 	std::ranges::stable_sort (eyeLayers, [] (const CObject* left, const CObject* right) {
@@ -306,6 +308,8 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 
     if (object.is<Light> ()) {
 	return nullptr;
+    } else if (object.is<CameraObject> ()) {
+	renderObject = new Objects::CCameraObject (*this, *object.as<CameraObject> ());
     } else if (object.is<Image> ()) {
 	renderObject = new Objects::CImage (*this, *object.as<Image> ());
     } else if (object.is<ModelObject> ()) {
@@ -398,6 +402,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     // run a tick in the javascript logic
     this->getScriptEngine ().tick ();
+    this->updateActiveCamera ();
 
     // update main textures for images
     for (const auto& cur : this->m_objectsByRenderOrder) {
@@ -528,9 +533,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    glBindFramebuffer (GL_READ_FRAMEBUFFER, source->getFramebuffer ());
 	    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, target->getFramebuffer ());
 	    glBlitFramebuffer (
-		0, 0, source->getRealWidth (), source->getRealHeight (),
-		0, 0, target->getRealWidth (), target->getRealHeight (),
-		GL_COLOR_BUFFER_BIT, GL_LINEAR
+		0, 0, source->getRealWidth (), source->getRealHeight (), 0, 0, target->getRealWidth (),
+		target->getRealHeight (), GL_COLOR_BUFFER_BIT, GL_LINEAR
 	    );
 	}
 
@@ -579,6 +583,66 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    cur->render ();
 	}
     }
+}
+
+void CScene::updateActiveCamera () {
+    Objects::CCameraObject* active = nullptr;
+    for (const auto& object : this->getScene ().objects) {
+	if (!object->is<CameraObject> () || !object->groupVisible->value->getBool ()) {
+	    continue;
+	}
+	const auto* data = object->as<CameraObject> ();
+	if (data->camera != "default") {
+	    continue;
+	}
+	const auto it = this->m_objects.find (object->id);
+	if (it != this->m_objects.end ()) {
+	    if (auto* camera = dynamic_cast<Objects::CCameraObject*> (it->second)) {
+		active = camera; // Wallpaper Engine selects the last visible camera asset.
+	    }
+	}
+    }
+    if (active == nullptr) {
+	this->m_camera->clearScriptedView ();
+	return;
+    }
+
+    std::vector<Scripting::ScriptableObject*> hierarchy;
+    Render::CObject* current = active;
+    for (int depth = 0; current != nullptr && depth < 32; depth++) {
+	if (auto* layer = dynamic_cast<Scripting::ScriptableObject*> (current)) {
+	    hierarchy.push_back (layer);
+	}
+	const auto parent = current->getObject ().parent;
+	if (!parent.has_value ()) {
+	    break;
+	}
+	const auto it = this->m_objects.find (*parent);
+	if (it == this->m_objects.end ()) {
+	    break;
+	}
+	current = it->second;
+    }
+
+    glm::mat4 world (1.0f);
+    for (auto it = hierarchy.rbegin (); it != hierarchy.rend (); ++it) {
+	const glm::vec3 origin = (*it)->getProperty ("origin").getVec3 ();
+	const glm::vec3 angles = (*it)->getProperty ("angles").getVec3 ();
+	const glm::vec3 scale = (*it)->getProperty ("scale").getVec3 ();
+	glm::mat4 local = glm::translate (glm::mat4 (1.0f), origin);
+	local = glm::rotate (local, angles.z, glm::vec3 (0, 0, 1));
+	local = glm::rotate (local, angles.y, glm::vec3 (0, 1, 0));
+	local = glm::rotate (local, angles.x, glm::vec3 (1, 0, 0));
+	local = glm::scale (local, scale);
+	world *= local;
+    }
+
+    const glm::vec3 eye (world[3]);
+    const glm::mat3 rotation (world);
+    const glm::vec3 forward = glm::normalize (rotation * glm::vec3 (0, 0, -1));
+    const glm::vec3 up = glm::normalize (rotation * glm::vec3 (0, 1, 0));
+    const float fov = active->getCameraObject ().fov->value->getFloat ();
+    this->m_camera->setScriptedView (eye, eye + forward, up, fov);
 }
 
 void CScene::updateMouse (const glm::ivec4& viewport) {

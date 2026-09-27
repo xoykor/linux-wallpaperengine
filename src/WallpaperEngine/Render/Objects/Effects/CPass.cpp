@@ -659,6 +659,8 @@ void CPass::render () {
     this->prepareFeedbackSnapshot ();
     this->setupRenderFramebuffer ();
     this->setupRenderTexture ();
+    // Refresh pointer-backed RGBA uniforms so animated alpha and color stay current.
+    (void) this->m_renderable.getColor4 ();
     this->setupRenderUniforms ();
     this->setupRenderReferenceUniforms ();
     this->setupRenderAttributes ();
@@ -1047,7 +1049,7 @@ void CPass::setupUniforms () {
     this->addUniform ("g_UserAlpha", &renderable.getUserAlpha ());
     this->addUniform ("g_Alpha", &renderable.getAlpha ());
     this->addUniform ("g_Color", renderable.getColor ());
-    this->addUniform ("g_Color4", renderable.getColor4 ());
+    this->addUniform ("g_Color4", &renderable.getColor4 ());
     if (!this->m_uniforms.contains ("g_CompositeColor")) {
 	this->addUniform ("g_CompositeColor", renderable.getCompositeColor ());
     }

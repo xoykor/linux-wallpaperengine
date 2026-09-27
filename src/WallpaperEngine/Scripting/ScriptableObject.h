@@ -2,6 +2,10 @@
 #include "WallpaperEngine/Data/Model/Types.h"
 #include "WallpaperEngine/Render/CObject.h"
 
+namespace WallpaperEngine::Data::Model {
+struct Material;
+}
+
 namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
 }
@@ -23,6 +27,7 @@ public:
 
 protected:
     void registerProperty (const std::string& name, DynamicValue& value);
+    void registerMaterialProperties (const std::string& prefix, const Data::Model::Material& material);
 
 private:
     std::map<std::string, PropertyEntry> m_properties;

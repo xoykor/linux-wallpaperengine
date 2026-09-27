@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 using namespace WallpaperEngine::Render::Objects;
@@ -407,9 +408,8 @@ bool parseAnimationCandidate (
     const auto channelCount = cur.read<uint32_t> ();
 
     if (!cur.ok || zero0 != 0 || zero1 != 0 || (mode != "loop" && mode != "mirror" && mode != "single")
-	|| !std::isfinite (clip.fps) || clip.fps <= 0.0f || clip.fps > 1000.0f
-	|| clip.frameCount == 0 || clip.frameCount > 1000000 || channelCount == 0
-	|| channelCount > model.bones.size ()) {
+	|| !std::isfinite (clip.fps) || clip.fps <= 0.0f || clip.fps > 1000.0f || clip.frameCount == 0
+	|| clip.frameCount > 1000000 || channelCount == 0 || channelCount > model.bones.size ()) {
 	return false;
     }
 
@@ -462,9 +462,8 @@ bool parseAnimations (const std::vector<char>& data, PuppetModel& model) {
 	// a block-size field and the authored clip count. Large puppet files can
 	// keep all clips under a single MDLA marker, so never cap this scan at 1 MiB.
 	size_t declaredClipCount = 0;
-	if (const auto* headerEnd = static_cast<const char*> (
-		std::memchr (data.data () + mdla, 0, data.size () - mdla)
-	    );
+	if (const auto* headerEnd
+	    = static_cast<const char*> (std::memchr (data.data () + mdla, 0, data.size () - mdla));
 	    headerEnd != nullptr) {
 	    const size_t afterHeader = static_cast<size_t> (headerEnd - data.data ()) + 1;
 	    if (afterHeader + 2 * sizeof (uint32_t) <= data.size ()) {
@@ -483,9 +482,9 @@ bool parseAnimations (const std::vector<char>& data, PuppetModel& model) {
 	    PuppetModel::Clip candidate;
 	    size_t candidateEnd = offset;
 	    if (parseAnimationCandidate (data, offset, model, candidate, candidateEnd)) {
-		const bool duplicate = std::any_of (
-		    found.begin (), found.end (), [&candidate] (const auto& existing) { return existing.id == candidate.id; }
-		);
+		const bool duplicate = std::any_of (found.begin (), found.end (), [&candidate] (const auto& existing) {
+		    return existing.id == candidate.id;
+		});
 		if (!duplicate) {
 		    found.push_back (std::move (candidate));
 		    if (declaredClipCount > 0 && found.size () >= declaredClipCount) {
@@ -516,9 +515,7 @@ bool parseAttachments (const std::vector<char>& data, PuppetModel& model) {
 	return false;
     }
 
-    const auto* headerEnd = static_cast<const char*> (
-	std::memchr (data.data () + mdat, 0, data.size () - mdat)
-    );
+    const auto* headerEnd = static_cast<const char*> (std::memchr (data.data () + mdat, 0, data.size () - mdat));
     if (headerEnd == nullptr) {
 	return false;
     }
@@ -613,10 +610,19 @@ void PuppetModel::evaluateWorldPose (
     outWorld.resize (boneCount);
 
     std::vector<Key> accumulated (boneCount);
-    std::vector<bool> hasRest (boneCount, false);
+    std::vector<bool> hasPose (boneCount, false);
+
+    const auto blendRotation = [] (const glm::vec3& from, const glm::vec3& to, const float amount) {
+	glm::vec3 delta = to - from;
+	for (int axis = 0; axis < 3; axis++) {
+	    delta[axis] = std::remainder (delta[axis], glm::two_pi<float> ());
+	}
+	return from + delta * amount;
+    };
 
     for (const auto& layer : layers) {
-	if (layer.clip == nullptr || layer.blend == 0.0f) {
+	const float blend = std::clamp (layer.blend, 0.0f, 1.0f);
+	if (layer.clip == nullptr || blend == 0.0f) {
 	    continue;
 	}
 	const double phase = time * static_cast<double> (layer.clip->fps) * static_cast<double> (layer.rate);
@@ -628,20 +634,29 @@ void PuppetModel::evaluateWorldPose (
 		continue;
 	    }
 	    const Key rest = channel.front ();
-	    if (!hasRest[b]) {
-		accumulated[b] = rest;
-		hasRest[b] = true;
-	    }
 	    const Key key = sampleChannel (channel, frame);
-	    accumulated[b].position += (key.position - rest.position) * layer.blend;
-	    accumulated[b].rotation += (key.rotation - rest.rotation) * layer.blend;
-	    accumulated[b].scale += (key.scale - rest.scale) * layer.blend;
+	    if (!hasPose[b]) {
+		accumulated[b] = rest;
+		hasPose[b] = true;
+	    }
+
+	    if (layer.additive) {
+		accumulated[b].position += (key.position - rest.position) * blend;
+		accumulated[b].rotation += (key.rotation - rest.rotation) * blend;
+		const glm::vec3 restScale = glm::max (glm::abs (rest.scale), glm::vec3 (1e-6f));
+		const glm::vec3 scaleRatio = key.scale / restScale;
+		accumulated[b].scale *= glm::mix (glm::vec3 (1.0f), scaleRatio, blend);
+	    } else {
+		accumulated[b].position = glm::mix (accumulated[b].position, key.position, blend);
+		accumulated[b].rotation = blendRotation (accumulated[b].rotation, key.rotation, blend);
+		accumulated[b].scale = glm::mix (accumulated[b].scale, key.scale, blend);
+	    }
 	}
     }
 
     for (size_t b = 0; b < boneCount; b++) {
 	glm::mat4 local;
-	if (hasRest[b]) {
+	if (hasPose[b]) {
 	    const auto& key = accumulated[b];
 	    local = glm::translate (glm::mat4 (1.0f), key.position);
 	    local = glm::rotate (local, key.rotation.z, glm::vec3 (0, 0, 1));

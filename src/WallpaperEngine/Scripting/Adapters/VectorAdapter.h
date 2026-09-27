@@ -11,6 +11,7 @@ public:
 
     int length () { return components; }
     JSValue instantiate (Data::Model::DynamicValue& value) override;
+    JSValue instantiateAngles (Data::Model::DynamicValue& value);
     JSValue instantiate (ScriptableObject& object) override;
     /**
      * @return A new, anonymous JSValue representing the vector

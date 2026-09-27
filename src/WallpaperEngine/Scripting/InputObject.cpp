@@ -17,12 +17,16 @@ JSValue get_cursor_world_position (JSContext* ctx, JSValueConst this_val, int ar
 JSValue get_cursor_screen_position (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     JSClassID classId;
     auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
-    auto position = input->getScene ().getMousePositionNormalized ();
+    const auto& scene = input->getScene ();
+    const auto position = scene.getContext ().getInputContext ().getMouseInput ().position ();
+    const auto& output = scene.getContext ().getOutput ();
+    const double x = position.x;
+    const double y = output.getFullHeight () - position.y;
 
     JSValue result = input->getScene ().getScriptEngine ().getAdapters ().vec2->instantiate ();
 
-    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position->x));
-    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, position->y));
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, x));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, y));
 
     return result;
 }

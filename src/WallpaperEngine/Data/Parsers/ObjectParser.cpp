@@ -36,10 +36,8 @@ std::unique_ptr<PropertyAnimation> parsePropertyAnimation (const JSON& property)
 	    AnimationKey parsed {};
 	    parsed.frame = key.value ("frame", 0.0f);
 	    parsed.value = key.value ("value", 0.0f);
-	    parsed.frontX = key.contains ("front") && key["front"].is_object ()
-		? key["front"].value ("x", 1.0f) : 1.0f;
-	    parsed.backX = key.contains ("back") && key["back"].is_object ()
-		? key["back"].value ("x", -1.0f) : -1.0f;
+	    parsed.frontX = key.contains ("front") && key["front"].is_object () ? key["front"].value ("x", 1.0f) : 1.0f;
+	    parsed.backX = key.contains ("back") && key["back"].is_object () ? key["back"].value ("x", -1.0f) : -1.0f;
 	    animation->channels[channel].keys.push_back (parsed);
 	    animation->maxFrame = std::max (animation->maxFrame, parsed.frame);
 	}
@@ -54,6 +52,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto particleIt = it.find ("particle");
     const auto textIt = it.find ("text");
     const auto modelIt = it.find ("model");
+    const auto cameraIt = it.find ("camera");
     const auto lightIt = it.find ("light");
     // use shape to refer to VolumeLight
     const auto shapeIt = it.find ("shape");
@@ -125,18 +124,34 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 		.groupVisible = it.user ("visible", project.properties, true),
 	    };
 	}
+
+    } else if (cameraIt != it.end () && cameraIt->is_string ()) {
+	const auto& properties = project.properties;
+	return std::make_unique<CameraObject> (
+	    std::move (basedata),
+	    CameraObjectData {
+		.camera = cameraIt->get<std::string> (),
+		.path = it.optional ("path", std::string {}),
+		.queueMode = it.optional ("queuemode", std::string ("random")),
+		.fov = it.user ("fov", properties, 50.0f),
+		.zoom = it.user ("zoom", properties, 1.0f),
+	    }
+	);
     } else if (lightIt != it.end ()) {
 	if (!lightIt->is_string ()) {
 	    sLog.error ("Ignoring light with invalid type on object ", basedata.id);
 	    return std::make_unique<Object> (std::move (basedata));
 	}
-	return std::make_unique<Light> (std::move (basedata), LightData {
-	    .type = lightIt->get<std::string> (),
-	    .color = it.user ("color", project.properties, glm::vec3 (1.0f)),
-	    .intensity = it.user ("intensity", project.properties, 1.0f),
-	    .radius = it.user ("radius", project.properties, 1.0f),
-	    .exponent = it.user ("exponent", project.properties, 2.0f),
-	});
+	return std::make_unique<Light> (
+	    std::move (basedata),
+	    LightData {
+		.type = lightIt->get<std::string> (),
+		.color = it.user ("color", project.properties, glm::vec3 (1.0f)),
+		.intensity = it.user ("intensity", project.properties, 1.0f),
+		.radius = it.user ("radius", project.properties, 1.0f),
+		.exponent = it.user ("exponent", project.properties, 2.0f),
+	    }
+	);
     } else if (shapeIt != it.end ()) {
 	sLog.error ("VolumeLight objects are not supported yet");
     } else {
@@ -299,6 +314,7 @@ ObjectParser::parseModelObject (const JSON& it, const Project& project, ObjectDa
     }
 
     const auto& properties = project.properties;
+    const auto& animationLayers = it.optional ("animationlayers");
     std::unique_ptr<PropertyAnimation> anglesAnimation;
 
     if (const auto anglesIt = it.find ("angles"); anglesIt != it.end () && anglesIt->is_object ()) {
@@ -314,10 +330,10 @@ ObjectParser::parseModelObject (const JSON& it, const Project& project, ObjectDa
 		    AnimationKey k {};
 		    k.frame = key.value ("frame", 0.0f);
 		    k.value = key.value ("value", 0.0f);
-		    k.frontX = key.contains ("front") && key["front"].is_object ()
-			? key["front"].value ("x", 1.0f) : 1.0f;
-		    k.backX = key.contains ("back") && key["back"].is_object ()
-			? key["back"].value ("x", -1.0f) : -1.0f;
+		    k.frontX
+			= key.contains ("front") && key["front"].is_object () ? key["front"].value ("x", 1.0f) : 1.0f;
+		    k.backX
+			= key.contains ("back") && key["back"].is_object () ? key["back"].value ("x", -1.0f) : -1.0f;
 		    anglesAnimation->channels[channel].keys.push_back (k);
 		    anglesAnimation->maxFrame = std::max (anglesAnimation->maxFrame, k.frame);
 		}
@@ -341,6 +357,8 @@ ObjectParser::parseModelObject (const JSON& it, const Project& project, ObjectDa
 	    .modelFile = modelFile,
 	    .material = MaterialParser::load (project, materialPaths.front ()),
 	    .extraMaterials = std::move (extraMaterials),
+	    .animationLayers = animationLayers.has_value () ? parseAnimationLayers (*animationLayers, project)
+							    : std::vector<ImageAnimationLayerUniquePtr> {},
 	    .perspective = it.optional ("perspective", false),
 	    .anglesAnimation = std::move (anglesAnimation),
 	}
@@ -360,10 +378,11 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .angles = it.user ("angles", properties, glm::vec3 (0.0f)),
 	    .visible = it.user ("visible", properties, true),
 	    .alpha = it.user ("alpha", properties, 1.0f),
-	    .alphaAnimation = [&it] {
-		const auto alphaIt = it.find ("alpha");
-		return alphaIt != it.end () && alphaIt->is_object () ? parsePropertyAnimation (*alphaIt) : nullptr;
-	    } (),
+	    .alphaAnimation =
+		[&it] {
+		    const auto alphaIt = it.find ("alpha");
+		    return alphaIt != it.end () && alphaIt->is_object () ? parsePropertyAnimation (*alphaIt) : nullptr;
+		}(),
 	    .color = it.color ("color", properties, Builders::ColorBuilder::White),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .size = it.user ("size", properties, glm::vec2 (0.0f))->value->getVec2 (),
@@ -491,6 +510,7 @@ ImageAnimationLayerUniquePtr ObjectParser::parseAnimationLayer (const JSON& it, 
 
     return std::make_unique<ImageAnimationLayer> (ImageAnimationLayer {
 	.id = it.require<int> ("id", "Animation layer must have an id"),
+	.additive = it.optional ("additive", false),
 	.rate = it.user ("rate", properties, 1.0f),
 	.visible = it.user ("visible", properties, false),
 	.blend = it.user ("blend", properties, 1.0f),

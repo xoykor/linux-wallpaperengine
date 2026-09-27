@@ -26,7 +26,9 @@ const glm::vec3& Camera::getEye () const {
     return this->m_hasScriptedView ? this->m_scriptedEye : this->m_camera.configuration.eye;
 }
 
-const glm::vec3& Camera::getUp () const { return this->m_camera.configuration.up; }
+const glm::vec3& Camera::getUp () const {
+    return this->m_hasScriptedView ? this->m_scriptedUp : this->m_camera.configuration.up;
+}
 
 const glm::mat4& Camera::getProjection () const { return this->m_projection; }
 
@@ -42,7 +44,9 @@ float Camera::getWidth () const { return this->m_width; }
 
 float Camera::getHeight () const { return this->m_height; }
 
-float Camera::getFov () const { return this->m_camera.projection.fov->value->getFloat (); }
+float Camera::getFov () const {
+    return this->m_scriptedFov > 0.0f ? this->m_scriptedFov : this->m_camera.projection.fov->value->getFloat ();
+}
 
 float Camera::getOverrideFov () const { return this->m_camera.projection.overrideFov->value->getFloat (); }
 
@@ -81,11 +85,11 @@ void Camera::setPerspectiveProjection (const float width, const float height) {
     const float farz = std::max (this->getFarZ (), nearz + 1.0f);
 
     this->m_projection = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
-        * glm::perspective (glm::radians (this->getFov ()), safeWidth / safeHeight, nearz, farz);
+	* glm::perspective (glm::radians (this->getFov ()), safeWidth / safeHeight, nearz, farz);
 
     const float halfRange = std::max (farz, 1000.0f);
     this->m_screenProjection = glm::ortho<float> (
-        -safeWidth / 2.0f, safeWidth / 2.0f, -safeHeight / 2.0f, safeHeight / 2.0f, -halfRange, halfRange
+	-safeWidth / 2.0f, safeWidth / 2.0f, -safeHeight / 2.0f, safeHeight / 2.0f, -halfRange, halfRange
     );
     this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
     this->m_isOrthogonal = false;
@@ -93,8 +97,7 @@ void Camera::setPerspectiveProjection (const float width, const float height) {
 
 void Camera::setScriptedView (const glm::vec3& eye, const glm::vec3& center) {
     const glm::vec3 delta = center - eye;
-    if (!std::isfinite (eye.x + eye.y + eye.z + center.x + center.y + center.z)
-	|| glm::dot (delta, delta) < 1e-12f) {
+    if (!std::isfinite (eye.x + eye.y + eye.z + center.x + center.y + center.z) || glm::dot (delta, delta) < 1e-12f) {
 	return;
     }
 
@@ -104,5 +107,34 @@ void Camera::setScriptedView (const glm::vec3& eye, const glm::vec3& center) {
 
     if (!this->m_isOrthogonal) {
 	this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
+    }
+}
+
+void Camera::setScriptedView (const glm::vec3& eye, const glm::vec3& center, const glm::vec3& up, const float fov) {
+    const glm::vec3 delta = center - eye;
+    if (!std::isfinite (eye.x + eye.y + eye.z + center.x + center.y + center.z + up.x + up.y + up.z)
+	|| glm::dot (delta, delta) < 1e-12f || glm::dot (up, up) < 1e-12f) {
+	return;
+    }
+
+    this->m_hasScriptedView = true;
+    this->m_scriptedEye = eye;
+    this->m_scriptedCenter = center;
+    this->m_scriptedUp = glm::normalize (up);
+    this->m_scriptedFov = std::isfinite (fov) && fov > 1.0f && fov < 179.0f ? fov : 0.0f;
+
+    if (!this->m_isOrthogonal) {
+	this->setPerspectiveProjection (this->m_width, this->m_height);
+    }
+}
+
+void Camera::clearScriptedView () {
+    if (!this->m_hasScriptedView) {
+	return;
+    }
+    this->m_hasScriptedView = false;
+    this->m_scriptedFov = 0.0f;
+    if (!this->m_isOrthogonal) {
+	this->setPerspectiveProjection (this->m_width, this->m_height);
     }
 }
