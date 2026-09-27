@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import colorsys
 import math
+import os
 import subprocess
 import threading
 import time
@@ -1463,6 +1464,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                             tr("Configure o serviço e o caminho do motor instalado neste computador."))
         self.autostart_switch = Gtk.Switch()
         self.autostart_switch.connect("notify::active", self._autostart_changed)
+        if os.environ.get("LINUX_WALLPAPERENGINE_APPIMAGE") == "1":
+            self.autostart_switch.set_sensitive(False)
         self._widget_row(
             application,
             tr("Iniciar com a sessão"),

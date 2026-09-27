@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APPDIR="${APPDIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
+ENGINE_DIR="${APPDIR}/usr/lib/linux-wallpaperengine"
+
+export PATH="${ENGINE_DIR}:${PATH}"
+export PYTHONPATH="${APPDIR}/usr/lib${PYTHONPATH:+:${PYTHONPATH}}"
+export LD_LIBRARY_PATH="${ENGINE_DIR}:${ENGINE_DIR}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export PYTHONDONTWRITEBYTECODE=1
+export LINUX_WALLPAPERENGINE_APPIMAGE=1
+
+if ! command -v python3 >/dev/null 2>&1; then
+    printf 'Linux Wallpaper Engine requires Python 3 and GTK 4 introspection (PyGObject).\n' >&2
+    exit 1
+fi
+
+if ! python3 -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("GdkPixbuf", "2.0"); from gi.repository import Gtk, GdkPixbuf' >/dev/null 2>&1; then
+    message='Install Python 3, PyGObject, GTK 4 and GdkPixbuf introspection to run this AppImage.'
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --error --title='Linux Wallpaper Engine' --text="${message}" 2>/dev/null || true
+    else
+        printf '%s\n' "${message}" >&2
+    fi
+    exit 1
+fi
+
+if (($#)); then
+    exec python3 -m wallpaper_engine_app "$@"
+fi
+
+socket_ready() {
+    python3 -c 'from wallpaper_engine_app.model import SOCKET_FILE; import socket; client = socket.socket(socket.AF_UNIX); client.settimeout(0.3); client.connect(str(SOCKET_FILE)); client.close()' \
+        >/dev/null 2>&1
+}
+
+# Reuse an existing user daemon, otherwise keep one alive for this GUI session.
+if ! socket_ready; then
+    python3 -m wallpaper_engine_app --daemon >/dev/null 2>&1 &
+    DAEMON_PID=$!
+    cleanup_daemon() {
+        if kill -0 "${DAEMON_PID}" 2>/dev/null; then
+            kill -TERM "${DAEMON_PID}" 2>/dev/null || true
+        fi
+        wait "${DAEMON_PID}" 2>/dev/null || true
+    }
+    trap cleanup_daemon EXIT
+
+    for _ in {1..100}; do
+        kill -0 "${DAEMON_PID}" 2>/dev/null || break
+        socket_ready && break
+        sleep 0.1
+    done
+fi
+
+python3 -m wallpaper_engine_app
