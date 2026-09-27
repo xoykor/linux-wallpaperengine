@@ -7,6 +7,12 @@ OUTPUT_DIR="${ROOT}/build/appimage-output"
 VERSION=""
 APPIMAGETOOL_BIN="${APPIMAGETOOL:-appimagetool}"
 
+fail() {
+    printf '::error title=AppImage packaging::%s\n' "$*"
+    printf '%s\n' "$*" >&2
+    exit 1
+}
+
 usage() {
     cat <<'EOF'
 Usage: build-appimage.sh [--build-dir DIR] [--output-dir DIR] [--version VERSION] [--appimagetool FILE]
@@ -108,14 +114,16 @@ install -Dm644 "${ROOT}/app/linux-wallpaperengine-app.svg" \
 install -Dm644 "${ROOT}/app/linux-wallpaperengine-app.svg" "${APPDIR}/linux-wallpaperengine-app.svg"
 
 # CEF Release builds carry hundreds of megabytes of DWARF data that the runtime does not use.
-strip --strip-debug "${ENGINE_DIR}/libcef.so"
+[[ -f "${ENGINE_DIR}/libcef.so" ]] || fail "CEF runtime is missing from the install tree: ${ENGINE_DIR}/libcef.so"
+strip --strip-debug "${ENGINE_DIR}/libcef.so" || fail 'Could not strip CEF debug sections.'
 
 ENGINE_LIBRARY_PATH="${ENGINE_DIR}:${ENGINE_DIR}/lib"
-if ldd "${ENGINE_DIR}/linux-wallpaperengine" | grep -q 'not found'; then
-    LD_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-        ldd "${ENGINE_DIR}/linux-wallpaperengine" >&2
-    printf 'The packaged engine has unresolved shared libraries.\n' >&2
-    exit 1
+RUNTIME_LDD="$(LD_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+    ldd "${ENGINE_DIR}/linux-wallpaperengine")"
+MISSING_LIBRARIES="$(printf '%s\n' "${RUNTIME_LDD}" | grep 'not found' || true)"
+if [[ -n "${MISSING_LIBRARIES}" ]]; then
+    printf '%s\n' "${RUNTIME_LDD}" >&2
+    fail "The packaged engine has unresolved shared libraries: ${MISSING_LIBRARIES}"
 fi
 
 APPIMAGETOOL_APP_NAME='Linux Wallpaper Engine' \
