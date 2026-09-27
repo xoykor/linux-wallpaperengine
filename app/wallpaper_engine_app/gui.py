@@ -1821,6 +1821,35 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         favorite_button.connect("clicked", lambda *_: self._toggle_favorite(selected))
         self.detail.append(favorite_button)
 
+        properties = item.get("properties", {})
+        if isinstance(properties, dict) and properties:
+            self.detail.append(_label(tr("OPÇÕES DO WALLPAPER"), css="page-kicker"))
+            self.detail.append(_label(
+                tr("Opções booleanas definidas pelo autor do wallpaper."),
+                css="caption", wrap=True,
+            ))
+            saved_properties = self.config.get("wallpaper_properties", {}).get(selected, {})
+            for name, metadata in properties.items():
+                if not isinstance(metadata, dict):
+                    continue
+                row = _box(spacing=8)
+                row.set_valign(Gtk.Align.CENTER)
+                row.add_css_class("settings-row")
+                label = _label(str(metadata.get("label") or name), wrap=True)
+                label.set_hexpand(True)
+                row.append(label)
+                option = Gtk.Switch()
+                option.set_valign(Gtk.Align.CENTER)
+                option.set_active(bool(saved_properties.get(name, metadata.get("value", False))))
+                option.set_tooltip_text(str(name))
+                option.connect(
+                    "notify::active",
+                    lambda switch, _pspec, item_id=selected, property_name=name:
+                        self._wallpaper_property_changed(switch, item_id, property_name),
+                )
+                row.append(option)
+                self.detail.append(row)
+
         self.detail.append(_label(tr("PLAYLISTS"), css="page-kicker"))
         playlist_names = list((self.config.get("playlists") or {}).keys())
         if playlist_names:
@@ -1888,6 +1917,16 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._set_settings(favorites=sorted(favorites))
         if self.selected_id == wallpaper_id:
             self._show_details(wallpaper_id)
+
+    def _wallpaper_property_changed(
+        self, switch: Gtk.Switch, wallpaper_id: str, property_name: str
+    ) -> None:
+        properties = {
+            item_id: dict(values)
+            for item_id, values in self.config.get("wallpaper_properties", {}).items()
+        }
+        properties.setdefault(wallpaper_id, {})[property_name] = switch.get_active()
+        self._set_settings(wallpaper_properties=properties)
 
     def _set_settings(self, **settings: object) -> None:
         previous_language = self.config.get("language", "auto")

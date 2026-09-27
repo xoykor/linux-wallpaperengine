@@ -153,7 +153,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 	    JS_FreeValue (ctx, w);
 	});
 
-	if (!JS_IsNumber (x) || JS_IsNumber (y)) {
+	if (!JS_IsNumber (x) || !JS_IsNumber (y)) {
 	    sLog.exception ("Vector's x and y components must be numbers");
 	}
 
@@ -161,6 +161,12 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 
 	JS_ToFloat64 (ctx, &xVal, x);
 	JS_ToFloat64 (ctx, &yVal, y);
+	if (JS_IsNumber (z)) {
+	    JS_ToFloat64 (ctx, &zVal, z);
+	}
+	if (JS_IsNumber (w)) {
+	    JS_ToFloat64 (ctx, &wVal, w);
+	}
 
 	if (!JS_IsNumber (z)) {
 	    source.update (glm::vec2 (xVal, yVal), DynamicValue::UpdateSource::Script);
@@ -289,6 +295,70 @@ static void logJSException (JSContext* ctx, const char* context) {
 	}
     }
     JS_FreeValue (ctx, exc);
+}
+
+// Compile, link, and evaluate an ES module while retaining its live export
+// namespace. JS_Eval(..., JS_EVAL_TYPE_MODULE) returns the evaluation Promise,
+// not the module namespace, so callers cannot read exported functions from
+// that return value.
+static JSValue loadPropertyModule (JSContext* ctx, JSRuntime* runtime, const std::string& source,
+				  const std::string& filename) {
+    JSValue compiled = JS_Eval (
+	ctx, source.c_str (), source.size (), filename.c_str (), JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY
+    );
+    if (JS_IsException (compiled)) {
+	logJSException (ctx, "property.compile");
+	return JS_EXCEPTION;
+    }
+
+    if (JS_ResolveModule (ctx, compiled) < 0) {
+	JS_FreeValue (ctx, compiled);
+	logJSException (ctx, "property.resolve");
+	return JS_EXCEPTION;
+    }
+
+    auto* definition = static_cast<JSModuleDef*> (JS_VALUE_GET_PTR (compiled));
+    JSValue evaluation = JS_EvalFunction (ctx, JS_DupValue (ctx, compiled));
+    if (JS_IsException (evaluation)) {
+	JS_FreeValue (ctx, compiled);
+	logJSException (ctx, "property.evaluate");
+	return JS_EXCEPTION;
+    }
+
+    while (JS_IsJobPending (runtime)) {
+	JSContext* jobContext = ctx;
+	if (JS_ExecutePendingJob (runtime, &jobContext) < 0) {
+	    JS_FreeValue (ctx, evaluation);
+	    JS_FreeValue (ctx, compiled);
+	    logJSException (jobContext, "property.evaluate");
+	    return JS_EXCEPTION;
+	}
+    }
+
+    if (JS_PromiseState (ctx, evaluation) == JS_PROMISE_REJECTED) {
+	JSValue rejection = JS_PromiseResult (ctx, evaluation);
+	JS_Throw (ctx, rejection);
+	JS_FreeValue (ctx, evaluation);
+	JS_FreeValue (ctx, compiled);
+	logJSException (ctx, "property.evaluate");
+	return JS_EXCEPTION;
+    }
+    if (JS_PromiseState (ctx, evaluation) == JS_PROMISE_PENDING) {
+	JS_FreeValue (ctx, evaluation);
+	JS_FreeValue (ctx, compiled);
+	JS_ThrowTypeError (ctx, "Property module did not finish evaluating");
+	logJSException (ctx, "property.evaluate");
+	return JS_EXCEPTION;
+    }
+
+    JS_FreeValue (ctx, evaluation);
+    JSValue moduleNamespace = JS_GetModuleNamespace (ctx, definition);
+    JS_FreeValue (ctx, compiled);
+    if (JS_IsException (moduleNamespace)) {
+	logJSException (ctx, "property.namespace");
+	return JS_EXCEPTION;
+    }
+    return moduleNamespace;
 }
 
 void ScriptEngine::installBuiltins () {
@@ -577,8 +647,12 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	return;
     }
 
-    // load the script and store it
-    JSValue module = JS_Eval (this->m_context, source->c_str (), source->size (), key.c_str (), JS_EVAL_TYPE_MODULE);
+    // Load and store the module namespace so exported init/update functions
+    // remain callable after module evaluation.
+    JSValue module = loadPropertyModule (this->m_context, this->m_runtime, *source, key);
+    if (JS_IsException (module)) {
+	return;
+    }
 
     auto inserted = this->m_scriptModules.emplace (
 	key,
@@ -594,23 +668,10 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 
     JS_SetPropertyStr (this->m_context, this->m_globalThis, "thisLayer", this->m_adapters.object->instantiate (object));
 
-    // script properties do not need update as they're connected directly to the source data
+    // Keep the module namespace alive. Scene lookups by layer name depend on
+    // render order, which is populated only after all objects are constructed;
+    // defer both lifecycle hooks until the first scene tick.
     this->m_runningModule = &inserted.first->second;
-
-    // check if there's an update method and run it
-    JSValue args[] = { this->dynamicToJs (currentValue) };
-    JSValue result = this->call (module, 1, args, "update");
-
-    ScopeGuard guard2 ([this, args, result] () {
-	JS_FreeValue (this->m_context, result);
-	JS_FreeValue (this->m_context, args[0]);
-    });
-
-    if (JS_IsException (result)) {
-	return;
-    }
-
-    jsToDynamicValue (this->m_context, result, currentValue);
 }
 
 void ScriptEngine::tick () {
@@ -622,6 +683,19 @@ void ScriptEngine::tick () {
     // run all update methods
     for (auto& module : this->m_scriptModules | std::views::values) {
 	this->m_runningModule = &module;
+	if (!module.initialized) {
+	    JSValue initArgs[] = { this->dynamicToJs (module.value) };
+	    JSValue initResult = this->call (module.module, 1, initArgs, "init");
+	    ScopeGuard initGuard ([initResult, initArgs, this] () {
+		JS_FreeValue (this->m_context, initResult);
+		JS_FreeValue (this->m_context, initArgs[0]);
+	    });
+	    module.initialized = true;
+	    if (JS_IsException (initResult)) {
+		logJSException (this->m_context, "property.init");
+		continue;
+	    }
+	}
 
 	JSValue args[] = { this->dynamicToJs (module.value) };
 	JSValue result = this->call (module.module, 1, args, "update");

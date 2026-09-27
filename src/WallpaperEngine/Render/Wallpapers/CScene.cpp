@@ -12,6 +12,8 @@
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 
+#include <algorithm>
+#include <cctype>
 #include <ranges>
 #include <set>
 
@@ -107,6 +109,60 @@ CScene::CScene (
     // copy over objects by render order
     for (const auto& object : scene->objects) {
 	this->addObjectToRenderOrder (*object);
+    }
+
+    // Some Workshop scenes put semantically named white eye layers after the
+    // iris layers. These image passes have depth testing disabled, so that
+    // serialized order paints opaque sclera pixels over the iris. Preserve the
+    // authored positions of all other objects and normalize only the eye stack.
+    std::vector<std::pair<size_t, int>> eyeLayerPositions;
+    for (size_t index = 0; index < this->m_objectsByRenderOrder.size (); index++) {
+	const auto& object = this->m_objectsByRenderOrder[index]->getObject ();
+	if (!object.is<Image> ()) {
+	    continue;
+	}
+
+	std::string name = object.name;
+	std::ranges::transform (name, name.begin (), [] (unsigned char value) {
+	    return static_cast<char> (std::tolower (value));
+	});
+	if (name.find ("sclera") != std::string::npos || name.find ("eyewhite") != std::string::npos
+	    || name.find ("eyeballwhite") != std::string::npos) {
+	    eyeLayerPositions.emplace_back (index, 0);
+	} else if (name.find ("iris") != std::string::npos) {
+	    eyeLayerPositions.emplace_back (index, 1);
+	} else if (name.find ("pupil") != std::string::npos) {
+	    eyeLayerPositions.emplace_back (index, 2);
+	}
+    }
+
+    const bool hasEyeBase = std::ranges::any_of (eyeLayerPositions, [] (const auto& item) { return item.second == 0; });
+    const bool hasIris = std::ranges::any_of (eyeLayerPositions, [] (const auto& item) { return item.second == 1; });
+    if (hasEyeBase && hasIris) {
+	std::vector<CObject*> eyeLayers;
+	eyeLayers.reserve (eyeLayerPositions.size ());
+	for (const auto& [index, role] : eyeLayerPositions) {
+	    (void) role;
+	    eyeLayers.push_back (this->m_objectsByRenderOrder[index]);
+	}
+	std::ranges::stable_sort (eyeLayers, [] (const CObject* left, const CObject* right) {
+	    const auto role = [] (const CObject* object) {
+		std::string name = object->getObject ().name;
+		std::ranges::transform (name, name.begin (), [] (unsigned char value) {
+		    return static_cast<char> (std::tolower (value));
+		});
+		if (name.find ("sclera") != std::string::npos || name.find ("eyewhite") != std::string::npos
+		    || name.find ("eyeballwhite") != std::string::npos) {
+		    return 0;
+		}
+		return name.find ("pupil") != std::string::npos ? 2 : 1;
+	    };
+	    return role (left) < role (right);
+	});
+	for (size_t index = 0; index < eyeLayerPositions.size (); index++) {
+	    this->m_objectsByRenderOrder[eyeLayerPositions[index].first] = eyeLayers[index];
+	}
+	sLog.out ("Normalized eye layer order for scene with ", eyeLayers.size (), " semantic eye layers");
     }
 
     // create extra framebuffers for the bloom effect
@@ -374,7 +430,43 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
-    const auto enabledByDebug = [&debug] (const CObject* object) {
+
+    const auto isVisible = [] (const Object& object) {
+	const UserSettingUniquePtr* setting = &object.groupVisible;
+	if (object.is<Image> ()) {
+	    setting = &object.as<Image> ()->visible;
+	} else if (object.is<Particle> ()) {
+	    setting = &object.as<Particle> ()->visible;
+	} else if (object.is<Text> ()) {
+	    setting = &object.as<Text> ()->visible;
+	} else if (object.is<ModelObject> ()) {
+	    setting = &object.as<ModelObject> ()->visible;
+	}
+	return *setting != nullptr && (*setting)->value != nullptr && (*setting)->value->getBool ();
+    };
+
+    const auto visibleInHierarchy = [this, &isVisible] (const CObject* object) {
+	const Object* current = &object->getObject ();
+	for (int depth = 0; current != nullptr && depth < 32; depth++) {
+	    if (!isVisible (*current)) {
+		return false;
+	    }
+	    if (!current->parent.has_value ()) {
+		return true;
+	    }
+	    const auto parent = this->m_objects.find (*current->parent);
+	    if (parent == this->m_objects.end ()) {
+		return true;
+	    }
+	    current = &parent->second->getObject ();
+	}
+	return false;
+    };
+
+    const auto enabledByDebug = [&debug, &visibleInHierarchy] (const CObject* object) {
+	if (!visibleInHierarchy (object)) {
+	    return false;
+	}
 	if (debug.objectFilter.has_value () && object->getId () != debug.objectFilter.value ()) {
 	    return false;
 	}

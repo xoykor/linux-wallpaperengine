@@ -41,6 +41,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "interval_minutes": 10,
     "shuffle": True,
     "favorites": [],
+    "wallpaper_properties": {},
     "only_favorites": False,
     "playlists": {},
     "active_playlist": None,
@@ -57,6 +58,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 _ID_PATTERN = re.compile(r"[0-9]{1,24}\Z")
+_PROPERTY_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,127}\Z")
 _SCALING = {"stretch", "fit", "fill", "default"}
 
 
@@ -167,6 +169,25 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
         validate_screen(screen): normalize_id(wallpaper_id)
         for screen, wallpaper_id in assignments.items()
     }
+
+    raw_wallpaper_properties = result["wallpaper_properties"]
+    if not isinstance(raw_wallpaper_properties, dict):
+        raise ValueError(tr("As opções dos wallpapers devem ser um objeto."))
+    wallpaper_properties: dict[str, dict[str, bool]] = {}
+    for raw_id, raw_properties in raw_wallpaper_properties.items():
+        wallpaper_id = normalize_id(raw_id)
+        if not isinstance(raw_properties, dict) or len(raw_properties) > 256:
+            raise ValueError(tr("As opções de cada wallpaper devem ser um objeto válido."))
+        properties: dict[str, bool] = {}
+        for name, value in raw_properties.items():
+            if not isinstance(name, str) or not _PROPERTY_PATTERN.fullmatch(name):
+                raise ValueError(tr("Nome de opção de wallpaper inválido."))
+            if type(value) is not bool:
+                raise ValueError(tr("As opções de wallpaper devem ser verdadeiras ou falsas."))
+            properties[name] = value
+        if properties:
+            wallpaper_properties[wallpaper_id] = properties
+    result["wallpaper_properties"] = wallpaper_properties
 
     renderer = result["renderer_path"]
     if not isinstance(renderer, str) or not renderer or len(renderer) > 4096:
@@ -460,7 +481,32 @@ def scan_catalog() -> dict[str, dict[str, Any]]:
                 "preview": _preview_for(project.parent, data.get("preview")),
                 "preview_animation": _animation_for(project.parent, data.get("preview")),
                 "tags": _tags_for(data.get("tags")),
+                "properties": _boolean_properties(data),
             }
+    return result
+
+
+def _boolean_properties(project: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Expose the author's boolean Workshop options for the details panel."""
+    general = project.get("general")
+    raw_properties = general.get("properties") if isinstance(general, dict) else None
+    if not isinstance(raw_properties, dict):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for name, value in raw_properties.items():
+        if (
+            not isinstance(name, str)
+            or not _PROPERTY_PATTERN.fullmatch(name)
+            or not isinstance(value, dict)
+            or str(value.get("type", "")).lower() not in {"bool", "boolean"}
+            or type(value.get("value")) is not bool
+        ):
+            continue
+        label = value.get("text")
+        result[name] = {
+            "label": label.strip() if isinstance(label, str) and label.strip() else name,
+            "value": value["value"],
+        }
     return result
 
 

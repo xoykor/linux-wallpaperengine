@@ -201,6 +201,11 @@ class WallpaperDaemon:
                 "--bg", self.catalog[selected]["path"],
                 "--scaling", self.config["scaling"],
             ))
+            supported = self.catalog[selected].get("properties", {})
+            overrides = self.config["wallpaper_properties"].get(selected, {})
+            for name, value in overrides.items():
+                if name in supported:
+                    command.extend(("--screen-property", f"{name}={'true' if value else 'false'}"))
         return command, environment, screens
 
     def _request_switch(self, wallpaper_id: str | None) -> None:
@@ -346,6 +351,18 @@ class WallpaperDaemon:
         for screen, wallpaper_id in config["screen_assignments"].items():
             if self.config["screen_assignments"].get(screen) != wallpaper_id:
                 self._validate_known_id(wallpaper_id)
+        old_properties = self.config["wallpaper_properties"]
+        for wallpaper_id, properties in config["wallpaper_properties"].items():
+            if properties == old_properties.get(wallpaper_id):
+                continue
+            self._validate_known_id(wallpaper_id)
+            supported = self.catalog[wallpaper_id].get("properties", {})
+            unknown = set(properties) - set(supported)
+            if unknown:
+                raise ValueError(tr(
+                    "Opções desconhecidas para o wallpaper {wallpaper_id}: {names}.",
+                    wallpaper_id=wallpaper_id, names=", ".join(sorted(unknown)),
+                ))
 
     def _dispatch(self, message: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(message, dict):
@@ -416,7 +433,10 @@ class WallpaperDaemon:
             if changed & {"shuffle", "favorites", "only_favorites", "playlists", "active_playlist"}:
                 self.queue = []
             if self.active and changed:
-                restart_keys = {"fps", "scaling", "mute", "renderer_path", "screen_assignments"}
+                restart_keys = {
+                    "fps", "scaling", "mute", "renderer_path", "screen_assignments",
+                    "wallpaper_properties",
+                }
                 selected_changed = (
                     "selected_id" in changed and self.config["selected_id"] != self.current_id
                 )
