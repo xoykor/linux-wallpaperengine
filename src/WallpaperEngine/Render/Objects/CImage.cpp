@@ -1169,6 +1169,7 @@ void CImage::updateScreenSpacePosition () {
 
     // Apply parallax displacement if enabled
     if (this->getScene ().getScene ().camera.parallax.enabled
+	&& this->getScene ().getContext ().getApp ().getContext ().settings.mouse.enabled
 	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const double parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->getImage ().parallaxDepth->value->getVec2 ();

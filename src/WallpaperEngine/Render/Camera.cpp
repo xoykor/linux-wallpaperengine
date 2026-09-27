@@ -57,6 +57,14 @@ void Camera::setOrthogonalProjection (const float width, const float height) {
     float nearz = this->m_camera.projection.nearz->value->getFloat ();
     float farz = this->m_camera.projection.farz->value->getFloat ();
 
+    // Orthographic Workshop scenes commonly place their 2D layers at z=0.
+    // Keep that plane inside the clip volume, even when the authored near/far
+    // range starts or ends at zero. Exact clip-plane vertices can be dropped
+    // by some drivers after projection and view matrices are combined.
+    const float depthMargin = std::max (1.0f, std::abs (farz - nearz) * 0.001f);
+    nearz = std::min (nearz, 0.0f) - depthMargin;
+    farz = std::max (farz, 0.0f) + depthMargin;
+
     this->m_projection = glm::ortho<float> (-width / 2.0, width / 2.0, -height / 2.0, height / 2.0, nearz, farz);
     this->m_projection = glm::translate (this->m_projection, this->getEye ());
     this->m_screenProjection = this->m_projection;

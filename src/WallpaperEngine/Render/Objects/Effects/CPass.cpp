@@ -1,4 +1,6 @@
 #include "CPass.h"
+#include <algorithm>
+#include <array>
 #include <sstream>
 #include <utility>
 
@@ -6,6 +8,7 @@
 
 #include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Material.h"
+#include "WallpaperEngine/Data/Model/Object.h"
 
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
@@ -127,6 +130,7 @@ void CPass::setupRenderFramebuffer () const {
     glViewport (0, 0, this->m_resolvedDrawTo->getRealWidth (), this->m_resolvedDrawTo->getRealHeight ());
 
     // set texture blending
+    glDisable (GL_SAMPLE_ALPHA_TO_COVERAGE);
     switch (this->getBlendingMode ()) {
 	case BlendingMode_Translucent:
 	    glEnable (GL_BLEND);
@@ -136,6 +140,21 @@ void CPass::setupRenderFramebuffer () const {
 	    glEnable (GL_BLEND);
 	    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE, GL_SRC_ALPHA, GL_ONE);
 	    break;
+	case BlendingMode_AlphaToCoverage:
+	    {
+		GLint sampleBuffers = 0;
+		glGetIntegerv (GL_SAMPLE_BUFFERS, &sampleBuffers);
+		if (sampleBuffers > 0) {
+		    glDisable (GL_BLEND);
+		    glEnable (GL_SAMPLE_ALPHA_TO_COVERAGE);
+		} else {
+		    // With single-sample targets the shader's ALPHATOCOVERAGE path turns
+		    // coverage into a cutout, so blending the coverage alpha again would
+		    // attenuate the particle twice.
+		    glDisable (GL_BLEND);
+		}
+		break;
+	    }
 	case BlendingMode_Normal:
 	    glEnable (GL_BLEND);
 	    glBlendFuncSeparate (GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
@@ -179,11 +198,54 @@ void CPass::setupRenderFramebuffer () const {
     }
 }
 
+void CPass::prepareFeedbackSnapshot () {
+    if (this->m_resolvedDrawTo == nullptr) {
+	return;
+    }
+
+    const GLuint destinationTexture = this->m_resolvedDrawTo->getTextureID (0);
+    bool hasFeedback = this->m_input != nullptr && this->m_input->getTextureID (0) == destinationTexture;
+    for (const auto& [index, chain] : this->m_textures) {
+	for (auto entry = chain; entry != nullptr && !hasFeedback; entry = entry->next) {
+	    hasFeedback = entry->texture != nullptr && entry->texture->getTextureID (0) == destinationTexture;
+	}
+    }
+
+    const std::string& targetName = this->m_resolvedDrawTo->getName ();
+    // Image effects use two private ping-pong buffers. If an effect names its
+    // destination (_a/_b) as an input, the correct source is the current image
+    // input, not the old contents of that destination buffer.
+    if (!hasFeedback || targetName.rfind ("_rt_imageLayerComposite_", 0) == 0) {
+	return;
+    }
+
+    const auto& target = this->m_resolvedDrawTo;
+    const bool sizeChanged
+	= this->m_feedbackSnapshot == nullptr || this->m_feedbackSnapshot->getRealWidth () != target->getRealWidth ()
+	  || this->m_feedbackSnapshot->getRealHeight () != target->getRealHeight ()
+	  || this->m_feedbackSnapshot->getTextureWidth (0) != target->getTextureWidth (0)
+	  || this->m_feedbackSnapshot->getTextureHeight (0) != target->getTextureHeight (0);
+    if (sizeChanged) {
+	this->m_feedbackSnapshot = std::make_shared<CFBO> (
+	    "_rt_feedbackSnapshot_" + std::to_string (this->m_renderable.getId ()), target->getFormat (),
+	    target->getFlags (), 1.0f, target->getRealWidth (), target->getRealHeight (), target->getTextureWidth (0),
+	    target->getTextureHeight (0)
+	);
+    }
+
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, target->getFramebuffer ());
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->m_feedbackSnapshot->getFramebuffer ());
+    glBlitFramebuffer (
+	0, 0, target->getRealWidth (), target->getRealHeight (), 0, 0, target->getRealWidth (),
+	target->getRealHeight (), GL_COLOR_BUFFER_BIT, GL_NEAREST
+    );
+}
+
 void CPass::setupRenderTexture () {
     // use the shader we have registered
     glUseProgram (this->m_programID);
 
-    auto texture0 = this->resolveTexture0 ();
+    auto texture0 = this->avoidRenderTargetFeedback (this->resolveTexture0 (), 0);
     const auto animation = this->resolveTextureAnimationState (texture0);
 
     this->bindTextureUnit (0, texture0, animation.currentTexture);
@@ -242,6 +304,49 @@ std::shared_ptr<const TextureProvider> CPass::resolveTexture0 () {
 
     // last resort, doesn't matter if the input is ready or not
     return this->m_input;
+}
+
+std::shared_ptr<const TextureProvider> CPass::avoidRenderTargetFeedback (
+    std::shared_ptr<const TextureProvider> texture, int index
+) const {
+    if (
+	texture == nullptr || this->m_resolvedDrawTo == nullptr
+	|| texture->getTextureID (0) != this->m_resolvedDrawTo->getTextureID (0)
+    ) {
+	return texture;
+    }
+
+    std::shared_ptr<const TextureProvider> replacement = nullptr;
+    if (this->m_resolvedDrawTo->getName ().rfind ("_rt_imageLayerComposite_", 0) == 0) {
+	for (const auto& fallback : { this->m_input, this->m_previousInput }) {
+	    if (fallback != nullptr && fallback->getTextureID (0) != this->m_resolvedDrawTo->getTextureID (0)) {
+		replacement = fallback;
+		break;
+	    }
+	}
+    } else {
+	replacement = this->m_feedbackSnapshot;
+    }
+
+    const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
+    if (replacement != nullptr) {
+	if (debug.passLog) {
+	    sLog.out (
+		"Avoiding render-target texture feedback for object ", this->m_renderable.getId (), " shader=",
+		this->m_pass.shader, " unit=", index, " target=", this->m_resolvedDrawTo->getName ()
+	    );
+	}
+	return replacement;
+    }
+
+    if (debug.passLog) {
+	sLog.error (
+	    "Skipping feedback texture for object ", this->m_renderable.getId (), " shader=", this->m_pass.shader,
+	    " unit=", index, " target=", this->m_resolvedDrawTo->getName (),
+	    " because no distinct input texture is available"
+	);
+    }
+    return nullptr;
 }
 
 CPass::TextureAnimationState
@@ -317,6 +422,8 @@ void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const
 	if (expectedTexture == nullptr) {
 	    expectedTexture = this->m_input;
 	}
+	expectedTexture = index == 0 ? texture0
+				     : this->avoidRenderTargetFeedback (std::move (expectedTexture), index);
 
 	this->bindTextureUnit (index, expectedTexture, index == 0 ? currentTexture : 0);
 
@@ -395,6 +502,53 @@ void CPass::setupRenderUniforms () {
 		    value->id, 1, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat3*> (value->value))
 		);
 		break;
+	}
+    }
+
+    constexpr int maxPointLights = 8;
+    std::array<glm::vec4, maxPointLights> pointLightPositionRadius {};
+    std::array<glm::vec4, maxPointLights> pointLightColorIntensity {};
+    std::array<float, maxPointLights> pointLightExponent {};
+    int pointLightCount = 0;
+    for (const auto& object : this->m_renderable.getScene ().getScene ().objects) {
+	if (!object->is<Light> () || pointLightCount >= maxPointLights) {
+	    continue;
+	}
+	const auto& light = *object->as<Light> ();
+	if (light.type != "lpoint" || !light.groupVisible->value->getBool ()) {
+	    continue;
+	}
+	pointLightPositionRadius[pointLightCount]
+	    = glm::vec4 (light.origin->value->getVec3 (), std::max (light.radius->value->getFloat (), 0.001f));
+	pointLightColorIntensity[pointLightCount]
+	    = glm::vec4 (light.color->value->getVec3 (), light.intensity->value->getFloat ());
+	pointLightExponent[pointLightCount] = light.exponent->value->getFloat ();
+	++pointLightCount;
+    }
+
+    const GLint lightCountUniform = glGetUniformLocation (this->m_programID, "g_PointLightCount");
+    if (lightCountUniform >= 0) {
+	glUniform1i (lightCountUniform, pointLightCount);
+	const GLint positionsUniform = glGetUniformLocation (this->m_programID, "g_PointLightPositionRadius[0]");
+	const GLint colorsUniform = glGetUniformLocation (this->m_programID, "g_PointLightColorIntensity[0]");
+	const GLint exponentsUniform = glGetUniformLocation (this->m_programID, "g_PointLightExponent[0]");
+	if (positionsUniform >= 0) {
+	    glUniform4fv (positionsUniform, maxPointLights, glm::value_ptr (pointLightPositionRadius[0]));
+	}
+	if (colorsUniform >= 0) {
+	    glUniform4fv (colorsUniform, maxPointLights, glm::value_ptr (pointLightColorIntensity[0]));
+	}
+	if (exponentsUniform >= 0) {
+	    glUniform1fv (exponentsUniform, maxPointLights, pointLightExponent.data ());
+	}
+	if (this->getContext ().getApp ().getContext ().settings.render.debug.passLog && pointLightCount > 0) {
+	    sLog.out (
+		"Bound ", pointLightCount, " point light(s) to object ", this->m_renderable.getId (), ": position/radius=",
+		pointLightPositionRadius[0].x, ",", pointLightPositionRadius[0].y, ",", pointLightPositionRadius[0].z, ",",
+		pointLightPositionRadius[0].w, " color/intensity=", pointLightColorIntensity[0].x, ",",
+		pointLightColorIntensity[0].y, ",", pointLightColorIntensity[0].z, ",", pointLightColorIntensity[0].w,
+		" exponent=", pointLightExponent[0]
+	    );
 	}
     }
 }
@@ -501,6 +655,7 @@ void CPass::render () {
 	return;
     }
 
+    this->prepareFeedbackSnapshot ();
     this->setupRenderFramebuffer ();
     this->setupRenderTexture ();
     this->setupRenderUniforms ();

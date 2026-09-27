@@ -50,6 +50,21 @@ public:
     ~Object () override = default;
 };
 
+struct LightData {
+    std::string type;
+    UserSettingUniquePtr color;
+    UserSettingUniquePtr intensity;
+    UserSettingUniquePtr radius;
+    UserSettingUniquePtr exponent;
+};
+
+class Light final : public Object, public LightData {
+public:
+    explicit Light (ObjectData data, LightData lightData) noexcept :
+	Object (std::move (data)), LightData (std::move (lightData)) { }
+    ~Light () override = default;
+};
+
 /**
  * Overrides effect's passes configuration
  *

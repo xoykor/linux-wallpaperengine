@@ -156,8 +156,12 @@ private:
     template <typename T> void addUniform (const std::string& name, UniformType type, T** value);
 
     void setupRenderFramebuffer () const;
+    void prepareFeedbackSnapshot ();
     void setupRenderTexture ();
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture0 ();
+    [[nodiscard]] std::shared_ptr<const TextureProvider> avoidRenderTargetFeedback (
+	std::shared_ptr<const TextureProvider> texture, int index
+    ) const;
     [[nodiscard]] TextureAnimationState
     resolveTextureAnimationState (const std::shared_ptr<const TextureProvider>& texture) const;
     void bindTextureUnit (int index, const std::shared_ptr<const TextureProvider>& texture, uint32_t frame) const;
@@ -199,6 +203,7 @@ private:
 
     std::shared_ptr<const CFBO> m_drawTo = nullptr;
     std::shared_ptr<const CFBO> m_resolvedDrawTo = nullptr;
+    std::shared_ptr<CFBO> m_feedbackSnapshot = nullptr;
     std::shared_ptr<const TextureProvider> m_input = nullptr;
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};

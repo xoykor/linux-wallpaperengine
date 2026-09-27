@@ -103,7 +103,11 @@ def _install(stack: Gtk.Stack, pixbuf: GdkPixbuf.Pixbuf | None) -> None:
     picture.set_hexpand(True)
     picture.set_vexpand(True)
     stack.add_named(picture, "preview")
-    stack.set_visible_child(picture)
+    # A static thumbnail may finish decoding after the pointer has entered a
+    # GIF preview. Keep the animation visible until its hover ends.
+    visible = stack.get_visible_child_name()
+    if visible != "animated-preview":
+        stack.set_visible_child(picture)
 
 
 def _deliver(job: _JobKey, pixbuf: GdkPixbuf.Pixbuf | None) -> bool:
@@ -163,6 +167,60 @@ def preview(path: str | None, width: int, height: int) -> Gtk.Widget:
     signature = _signature(path)
     if signature is None:
         return stack
+
+    def enable_gif_hover() -> None:
+        if Path(path).suffix.casefold() != ".gif":
+            return
+        controller = Gtk.EventControllerMotion()
+        state: dict[str, object] = {
+            "animation": None,
+            "loading": False,
+            "hovering": False,
+        }
+
+        def deliver_animation(animation: GdkPixbuf.PixbufAnimation | None) -> bool:
+            state["loading"] = False
+            if animation is None:
+                return False
+            image = Gtk.Image.new_from_animation(animation)
+            image.set_size_request(width, height)
+            image.set_hexpand(True)
+            image.set_vexpand(True)
+            state["animation"] = image
+            stack.add_named(image, "animated-preview")
+            if state["hovering"]:
+                stack.set_visible_child(image)
+            return False
+
+        def load_animation() -> None:
+            try:
+                animation = GdkPixbuf.PixbufAnimation.new_from_file(path)
+            except Exception:
+                animation = None
+            GLib.idle_add(deliver_animation, animation)
+
+        def enter(_controller: Gtk.EventControllerMotion) -> None:
+            state["hovering"] = True
+            if state["animation"] is not None:
+                stack.set_visible_child(state["animation"])
+                return
+            if state["loading"]:
+                return
+            state["loading"] = True
+            Thread(target=load_animation, name="wallpaper-gif-preview", daemon=True).start()
+
+        def leave(_controller: Gtk.EventControllerMotion) -> None:
+            state["hovering"] = False
+            if stack.get_child_by_name("preview") is not None:
+                stack.set_visible_child_name("preview")
+
+        controller.connect("enter", enter)
+        controller.connect("leave", leave)
+        stack.add_controller(controller)
+
+    # Attach hover handling before cache/pending early returns, so duplicate
+    # requests for the same preview behave exactly like the first one.
+    enable_gif_hover()
 
     key = (path, width, height)
     cached = _cache.get(key)

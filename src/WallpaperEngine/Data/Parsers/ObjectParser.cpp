@@ -97,7 +97,17 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    };
 	}
     } else if (lightIt != it.end ()) {
-	sLog.error ("Light objects are not supported yet");
+	if (!lightIt->is_string ()) {
+	    sLog.error ("Ignoring light with invalid type on object ", basedata.id);
+	    return std::make_unique<Object> (std::move (basedata));
+	}
+	return std::make_unique<Light> (std::move (basedata), LightData {
+	    .type = lightIt->get<std::string> (),
+	    .color = it.user ("color", project.properties, glm::vec3 (1.0f)),
+	    .intensity = it.user ("intensity", project.properties, 1.0f),
+	    .radius = it.user ("radius", project.properties, 1.0f),
+	    .exponent = it.user ("exponent", project.properties, 2.0f),
+	});
     } else if (shapeIt != it.end ()) {
 	sLog.error ("VolumeLight objects are not supported yet");
     } else {
@@ -189,6 +199,18 @@ ObjectParser::parseModelObject (const JSON& it, const Project& project, ObjectDa
 	sLog.exception ("Truncated MDLV header in model ", modelFile);
     }
 
+    uint32_t mdlvVersion = 0;
+    if (magicEnd >= 8) {
+	for (size_t digit = 4; digit < 8; digit++) {
+	    const char ch = data[digit];
+	    if (ch < '0' || ch > '9') {
+		mdlvVersion = 0;
+		break;
+	    }
+	    mdlvVersion = mdlvVersion * 10 + static_cast<uint32_t> (ch - '0');
+	}
+    }
+
     size_t offset = magicEnd + 1 + 2 * sizeof (uint32_t);
     uint32_t submeshCount = 0;
     std::memcpy (&submeshCount, data.data () + offset, sizeof (submeshCount));
@@ -234,6 +256,17 @@ ObjectParser::parseModelObject (const JSON& it, const Project& project, ObjectDa
 	    sLog.exception ("Truncated submesh indices in model ", modelFile);
 	}
 	offset += indexBytes;
+
+	// MDLV0023 adds a six-byte zero trailer after every submesh index block.
+	// Without consuming it, the next material name starts inside this trailer
+	// and the whole model is rejected as a truncated submesh.
+	if (mdlvVersion >= 23) {
+	    constexpr size_t trailerSize = 6;
+	    if (offset + trailerSize > data.size ()) {
+		sLog.exception ("Truncated MDLV0023 submesh trailer in model ", modelFile);
+	    }
+	    offset += trailerSize;
+	}
     }
 
     const auto& properties = project.properties;

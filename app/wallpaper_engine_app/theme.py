@@ -10,16 +10,16 @@ from gi.repository import Gdk, Gtk
 
 CSS = """
 window {
-  background: #0b0908;
+  background: rgba(9,7,6,0.56);
   color: #f8f4ef;
 }
 .app-root {
-  background: #0b0908;
+  background: transparent;
 }
 .sidebar {
   min-width: 218px;
   padding: 18px 14px 16px;
-  background: linear-gradient(180deg, #17100d 0%, #100c0a 56%, #0c0a09 100%);
+  background: linear-gradient(180deg, rgba(34,25,21,0.68) 0%, rgba(22,17,15,0.60) 56%, rgba(12,10,9,0.66) 100%);
   border-right: 1px solid rgba(255,255,255,0.07);
 }
 .brand-mark {
@@ -207,11 +207,11 @@ entry, dropdown, spinbutton {
 }
 
 /* Components added after the original glass revamp. */
-.app-shell { background: #0b0908; }
+.app-shell { background: transparent; }
 .app-sidebar {
   min-width: 0;
   padding: 18px 14px 16px;
-  background: linear-gradient(180deg, #17100d 0%, #100c0a 56%, #0c0a09 100%);
+  background: linear-gradient(180deg, rgba(34,25,21,0.72) 0%, rgba(22,17,15,0.64) 56%, rgba(12,10,9,0.70) 100%);
   border-right: 1px solid rgba(255,255,255,0.07);
 }
 .app-sidebar-collapsed { padding: 14px 8px; }
@@ -241,7 +241,7 @@ button.nav-item-active:hover {
   background: rgba(255,255,255,0.09);
   color: #ffffff;
 }
-.workspace { padding: 18px 20px 16px; background: #0b0908; }
+.workspace { padding: 18px 20px 16px; background: rgba(11,9,8,0.50); }
 .workspace-header { min-height: 0; padding: 0; }
 .page-title { font-size: 1.75em; font-weight: 800; color: #f8f4ef; }
 .subtle, .page-subtitle { color: #a69e97; opacity: 1; }
@@ -273,7 +273,7 @@ flowboxchild.wallpaper-card {
   padding: 0;
   border-radius: 14px;
   border: 1px solid rgba(255,255,255,0.075);
-  background: #15110f;
+  background: rgba(35,29,27,0.48);
   box-shadow: 0 5px 18px rgba(0,0,0,0.22);
 }
 flowboxchild.wallpaper-card:hover {
@@ -313,6 +313,16 @@ flowboxchild.wallpaper-card-selected:hover {
   font-weight: 600;
   text-shadow: 0 1px 5px rgba(0,0,0,0.72);
 }
+button.favorite-heart-button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0 5px;
+  border: 1px solid rgba(255,255,255,0.17);
+  border-radius: 99px;
+  background: rgba(12,10,12,0.58);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.28);
+}
+button.favorite-heart-button:hover { background: rgba(255,100,120,0.42); }
 button.filter-chip {
   min-height: 32px;
   padding: 5px 11px;
@@ -384,7 +394,7 @@ list row.playlist-item:selected,
 headerbar.topbar {
   min-height: 48px;
   padding: 4px 8px;
-  background: #100c0a;
+  background: rgba(16,12,10,0.58);
   border-bottom: 1px solid rgba(255,255,255,0.07);
   box-shadow: none;
 }

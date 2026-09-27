@@ -35,7 +35,10 @@ void WallpaperState::resetUVs () {
 void WallpaperState::updateUs (const int& projectionWidth, const int& projectionHeight) {
     const float viewportWidth = this->getViewportWidth ();
     const float viewportHeight = this->getViewportHeight ();
-    const int newWidth = viewportHeight / projectionHeight * projectionWidth;
+    // Keep the aspect-ratio calculation in floating point. Integer division
+    // here collapses common ratios (for example, 1080 / 1920) to zero and
+    // produces invalid UVs for portrait/landscape mismatches.
+    const float newWidth = viewportHeight * static_cast<float> (projectionWidth) / projectionHeight;
     const float newCenter = newWidth / 2.0f;
     const float viewportCenter = viewportWidth / 2.0;
 
@@ -50,7 +53,7 @@ void WallpaperState::updateUs (const int& projectionWidth, const int& projection
 void WallpaperState::updateVs (const int& projectionWidth, const int& projectionHeight) {
     const float viewportWidth = this->getViewportWidth ();
     const float viewportHeight = this->getViewportHeight ();
-    const int newHeight = viewportWidth / projectionWidth * projectionHeight;
+    const float newHeight = viewportWidth * static_cast<float> (projectionHeight) / projectionWidth;
     const float newCenter = newHeight / 2.0f;
     const float viewportCenter = viewportHeight / 2.0;
 

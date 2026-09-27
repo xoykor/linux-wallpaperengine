@@ -303,11 +303,10 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 }
 
 uint32_t TextureParser::parseTextureFlags (uint32_t value) {
-    if (value < TextureFlags_All) {
-	return value;
-    }
-
-    sLog.exception ("unknown texture flags: ", value);
+    // Texture flags are a bitmask, and newer Workshop assets can set bits
+    // unknown to this renderer. Keep the raw value so supported bits retain
+    // their behavior and unknown metadata does not make the whole texture fail.
+    return value;
 }
 
 FIF TextureParser::parseFIF (uint32_t value) {

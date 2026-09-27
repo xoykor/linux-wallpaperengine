@@ -1,8 +1,13 @@
 #include "GLSLContext.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
 #include <cassert>
+#include <cctype>
+#include <map>
 #include <memory>
+#include <regex>
+#include <set>
 
 #include "SPIRV/GlslangToSpv.h"
 #include "glslang/Include/ResourceLimits.h"
@@ -10,6 +15,836 @@
 #include "spirv_glsl.hpp"
 
 using namespace WallpaperEngine::Render::Shaders;
+
+namespace {
+std::string stripCommentsPreservingOffsets (const std::string& source) {
+    std::string result = source;
+    bool lineComment = false;
+    bool blockComment = false;
+    for (std::size_t i = 0; i < result.size (); ++i) {
+	if (lineComment) {
+	    if (result[i] == '\n') {
+		lineComment = false;
+	    } else {
+		result[i] = ' ';
+	    }
+	} else if (blockComment) {
+	    if (result[i] == '*' && i + 1 < result.size () && result[i + 1] == '/') {
+		result[i] = result[i + 1] = ' ';
+		++i;
+		blockComment = false;
+	    } else if (result[i] != '\n') {
+		result[i] = ' ';
+	    }
+	} else if (result[i] == '/' && i + 1 < result.size () && result[i + 1] == '/') {
+	    result[i] = result[i + 1] = ' ';
+	    ++i;
+	    lineComment = true;
+	} else if (result[i] == '/' && i + 1 < result.size () && result[i + 1] == '*') {
+	    result[i] = result[i + 1] = ' ';
+	    ++i;
+	    blockComment = true;
+	}
+    }
+    return result;
+}
+
+/**
+ * Some shared Workshop effects ship a stray #endif in one shader stage. Drop
+ * only closing directives that have no matching #if/#ifdef/#ifndef, while
+ * preserving comments, source offsets, and all balanced conditional blocks.
+ */
+std::string neutralizeUnmatchedEndifs (const std::string& source, std::vector<std::size_t>& lines) {
+    const std::string uncommented = stripCommentsPreservingOffsets (source);
+    std::string result = source;
+    int conditionalDepth = 0;
+
+    const std::regex directive (R"(^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b)");
+    for (std::size_t lineStart = 0; lineStart < uncommented.size ();) {
+	const std::size_t lineEnd = uncommented.find ('\n', lineStart);
+	const std::size_t lineLength = (lineEnd == std::string::npos ? uncommented.size () : lineEnd) - lineStart;
+	const std::string line = uncommented.substr (lineStart, lineLength);
+	std::smatch match;
+	if (std::regex_search (line, match, directive, std::regex_constants::match_continuous)) {
+	    const std::string kind = match[1].str ();
+	    if (kind == "if" || kind == "ifdef" || kind == "ifndef") {
+		++conditionalDepth;
+	    } else if (kind == "endif") {
+		if (conditionalDepth > 0) {
+		    --conditionalDepth;
+		} else {
+		    const std::size_t hash = lineStart + line.find ('#');
+		    result[hash] = '/';
+		    if (hash + 1 < result.size ()) {
+			result[hash + 1] = '/';
+		    }
+		    lines.push_back (static_cast<std::size_t> (std::count (uncommented.begin (), uncommented.begin () + lineStart, '\n')) + 1);
+		}
+	    }
+	}
+	if (lineEnd == std::string::npos) {
+	    break;
+	}
+	lineStart = lineEnd + 1;
+    }
+
+    return result;
+}
+
+/**
+ * A few workshop effect vertex shaders declare a vec4 varying but only ever
+ * write its .xy components, while the paired fragment shader declares vec2.
+ * Narrowing that output is semantics-preserving and gives both linked stages
+ * the same interface type. Leave any varying with z/w uses untouched.
+ */
+std::string normalizeXyOnlyVaryingMismatches (
+    const std::string& vertex, const std::string& fragment, std::vector<std::string>& adjusted
+) {
+    const std::string vertexCode = stripCommentsPreservingOffsets (vertex);
+    const std::string fragmentCode = stripCommentsPreservingOffsets (fragment);
+    const std::regex vertexVec4Declaration (R"(\bvarying\s+vec4\s+([A-Za-z_]\w*)\s*;)");
+    std::vector<std::pair<std::size_t, std::size_t>> declarations;
+    for (
+	std::sregex_iterator it (vertexCode.begin (), vertexCode.end (), vertexVec4Declaration), end; it != end;
+	++it
+    ) {
+	const std::string name = (*it)[1].str ();
+	const std::regex fragmentVec2Declaration ("\\bvarying\\s+vec2\\s+" + name + "\\s*;");
+	if (!std::regex_search (fragmentCode, fragmentVec2Declaration)) {
+	    continue;
+	}
+
+	const std::size_t declarationStart = static_cast<std::size_t> (it->position ());
+	const std::size_t declarationEnd = declarationStart + static_cast<std::size_t> (it->length ());
+	const std::regex identifier ("\\b" + name + "\\b");
+	bool hasUse = false;
+	bool xyOnly = true;
+	for (std::sregex_iterator use (vertexCode.begin (), vertexCode.end (), identifier), end; use != end; ++use) {
+	    const auto useStart = static_cast<std::size_t> (use->position ());
+	    if (useStart >= declarationStart && useStart < declarationEnd) {
+		continue;
+	    }
+	    hasUse = true;
+	    std::size_t suffix = useStart + static_cast<std::size_t> (use->length ());
+	    while (suffix < vertexCode.size () && std::isspace (static_cast<unsigned char> (vertexCode[suffix]))) {
+		++suffix;
+	    }
+	    if (suffix + 3 > vertexCode.size () || vertexCode.compare (suffix, 3, ".xy") != 0) {
+		xyOnly = false;
+		break;
+	    }
+	    if (suffix + 3 < vertexCode.size ()
+		&& (std::isalnum (static_cast<unsigned char> (vertexCode[suffix + 3])) || vertexCode[suffix + 3] == '_')) {
+		xyOnly = false;
+		break;
+	    }
+	}
+	if (!hasUse || !xyOnly) {
+	    continue;
+	}
+
+	const std::size_t typeStart = declarationStart + it->str ().find ("vec4");
+	declarations.emplace_back (typeStart, 4);
+	adjusted.push_back (name);
+    }
+
+    std::string result = vertex;
+    for (auto it = declarations.rbegin (); it != declarations.rend (); ++it) {
+	result.replace (it->first, it->second, "vec2");
+    }
+    return result;
+}
+
+std::string preprocessorConditionAt (const std::string& source, const std::size_t offset) {
+    const std::string code = stripCommentsPreservingOffsets (source);
+    struct Conditional {
+	std::vector<std::string> branches;
+	std::string active;
+    };
+    std::vector<Conditional> stack;
+    const std::regex directive (R"(^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$)");
+    for (std::size_t lineStart = 0; lineStart < offset && lineStart < code.size ();) {
+	const std::size_t lineEnd = code.find ('\n', lineStart);
+	const std::size_t end = lineEnd == std::string::npos ? code.size () : lineEnd;
+	std::string line = code.substr (lineStart, end - lineStart);
+	if (!line.empty () && line.back () == '\r') {
+	    line.pop_back ();
+	}
+	std::smatch match;
+	if (std::regex_search (line, match, directive, std::regex_constants::match_continuous)) {
+	    const std::string kind = match[1].str ();
+	    std::string expression = match[2].str ();
+	    const std::size_t first = expression.find_first_not_of (" \t\r");
+	    const std::size_t last = expression.find_last_not_of (" \t\r");
+	    expression = first == std::string::npos ? "" : expression.substr (first, last - first + 1);
+	    if (kind == "if" || kind == "ifdef" || kind == "ifndef") {
+		if (kind == "ifdef") {
+		    expression = "defined(" + expression + ")";
+		} else if (kind == "ifndef") {
+		    expression = "!defined(" + expression + ")";
+		}
+		stack.push_back ({ { expression }, expression });
+	    } else if (kind == "elif" && !stack.empty ()) {
+		std::string previousBranches;
+		for (const auto& branch : stack.back ().branches) {
+		    if (!previousBranches.empty ()) {
+			previousBranches += " || ";
+		    }
+		    previousBranches += "(" + branch + ")";
+		}
+		stack.back ().active = "!(" + previousBranches + ") && (" + expression + ")";
+		stack.back ().branches.push_back (expression);
+	    } else if (kind == "else" && !stack.empty ()) {
+		std::string previousBranches;
+		for (const auto& branch : stack.back ().branches) {
+		    if (!previousBranches.empty ()) {
+			previousBranches += " || ";
+		    }
+		    previousBranches += "(" + branch + ")";
+		}
+		stack.back ().active = "!(" + previousBranches + ")";
+	    } else if (kind == "endif" && !stack.empty ()) {
+		stack.pop_back ();
+	    }
+	}
+	if (lineEnd == std::string::npos || lineEnd + 1 >= offset) {
+	    break;
+	}
+	lineStart = lineEnd + 1;
+    }
+
+    std::string condition;
+    for (const auto& conditional : stack) {
+	if (!condition.empty ()) {
+	    condition += " && ";
+	}
+	condition += "(" + conditional.active + ")";
+    }
+    return condition;
+}
+
+/**
+ * A few Workshop effect shaders mutate a fragment-stage varying (most often
+ * v_TexCoord) while transforming texture coordinates. Fragment inputs are
+ * read-only in GLSL, so move that varying interface to a private linked name
+ * and initialize a mutable per-fragment copy before main's logic runs.
+ */
+std::string normalizeWritableFragmentVaryings (
+    std::string& vertex, std::string fragment, std::vector<std::string>& adjusted
+) {
+    const std::regex fragmentVarying (R"(\bvarying\s+([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*;)");
+    const std::string fragmentCode = stripCommentsPreservingOffsets (fragment);
+    struct MutableVarying {
+	std::size_t declarationStart;
+	std::size_t declarationLength;
+	std::string type;
+	std::string name;
+	std::string condition;
+    };
+    std::vector<MutableVarying> mutableVaryings;
+    std::set<std::string> mutableNames;
+    const std::string vertexCode = stripCommentsPreservingOffsets (vertex);
+
+    for (std::sregex_iterator it (fragmentCode.begin (), fragmentCode.end (), fragmentVarying), end; it != end; ++it) {
+	const std::string type = (*it)[1].str ();
+	const std::string name = (*it)[2].str ();
+	const std::regex vertexVarying ("\\bvarying\\s+" + type + "\\s+" + name + "\\s*;");
+	if (!std::regex_search (vertexCode, vertexVarying)) {
+	    continue;
+	}
+
+	const std::regex writeAccess (
+	    "\\b" + name + "\\b\\s*(?:(?:\\.[xyzwrgba]{1,4})|(?:\\[[^\\]]+\\]))?\\s*(?:\\+\\+|--|[+\\-*/]?=(?!=))"
+	);
+	if (!std::regex_search (fragmentCode, writeAccess)) {
+	    continue;
+	}
+
+	const std::string alias = "_lweInput_" + name;
+	const std::regex aliasIdentifier ("\\b" + alias + "\\b");
+	if (std::regex_search (fragmentCode, aliasIdentifier) || std::regex_search (vertex, aliasIdentifier)) {
+	    continue;
+	}
+	mutableVaryings.push_back ({
+	    static_cast<std::size_t> (it->position ()), static_cast<std::size_t> (it->length ()), type, name,
+	    preprocessorConditionAt (fragment, static_cast<std::size_t> (it->position ()))
+	});
+	if (mutableNames.insert (name).second) {
+	    adjusted.push_back (name);
+	}
+    }
+
+    std::sort (mutableVaryings.begin (), mutableVaryings.end (), [](const auto& lhs, const auto& rhs) {
+	return lhs.declarationStart > rhs.declarationStart;
+    });
+    std::set<std::string> vertexAliasesApplied;
+    std::set<std::pair<std::string, std::string>> localDeclarations;
+    for (const auto& varying : mutableVaryings) {
+	const std::string alias = "_lweInput_" + varying.name;
+	if (vertexAliasesApplied.insert (varying.name).second) {
+	    const std::regex identifier ("\\b" + varying.name + "\\b");
+	    vertex = std::regex_replace (vertex, identifier, alias);
+	}
+
+	std::string replacement = "varying " + varying.type + " " + alias + ";";
+	if (localDeclarations.emplace (varying.name, varying.condition).second) {
+	    replacement += "\n" + varying.type + " " + varying.name + ";";
+	}
+	fragment.replace (varying.declarationStart, varying.declarationLength, replacement);
+    }
+
+    if (mutableVaryings.empty ()) {
+	return fragment;
+    }
+
+    const std::string fragmentWithCommentsRemoved = stripCommentsPreservingOffsets (fragment);
+    const std::regex mainFunction (R"(\bvoid\s+main\s*\(\s*\)\s*\{)");
+    std::vector<std::size_t> mainBodies;
+    for (std::sregex_iterator it (fragmentWithCommentsRemoved.begin (), fragmentWithCommentsRemoved.end (), mainFunction),
+	 end;
+	 it != end; ++it) {
+	mainBodies.push_back (static_cast<std::size_t> (it->position () + it->length () - 1));
+    }
+    std::sort (mainBodies.rbegin (), mainBodies.rend ());
+    for (const std::size_t bodyStart : mainBodies) {
+	std::string initialization;
+	std::set<std::pair<std::string, std::string>> initialized;
+	for (const auto& varying : mutableVaryings) {
+	    if (!initialized.emplace (varying.name, varying.condition).second) {
+		continue;
+	    }
+	    if (!varying.condition.empty ()) {
+		initialization += "\n#if " + varying.condition + "\n";
+	    }
+	    initialization += "    " + varying.name + " = _lweInput_" + varying.name + ";\n";
+	    if (!varying.condition.empty ()) {
+		initialization += "#endif\n";
+	    }
+	}
+	fragment.insert (bodyStart + 1, initialization);
+    }
+
+    return fragment;
+}
+
+/**
+ * Shared blending helpers accept a scalar opacity, but some workshop effects
+ * pass a vec2 temporary derived from their UVs. In that call context the first
+ * component is the scalar coverage value the helper can consume.
+ */
+std::string normalizeApplyBlendingVectorOpacity (std::string source, std::vector<std::string>& adjusted) {
+    const std::string code = stripCommentsPreservingOffsets (source);
+    const std::regex scalarApplyBlending (
+	R"(\bApplyBlending\s*\(\s*(?:const\s+)?int\s+\w+\s*,\s*(?:(?:in|out|inout)\s+)?vec3\s+\w+\s*,\s*(?:(?:in|out|inout)\s+)?vec3\s+\w+\s*,\s*(?:(?:in|out|inout)\s+)?float\s+\w+)"
+    );
+    if (!std::regex_search (code, scalarApplyBlending)) {
+	return source;
+    }
+
+    std::set<std::string> vectorNames;
+    const std::regex vectorDeclaration (R"(\bvec[234]\s+([A-Za-z_]\w*)\b)");
+    for (std::sregex_iterator it (code.begin (), code.end (), vectorDeclaration), end; it != end; ++it) {
+	vectorNames.insert ((*it)[1].str ());
+    }
+
+    struct Replacement {
+	std::size_t start;
+	std::size_t length;
+	std::string expression;
+    };
+    std::vector<Replacement> replacements;
+    const std::regex functionName (R"(\bApplyBlending\s*\()");
+    for (std::sregex_iterator it (code.begin (), code.end (), functionName), end; it != end; ++it) {
+	const std::size_t open = static_cast<std::size_t> (it->position () + it->length () - 1);
+	std::vector<std::pair<std::size_t, std::size_t>> arguments;
+	std::size_t argumentStart = open + 1;
+	int parenDepth = 0;
+	int bracketDepth = 0;
+	for (std::size_t current = open + 1; current < code.size (); ++current) {
+	    if (code[current] == '(') {
+		++parenDepth;
+	    } else if (code[current] == ')') {
+		if (parenDepth == 0 && bracketDepth == 0) {
+		    arguments.emplace_back (argumentStart, current);
+		    break;
+		}
+		--parenDepth;
+	    } else if (code[current] == '[') {
+		++bracketDepth;
+	    } else if (code[current] == ']') {
+		--bracketDepth;
+	    } else if (code[current] == ',' && parenDepth == 0 && bracketDepth == 0) {
+		arguments.emplace_back (argumentStart, current);
+		argumentStart = current + 1;
+	    }
+	}
+	if (arguments.size () != 4) {
+	    continue;
+	}
+
+	const auto [opacityStart, opacityEnd] = arguments[3];
+	std::string opacity = code.substr (opacityStart, opacityEnd - opacityStart);
+	bool adjustedOpacity = false;
+	for (const auto& name : vectorNames) {
+	    const std::regex vectorUse ("\\b" + name + "\\b(?!\\s*\\.)");
+	    const std::string scalarized = std::regex_replace (opacity, vectorUse, name + ".x");
+	    if (scalarized != opacity) {
+		opacity = scalarized;
+		adjusted.push_back (name);
+		adjustedOpacity = true;
+	    }
+	}
+	if (adjustedOpacity) {
+	    replacements.push_back ({ opacityStart, opacityEnd - opacityStart, opacity });
+	}
+    }
+
+    std::sort (replacements.begin (), replacements.end (), [](const auto& lhs, const auto& rhs) {
+	return lhs.start > rhs.start;
+    });
+    for (const auto& replacement : replacements) {
+	source.replace (replacement.start, replacement.length, replacement.expression);
+    }
+    return source;
+}
+
+std::vector<std::pair<std::size_t, std::size_t>> callArguments (const std::string& code, const std::size_t open) {
+    std::vector<std::pair<std::size_t, std::size_t>> arguments;
+    std::size_t argumentStart = open + 1;
+    int parenDepth = 0;
+    int bracketDepth = 0;
+    int braceDepth = 0;
+    for (std::size_t current = open + 1; current < code.size (); ++current) {
+	if (code[current] == '(') {
+	    ++parenDepth;
+	} else if (code[current] == ')') {
+	    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+		arguments.emplace_back (argumentStart, current);
+		break;
+	    }
+	    --parenDepth;
+	} else if (code[current] == '[') {
+	    ++bracketDepth;
+	} else if (code[current] == ']') {
+	    --bracketDepth;
+	} else if (code[current] == '{') {
+	    ++braceDepth;
+	} else if (code[current] == '}') {
+	    --braceDepth;
+	} else if (code[current] == ',' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+	    arguments.emplace_back (argumentStart, current);
+	    argumentStart = current + 1;
+	}
+    }
+    return arguments;
+}
+
+std::size_t expressionEnd (const std::string& code, const std::size_t start) {
+    int parenDepth = 0;
+    int bracketDepth = 0;
+    int braceDepth = 0;
+    for (std::size_t current = start; current < code.size (); ++current) {
+	if (code[current] == '(') {
+	    ++parenDepth;
+	} else if (code[current] == ')') {
+	    --parenDepth;
+	} else if (code[current] == '[') {
+	    ++bracketDepth;
+	} else if (code[current] == ']') {
+	    --bracketDepth;
+	} else if (code[current] == '{') {
+	    ++braceDepth;
+	} else if (code[current] == '}') {
+	    --braceDepth;
+	} else if (code[current] == ';' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+	    return current;
+	}
+    }
+    return code.size ();
+}
+
+/**
+ * Effect uniforms such as g_Texture0Resolution intentionally carry four
+ * dimensions. When an expression is explicitly used as a vec2 value (or as
+ * 2D texture coordinates), use its XY dimensions at that use site instead of
+ * changing the uniform's shared ABI.
+ */
+std::string normalizeVec4OperandsInVec2Contexts (const std::string& source, std::vector<std::string>& adjusted) {
+    const std::string code = stripCommentsPreservingOffsets (source);
+    const std::regex typedName (R"(\b(float|int|uint|bool|vec[234]|[biu]vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_]\w*))");
+    std::set<std::string> vec4Names;
+    std::set<std::string> conflictingNames;
+    for (std::sregex_iterator it (code.begin (), code.end (), typedName), end; it != end; ++it) {
+	const std::string type = (*it)[1].str ();
+	const std::string name = (*it)[2].str ();
+	if (type == "vec4") {
+	    vec4Names.insert (name);
+	} else {
+	    conflictingNames.insert (name);
+	}
+    }
+    for (const auto& name : conflictingNames) {
+	vec4Names.erase (name);
+    }
+    if (vec4Names.empty ()) {
+	return source;
+    }
+
+    struct Replacement {
+	std::size_t start;
+	std::size_t length;
+	std::string value;
+    };
+    std::vector<Replacement> replacements;
+    const auto collectOperands = [&] (const std::size_t start, const std::size_t end) {
+	const std::string expression = code.substr (start, end - start);
+	const std::regex identifier (R"(\b[A-Za-z_]\w*\b)");
+	for (std::sregex_iterator it (expression.begin (), expression.end (), identifier), finish; it != finish; ++it) {
+	    const std::string name = it->str ();
+	    if (!vec4Names.contains (name)) {
+		continue;
+	    }
+	    const std::size_t localStart = static_cast<std::size_t> (it->position ());
+	    const std::size_t localEnd = localStart + static_cast<std::size_t> (it->length ());
+	    std::size_t suffix = localEnd;
+	    while (suffix < expression.size () && std::isspace (static_cast<unsigned char> (expression[suffix]))) {
+		++suffix;
+	    }
+	    std::size_t prefix = localStart;
+	    while (prefix > 0 && std::isspace (static_cast<unsigned char> (expression[prefix - 1]))) {
+		--prefix;
+	    }
+	    if ((suffix < expression.size () && expression[suffix] == '.')
+		|| (prefix > 0 && expression[prefix - 1] == '.')) {
+		continue;
+	    }
+	    replacements.push_back ({ start + localStart, localEnd - localStart, name + ".xy" });
+	    adjusted.push_back (name);
+	}
+    };
+
+    const std::regex vec2Initializer (R"(\bvec2\s+[A-Za-z_]\w*\s*=\s*)");
+    for (std::sregex_iterator it (code.begin (), code.end (), vec2Initializer), end; it != end; ++it) {
+	const std::size_t start = static_cast<std::size_t> (it->position () + it->length ());
+	collectOperands (start, expressionEnd (code, start));
+    }
+
+    const std::regex textureCall (R"(\b(?:texSample2D|texture|texture2D|texSample2DLod|textureLod|texture2DLod)\s*\()");
+    for (std::sregex_iterator it (code.begin (), code.end (), textureCall), end; it != end; ++it) {
+	const std::size_t open = static_cast<std::size_t> (it->position () + it->length () - 1);
+	const auto arguments = callArguments (code, open);
+	if (arguments.size () >= 2) {
+	    collectOperands (arguments[1].first, arguments[1].second);
+	}
+    }
+
+    std::sort (replacements.begin (), replacements.end (), [] (const auto& lhs, const auto& rhs) {
+	return lhs.start > rhs.start;
+    });
+    replacements.erase (std::unique (replacements.begin (), replacements.end (), [] (const auto& lhs, const auto& rhs) {
+	return lhs.start == rhs.start;
+    }), replacements.end ());
+    std::string result = source;
+    for (const auto& replacement : replacements) {
+	result.replace (replacement.start, replacement.length, replacement.value);
+    }
+    return result;
+}
+
+/** Older Workshop ports use 0.0/1.0 floats as ternary conditions. */
+std::string normalizeFloatConditions (const std::string& source, std::vector<std::string>& adjusted) {
+    const std::string code = stripCommentsPreservingOffsets (source);
+    const std::regex typedName (R"(\b(float|bool|int|uint|vec[234]|[biu]vec[234])\s+([A-Za-z_]\w*))");
+    std::set<std::string> floatNames;
+    std::set<std::string> conflictingNames;
+    for (std::sregex_iterator it (code.begin (), code.end (), typedName), end; it != end; ++it) {
+	const std::string type = (*it)[1].str ();
+	const std::string name = (*it)[2].str ();
+	if (type == "float") {
+	    floatNames.insert (name);
+	} else {
+	    conflictingNames.insert (name);
+	}
+    }
+    for (const auto& name : conflictingNames) {
+	floatNames.erase (name);
+    }
+
+    struct Replacement {
+	std::size_t start;
+	std::size_t length;
+	std::string value;
+    };
+    std::vector<Replacement> replacements;
+    for (const auto& name : floatNames) {
+	const std::regex ternary ("\\b" + name + R"(\s*\?)");
+	for (std::sregex_iterator it (code.begin (), code.end (), ternary), end; it != end; ++it) {
+	    const std::size_t start = static_cast<std::size_t> (it->position ());
+	    if (start > 0 && (code[start - 1] == '.' || std::isalnum (static_cast<unsigned char> (code[start - 1])) || code[start - 1] == '_')) {
+		continue;
+	    }
+	    replacements.push_back ({ start, name.size (), "(" + name + " != 0.0)" });
+	    adjusted.push_back (name);
+	}
+	const std::regex conditional ("\\b(?:if|while)\\s*\\(\\s*(" + name + R"()\s*\))");
+	for (std::sregex_iterator it (code.begin (), code.end (), conditional), end; it != end; ++it) {
+	    const std::size_t start = static_cast<std::size_t> (it->position (1));
+	    replacements.push_back ({ start, name.size (), "(" + name + " != 0.0)" });
+	    adjusted.push_back (name);
+	}
+    }
+    std::sort (replacements.begin (), replacements.end (), [] (const auto& lhs, const auto& rhs) {
+	return lhs.start > rhs.start;
+    });
+    replacements.erase (std::unique (replacements.begin (), replacements.end (), [] (const auto& lhs, const auto& rhs) {
+	return lhs.start == rhs.start;
+    }), replacements.end ());
+    std::string result = source;
+    for (const auto& replacement : replacements) {
+	result.replace (replacement.start, replacement.length, replacement.value);
+    }
+    return result;
+}
+
+std::string ensurePiFallback (const std::string& source) {
+    const std::string fallback = "#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n";
+    const std::string uncommented = stripCommentsPreservingOffsets (source);
+    const std::regex versionDirective (R"(^\s*#\s*version\b[^\n]*(?:\n|$))");
+    std::smatch match;
+    if (std::regex_search (uncommented, match, versionDirective, std::regex_constants::match_continuous)) {
+	std::string result = source;
+	result.insert (static_cast<std::size_t> (match.length ()), fallback);
+	return result;
+    }
+    return fallback + source;
+}
+
+/** Preserve sequential macro meaning when included Workshop headers reuse pi names. */
+std::string normalizePiMacroRedefinitions (const std::string& source) {
+    const std::string uncommented = stripCommentsPreservingOffsets (source);
+    const std::regex directive (R"(^\s*#\s*(define|undef)\s+(M_PI(?:_2)?)\b(.*)$)");
+    std::map<std::string, std::string> definitions;
+    std::vector<std::pair<std::size_t, std::string>> insertions;
+    for (std::size_t lineStart = 0; lineStart < uncommented.size ();) {
+	const std::size_t lineEnd = uncommented.find ('\n', lineStart);
+	const std::size_t end = lineEnd == std::string::npos ? uncommented.size () : lineEnd;
+	std::string logicalLine = uncommented.substr (lineStart, end - lineStart);
+	std::size_t logicalEnd = end;
+	while (!logicalLine.empty ()) {
+	    std::size_t last = logicalLine.find_last_not_of (" \t\r");
+	    if (last == std::string::npos || logicalLine[last] != '\\' || logicalEnd >= uncommented.size ()) {
+		break;
+	    }
+	    const std::size_t nextEnd = uncommented.find ('\n', logicalEnd + 1);
+	    const std::size_t nextLineEnd = nextEnd == std::string::npos ? uncommented.size () : nextEnd;
+	    logicalLine += uncommented.substr (logicalEnd + 1, nextLineEnd - logicalEnd - 1);
+	    logicalEnd = nextLineEnd;
+	}
+	if (!logicalLine.empty () && logicalLine.back () == '\r') {
+	    logicalLine.pop_back ();
+	}
+	std::smatch match;
+	if (std::regex_search (logicalLine, match, directive, std::regex_constants::match_continuous)) {
+	    const std::string operation = match[1].str ();
+	    const std::string name = match[2].str ();
+	    if (operation == "undef") {
+		definitions.erase (name);
+	    } else {
+		std::string value = match[3].str ();
+		const std::size_t first = value.find_first_not_of (" \t\r");
+		const std::size_t last = value.find_last_not_of (" \t\r");
+		value = first == std::string::npos ? "" : value.substr (first, last - first + 1);
+		const auto previous = definitions.find (name);
+		if (previous != definitions.end () && previous->second != value) {
+		    insertions.emplace_back (lineStart, name);
+		}
+		definitions[name] = value;
+	    }
+	}
+	if (lineEnd == std::string::npos) {
+	    break;
+	}
+	lineStart = lineEnd + 1;
+    }
+    std::string result = source;
+    for (auto it = insertions.rbegin (); it != insertions.rend (); ++it) {
+	result.insert (it->first, "#undef " + it->second + "\n");
+    }
+    return result;
+}
+
+/**
+ * Wallpaper Engine workshop shaders occasionally mark values that depend on
+ * uniforms as `const`. GLSL only permits compile-time expressions for const
+ * initializers, so those shaders fail before reaching the driver's compiler.
+ * Preserve the author's expression and intent: turn a dynamic global const
+ * into a macro expression and remove `const` from dynamic local values.
+ * Other invalid const expressions are deliberately left alone so their
+ * diagnostics are not hidden.
+ */
+std::string normalizeUniformDependentConstants (const std::string& source, std::vector<std::string>& adjusted) {
+    std::set<std::string> uniformNames;
+    std::string uncommented = source;
+    bool lineComment = false;
+    bool blockComment = false;
+    for (std::size_t i = 0; i < uncommented.size (); ++i) {
+	if (lineComment) {
+	    if (uncommented[i] == '\n') {
+		lineComment = false;
+	    } else {
+		uncommented[i] = ' ';
+	    }
+	} else if (blockComment) {
+	    if (uncommented[i] == '*' && i + 1 < uncommented.size () && uncommented[i + 1] == '/') {
+		uncommented[i] = uncommented[i + 1] = ' ';
+		++i;
+		blockComment = false;
+	    } else if (uncommented[i] != '\n') {
+		uncommented[i] = ' ';
+	    }
+	} else if (uncommented[i] == '/' && i + 1 < uncommented.size () && uncommented[i + 1] == '/') {
+	    uncommented[i] = uncommented[i + 1] = ' ';
+	    ++i;
+	    lineComment = true;
+	} else if (uncommented[i] == '/' && i + 1 < uncommented.size () && uncommented[i + 1] == '*') {
+	    uncommented[i] = uncommented[i + 1] = ' ';
+	    ++i;
+	    blockComment = true;
+	}
+    }
+
+    const std::regex uniformDeclaration (
+	R"(\buniform\s+(?:(?:lowp|mediump|highp|readonly|writeonly|coherent|volatile|restrict)\s+)*[A-Za-z_]\w*\s+([A-Za-z_]\w*))"
+    );
+    for (std::sregex_iterator it (uncommented.begin (), uncommented.end (), uniformDeclaration), end; it != end; ++it) {
+	uniformNames.insert ((*it)[1].str ());
+    }
+
+    struct Replacement {
+	std::size_t start;
+	std::size_t length;
+	std::string value;
+    };
+    std::vector<Replacement> replacements;
+    const std::regex declarationPrefix (
+	R"(^const\s+(?:(?:lowp|mediump|highp)\s+)?[A-Za-z_]\w*\s+([A-Za-z_]\w*)\s*=\s*)"
+    );
+    std::set<std::string> dynamicConstants;
+    int braceDepth = 0;
+    lineComment = false;
+    blockComment = false;
+    for (std::size_t i = 0; i < uncommented.size ();) {
+	const char ch = uncommented[i];
+	if (ch == '\n') {
+	    lineComment = false;
+	    ++i;
+	    continue;
+	}
+	if (lineComment) {
+	    ++i;
+	    continue;
+	}
+	if (blockComment) {
+	    if (ch == '*' && i + 1 < uncommented.size () && uncommented[i + 1] == '/') {
+		blockComment = false;
+		i += 2;
+	    } else {
+		++i;
+	    }
+	    continue;
+	}
+	if (ch == '/' && i + 1 < uncommented.size () && uncommented[i + 1] == '/') {
+	    lineComment = true;
+	    i += 2;
+	    continue;
+	}
+	if (ch == '/' && i + 1 < uncommented.size () && uncommented[i + 1] == '*') {
+	    blockComment = true;
+	    i += 2;
+	    continue;
+	}
+	if (ch == '{') {
+	    ++braceDepth;
+	    ++i;
+	    continue;
+	}
+	if (ch == '}') {
+	    braceDepth = std::max (0, braceDepth - 1);
+	    ++i;
+	    continue;
+	}
+	if (
+	    ch != 'c' || i + 5 > uncommented.size () || uncommented.compare (i, 5, "const") != 0 ||
+	    (i > 0 && (std::isalnum (static_cast<unsigned char> (uncommented[i - 1])) || uncommented[i - 1] == '_')) ||
+	    (i + 5 < uncommented.size () && (std::isalnum (static_cast<unsigned char> (uncommented[i + 5])) || uncommented[i + 5] == '_'))
+	) {
+	    ++i;
+	    continue;
+	}
+
+	const auto begin = uncommented.cbegin () + i;
+	std::smatch prefix;
+	const std::string remaining (begin, uncommented.cend ());
+	if (!std::regex_search (remaining, prefix, declarationPrefix, std::regex_constants::match_continuous)) {
+	    i += 5;
+	    continue;
+	}
+	const std::string name = prefix[1].str ();
+	const std::size_t expressionStart = i + static_cast<std::size_t> (prefix.length ());
+	std::size_t statementEnd = expressionStart;
+	int parenDepth = 0;
+	int bracketDepth = 0;
+	for (; statementEnd < uncommented.size (); ++statementEnd) {
+	    const char exprChar = uncommented[statementEnd];
+	    if (exprChar == '(') {
+		++parenDepth;
+	    } else if (exprChar == ')') {
+		--parenDepth;
+	    } else if (exprChar == '[') {
+		++bracketDepth;
+	    } else if (exprChar == ']') {
+		--bracketDepth;
+	    } else if (exprChar == ';' && parenDepth == 0 && bracketDepth == 0) {
+		break;
+	    }
+	}
+	if (statementEnd == uncommented.size ()) {
+	    i += 5;
+	    continue;
+	}
+	const std::string expression = uncommented.substr (expressionStart, statementEnd - expressionStart);
+	const std::regex identifier (R"([A-Za-z_]\w*)");
+	bool dynamic = false;
+	for (std::sregex_iterator it (expression.begin (), expression.end (), identifier), end; it != end; ++it) {
+	    if (uniformNames.contains ((*it)[0].str ()) || dynamicConstants.contains ((*it)[0].str ())) {
+		dynamic = true;
+		break;
+	    }
+	}
+	if (!dynamic) {
+	    i = statementEnd + 1;
+	    continue;
+	}
+
+	const std::size_t sourceEnd = statementEnd + 1;
+	dynamicConstants.insert (name);
+	if (braceDepth == 0) {
+	    replacements.push_back ({ i, sourceEnd - i, "#define " + name + " (" + expression + ")" });
+	} else {
+	    // Keep source line numbers stable for subsequent diagnostics.
+	    replacements.push_back ({ i, 5, "     " });
+	}
+	adjusted.push_back (name);
+	i = sourceEnd;
+    }
+
+    std::string result = source;
+    for (auto it = replacements.rbegin (); it != replacements.rend (); ++it) {
+	result.replace (it->start, it->length, it->value);
+    }
+    return result;
+}
+} // namespace
 
 TBuiltInResource BuiltInResource = { .maxLights = 32,
 				     .maxClipPlanes = 6,
@@ -132,9 +967,67 @@ GLSLContext& GLSLContext::get () {
 }
 
 std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment) {
+    std::vector<std::string> adjustedVaryings;
+    std::string compatibleVaryings = normalizeXyOnlyVaryingMismatches (vertex, fragment, adjustedVaryings);
+    std::vector<std::string> writableVaryings;
+    const std::string writableFragment
+	= normalizeWritableFragmentVaryings (compatibleVaryings, fragment, writableVaryings);
+    std::vector<std::string> adjustedConstants;
+    const std::string compatibleVertex = normalizeUniformDependentConstants (compatibleVaryings, adjustedConstants);
+    const std::string compatibleFragment = normalizeUniformDependentConstants (writableFragment, adjustedConstants);
+    std::vector<std::size_t> removedVertexEndifs;
+    std::vector<std::size_t> removedFragmentEndifs;
+    std::vector<std::string> adjustedVec2Operands;
+    std::string validVertex = normalizeVec4OperandsInVec2Contexts (
+	ensurePiFallback (neutralizeUnmatchedEndifs (compatibleVertex, removedVertexEndifs)), adjustedVec2Operands
+    );
+	std::string validFragment = normalizeVec4OperandsInVec2Contexts (
+	ensurePiFallback (neutralizeUnmatchedEndifs (compatibleFragment, removedFragmentEndifs)), adjustedVec2Operands
+	);
+    std::vector<std::string> adjustedFloatConditions;
+    validFragment = normalizeFloatConditions (validFragment, adjustedFloatConditions);
+    validVertex = normalizePiMacroRedefinitions (validVertex);
+    validFragment = normalizePiMacroRedefinitions (validFragment);
+
+    std::string shaderName = "<unknown>";
+    const std::regex shaderHeader (R"(// Processed shader ([^\r\n]+))");
+    std::smatch shaderHeaderMatch;
+    if (std::regex_search (fragment, shaderHeaderMatch, shaderHeader)) {
+	shaderName = shaderHeaderMatch[1].str ();
+    } else if (std::regex_search (vertex, shaderHeaderMatch, shaderHeader)) {
+	shaderName = shaderHeaderMatch[1].str ();
+    }
+    for (const auto& name : adjustedVaryings) {
+	sLog.out ("Narrowed XY-only GLSL varying to match fragment interface in ", shaderName, ": ", name);
+    }
+    for (const auto& name : writableVaryings) {
+	sLog.out ("Copied writable fragment GLSL varying in ", shaderName, ": ", name);
+    }
+    for (const auto& name : adjustedConstants) {
+	sLog.out ("Treating uniform-dependent GLSL const initializer as dynamic in ", shaderName, ": ", name);
+    }
+    std::sort (adjustedVec2Operands.begin (), adjustedVec2Operands.end ());
+    adjustedVec2Operands.erase (std::unique (adjustedVec2Operands.begin (), adjustedVec2Operands.end ()), adjustedVec2Operands.end ());
+    for (const auto& name : adjustedVec2Operands) {
+	sLog.out ("Using XY components of vec4 GLSL operand in a vec2 context in ", shaderName, ": ", name);
+    }
+    std::sort (adjustedFloatConditions.begin (), adjustedFloatConditions.end ());
+    adjustedFloatConditions.erase (
+	std::unique (adjustedFloatConditions.begin (), adjustedFloatConditions.end ()), adjustedFloatConditions.end ()
+    );
+    for (const auto& name : adjustedFloatConditions) {
+	sLog.out ("Comparing scalar float GLSL condition to zero in ", shaderName, ": ", name);
+    }
+    for (const std::size_t line : removedVertexEndifs) {
+	sLog.error ("Ignoring unmatched GLSL #endif in vertex shader ", shaderName, " at line ", line);
+    }
+    for (const std::size_t line : removedFragmentEndifs) {
+	sLog.error ("Ignoring unmatched GLSL #endif in fragment shader ", shaderName, " at line ", line);
+    }
+
     glslang::TShader vertexShader (EShLangVertex);
 
-    const char* vertexSource = vertex.c_str ();
+    const char* vertexSource = validVertex.c_str ();
     vertexShader.setStrings (&vertexSource, 1);
     vertexShader.setEntryPoint ("main");
     vertexShader.setEnvInput (glslang::EShSourceGlsl, EShLangVertex, glslang::EShClientOpenGL, 330);
@@ -144,30 +1037,56 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     vertexShader.setAutoMapBindings (true);
 
     if (!vertexShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	sLog.error ("GLSL vertex unit parsing Failed: ", vertexShader.getInfoLog ());
+	sLog.error ("GLSL vertex unit parsing Failed in ", shaderName, ": ", vertexShader.getInfoLog ());
 	return { "", "" };
     }
+    const auto configureFragmentShader = [] (glslang::TShader& shader, const char* source) {
+	shader.setStrings (&source, 1);
+	shader.setEntryPoint ("main");
+	shader.setEnvInput (glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientOpenGL, 330);
+	shader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+	shader.setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
+	shader.setAutoMapLocations (true);
+	shader.setAutoMapBindings (true);
+    };
+
     glslang::TShader fragmentShader (EShLangFragment);
-
-    const char* fragmentSource = fragment.c_str ();
-    fragmentShader.setStrings (&fragmentSource, 1);
-    fragmentShader.setEntryPoint ("main");
-    fragmentShader.setEnvInput (glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientOpenGL, 330);
-    fragmentShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
-    fragmentShader.setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
-    fragmentShader.setAutoMapLocations (true);
-    fragmentShader.setAutoMapBindings (true);
-
+    glslang::TShader fallbackFragmentShader (EShLangFragment);
+    glslang::TShader* fragmentShaderForProgram = &fragmentShader;
+    const char* fragmentSource = validFragment.c_str ();
+    configureFragmentShader (fragmentShader, fragmentSource);
     if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	sLog.error ("GLSL fragment unit parsing Failed: ", fragmentShader.getInfoLog ());
-	return { "", "" };
+	const std::string initialError = fragmentShader.getInfoLog ();
+	std::vector<std::string> adjustedBlendOpacities;
+	const std::string scalarizedFragment = normalizeApplyBlendingVectorOpacity (validFragment, adjustedBlendOpacities);
+	if (
+	    scalarizedFragment == validFragment || initialError.find ("ApplyBlending") == std::string::npos ||
+	    initialError.find ("no matching overloaded function") == std::string::npos
+	) {
+	    sLog.error ("GLSL fragment unit parsing Failed in ", shaderName, ": ", initialError);
+	    return { "", "" };
+	}
+	validFragment = scalarizedFragment;
+	for (const auto& name : adjustedBlendOpacities) {
+	    sLog.out ("Using scalar component for GLSL ApplyBlending opacity in ", shaderName, ": ", name);
+	}
+	fragmentSource = validFragment.c_str ();
+	configureFragmentShader (fallbackFragmentShader, fragmentSource);
+	if (!fallbackFragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
+	    sLog.error (
+		"GLSL fragment unit parsing Failed after ApplyBlending compatibility in ", shaderName, ": ",
+		fallbackFragmentShader.getInfoLog ()
+	    );
+	    return { "", "" };
+	}
+	fragmentShaderForProgram = &fallbackFragmentShader;
     }
     glslang::TProgram program;
     program.addShader (&vertexShader);
-    program.addShader (&fragmentShader);
+    program.addShader (fragmentShaderForProgram);
 
     if (!program.link (EShMsgDefault)) {
-	sLog.error ("Program Linking Failed: ", program.getInfoLog ());
+	sLog.error ("Program Linking Failed in ", shaderName, ": ", program.getInfoLog ());
 	return { "", "" };
     }
 
@@ -188,8 +1107,8 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     options.es = false;
     fragmentCompiler.set_common_options (options);
 
-    return { vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
-	     fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif" };
+    return { vertexCompiler.compile () + "#if 0\n" + validVertex + "\n#endif",
+	     fragmentCompiler.compile () + "#if 0\n" + validFragment + "\n#endif" };
 }
 
 std::unique_ptr<GLSLContext> GLSLContext::sInstance = nullptr;

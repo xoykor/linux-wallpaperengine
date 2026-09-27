@@ -731,7 +731,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.gallery.set_column_spacing(14)
         self.gallery.set_row_spacing(14)
         self.gallery.set_min_children_per_line(1)
-        self.gallery.set_max_children_per_line(2)
+        self.gallery.set_max_children_per_line(3)
         gallery_scroll.set_child(self.gallery)
         self.gallery_state = Gtk.Stack()
         self.gallery_state.set_hhomogeneous(False)
@@ -1574,10 +1574,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         for wallpaper_id in ids[offset:offset + 12]:
             item = self.catalog[wallpaper_id]
             content = _box(vertical=True, spacing=5)
-            content.set_size_request(300, 205)
+            content.set_size_request(244, 178)
             artwork = Gtk.Overlay()
             artwork.add_css_class("artwork")
-            artwork.set_child(_preview(item.get("preview"), 300, 169))
+            artwork.set_child(_preview(item.get("preview"), 244, 137))
             type_badge = _badge(tr("CENA" if item.get("type") == "scene" else "VÍDEO"))
             type_badge.add_css_class("type-badge")
             type_badge.set_halign(Gtk.Align.START)
@@ -1632,7 +1632,11 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             _clear(container)
             if wallpaper_id == current:
                 container.append(_badge(tr("● AO VIVO"), "pill-accent"))
-            heart = _label("♥" if wallpaper_id in favorites else "♡", css="favorite-heart")
+            heart = Gtk.Button(label="♥" if wallpaper_id in favorites else "♡")
+            heart.add_css_class("favorite-heart")
+            heart.add_css_class("favorite-heart-button")
+            heart.set_tooltip_text(tr("Remover dos favoritos" if wallpaper_id in favorites else "Adicionar aos favoritos"))
+            heart.connect("clicked", lambda *_args, item_id=wallpaper_id: self._toggle_favorite(item_id))
             container.append(heart)
 
     def _filter_cards(self) -> None:

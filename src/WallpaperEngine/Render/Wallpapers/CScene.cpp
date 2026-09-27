@@ -248,7 +248,9 @@ Render::CObject* CScene::createObject (const Object& object) {
 Render::CObject* CScene::dispatchObjectType (const Object& object) {
     Render::CObject* renderObject = nullptr;
 
-    if (object.is<Image> ()) {
+    if (object.is<Light> ()) {
+	return nullptr;
+    } else if (object.is<Image> ()) {
 	renderObject = new Objects::CImage (*this, *object.as<Image> ());
     } else if (object.is<ModelObject> ()) {
 	renderObject = new Objects::CModel (*this, *object.as<ModelObject> ());
@@ -325,6 +327,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     // update the parallax position if required
     if (this->getScene ().camera.parallax.enabled->value->getBool ()
+	&& this->getContext ().getApp ().getContext ().settings.mouse.enabled
 	&& !this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
 	const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
