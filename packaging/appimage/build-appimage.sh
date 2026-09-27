@@ -107,7 +107,8 @@ shutil.copytree(
 )
 PY
 
-install -Dm755 "${ROOT}/packaging/appimage/AppRun" "${APPDIR}/AppRun"
+sed "s/@APPIMAGE_VERSION@/${VERSION}/g" "${ROOT}/packaging/appimage/AppRun" > "${APPDIR}/AppRun"
+chmod 755 "${APPDIR}/AppRun"
 sed 's/^Exec=.*/Exec=AppRun/' "${ROOT}/app/linux-wallpaperengine-app.desktop" \
     > "${APPDIR}/usr/share/applications/${DESKTOP_FILE}"
 install -Dm644 "${APPDIR}/usr/share/applications/${DESKTOP_FILE}" "${APPDIR}/${DESKTOP_FILE}"

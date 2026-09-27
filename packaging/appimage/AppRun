@@ -14,6 +14,7 @@ export PYTHONPATH="${APPDIR}/usr/lib${PYTHONPATH:+:${PYTHONPATH}}"
 export LD_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PYTHONDONTWRITEBYTECODE=1
 export LINUX_WALLPAPERENGINE_APPIMAGE=1
+export LINUX_WALLPAPERENGINE_APPIMAGE_VERSION="@APPIMAGE_VERSION@"
 export LINUX_WALLPAPERENGINE_RENDERER_PATH="${ENGINE_DIR}/linux-wallpaperengine"
 # Some Mesa/KWin combinations crash GTK's GL scene renderer while repainting
 # the large preview gallery. Cairo keeps the frontend stable; honor an explicit
@@ -37,6 +38,18 @@ fi
 
 if (($#)); then
     exec python3 -m wallpaper_engine_app "$@"
+fi
+
+# The previous AppImage releases shared one daemon socket. Stop those renderers
+# before starting this version so an upgraded GUI cannot keep driving an old engine.
+if ! python3 -c 'from wallpaper_engine_app.model import stop_previous_appimage_daemons; raise SystemExit(0 if stop_previous_appimage_daemons() else 1)'; then
+    message='An older Wallpaper Engine AppImage renderer is still running. Close the older app and open this version again.'
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --error --title='Linux Wallpaper Engine' --text="${message}" 2>/dev/null || true
+    else
+        printf '%s\n' "${message}" >&2
+    fi
+    exit 1
 fi
 
 socket_ready() {

@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 from typing import Any
 import unicodedata
 
@@ -30,8 +31,13 @@ CONFIG_DIR = _xdg_dir("XDG_CONFIG_HOME", Path.home() / ".config") / APP_NAME
 STATE_DIR = _xdg_dir("XDG_STATE_HOME", Path.home() / ".local/state") / APP_NAME
 _runtime = os.environ.get("XDG_RUNTIME_DIR")
 _appimage_mode = os.environ.get("LINUX_WALLPAPERENGINE_APPIMAGE") == "1"
-_instance_suffix = "-appimage" if _appimage_mode else ""
-SOCKET_FILE = (Path(_runtime) if _runtime else STATE_DIR) / f"linux-wallpaperengine{_instance_suffix}-app.sock"
+_socket_dir = Path(_runtime) if _runtime else STATE_DIR
+_appimage_version = re.sub(
+    r"[^A-Za-z0-9._-]+", "-", os.environ.get("LINUX_WALLPAPERENGINE_APPIMAGE_VERSION", "")
+).strip(".-_")[:48]
+_instance_suffix = f"-appimage-{_appimage_version or 'current'}" if _appimage_mode else ""
+SOCKET_FILE = _socket_dir / f"linux-wallpaperengine{_instance_suffix}-app.sock"
+LEGACY_APPIMAGE_SOCKET_FILE = _socket_dir / "linux-wallpaperengine-appimage-app.sock"
 CONFIG_FILE = CONFIG_DIR / "app.json"
 UI_PREFERENCES_FILE = CONFIG_DIR / "ui.json"
 STATUS_FILE = STATE_DIR / f"status{_instance_suffix}.json"
@@ -268,6 +274,48 @@ def save_ui_preferences(preferences: dict[str, Any]) -> dict[str, int]:
 
 def save_status(status: dict[str, Any]) -> None:
     _write_json(STATUS_FILE, status)
+
+
+def _request_daemon(socket_path: Path, command: str) -> dict[str, Any] | None:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(0.25)
+            client.connect(str(socket_path))
+            client.sendall(json.dumps({"command": command}).encode("utf-8") + b"\n")
+            with client.makefile("rb") as reader:
+                raw = reader.readline(1024 * 1024 + 1)
+        response = json.loads(raw)
+        if not isinstance(response, dict) or response.get("ok") is not True:
+            return None
+        status = response.get("status")
+        return status if isinstance(status, dict) else None
+    except (OSError, ValueError, UnicodeError, TypeError):
+        return None
+
+
+def stop_previous_appimage_daemons(timeout: float = 4.0) -> bool:
+    """Stop renderers supervised by earlier AppImage versions before upgrade."""
+    if not _appimage_mode:
+        return True
+
+    previous = set(_socket_dir.glob("linux-wallpaperengine-appimage-*-app.sock"))
+    previous.add(LEGACY_APPIMAGE_SOCKET_FILE)
+    previous.discard(SOCKET_FILE)
+    pending: set[Path] = set()
+    for socket_path in previous:
+        status = _request_daemon(socket_path, "stop")
+        if status is not None and status.get("renderer_pid") is not None:
+            pending.add(socket_path)
+
+    deadline = time.monotonic() + max(0.0, timeout)
+    while pending and time.monotonic() < deadline:
+        for socket_path in tuple(pending):
+            status = _request_daemon(socket_path, "status")
+            if status is None or status.get("renderer_pid") is None:
+                pending.discard(socket_path)
+        if pending:
+            time.sleep(0.1)
+    return not pending
 
 
 def read_status() -> dict[str, Any]:
