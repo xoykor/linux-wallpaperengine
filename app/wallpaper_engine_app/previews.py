@@ -49,24 +49,18 @@ def _signature(path: str) -> _Signature | None:
 
 
 def _fit_pixbuf(frame: GdkPixbuf.Pixbuf, width: int, height: int) -> GdkPixbuf.Pixbuf | None:
-    """Center-crop a frame to the card's preview ratio and scale it down."""
+    """Scale a frame inside the preview area without cropping its contents."""
     source_width, source_height = frame.get_width(), frame.get_height()
     if source_width <= 0 or source_height <= 0:
         return None
-    if source_width * height > source_height * width:
-        crop_width = max(1, source_height * width // height)
-        crop_height = source_height
-    else:
-        crop_width = source_width
-        crop_height = max(1, source_width * height // width)
-    left = (source_width - crop_width) // 2
-    top = (source_height - crop_height) // 2
-    cropped = GdkPixbuf.Pixbuf.new_subpixbuf(frame, left, top, crop_width, crop_height)
-    return cropped.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
+    scale = min(width / source_width, height / source_height)
+    fitted_width = max(1, round(source_width * scale))
+    fitted_height = max(1, round(source_height * scale))
+    return frame.scale_simple(fitted_width, fitted_height, GdkPixbuf.InterpType.BILINEAR)
 
 
 def _decode(path: str, width: int, height: int) -> GdkPixbuf.Pixbuf | None:
-    """Read the first frame, then center-crop without distorting its aspect."""
+    """Read the first frame and fit it inside the preview area."""
     try:
         frame = GdkPixbuf.PixbufAnimation.new_from_file(path).get_static_image()
         if frame is None:
@@ -99,7 +93,7 @@ def _install(stack: Gtk.Stack, pixbuf: GdkPixbuf.Pixbuf | None) -> None:
         return
     picture = Gtk.Picture.new_for_pixbuf(pixbuf)
     if hasattr(Gtk, "ContentFit"):
-        picture.set_content_fit(Gtk.ContentFit.COVER)
+        picture.set_content_fit(Gtk.ContentFit.CONTAIN)
     else:
         picture.set_keep_aspect_ratio(True)
     picture.set_hexpand(True)
@@ -205,19 +199,22 @@ def preview(
             if isinstance(ticker, int) and ticker:
                 GLib.source_remove(ticker)
                 state["ticker"] = 0
-            picture = Gtk.Picture()
-            picture.set_size_request(width, height)
-            picture.set_hexpand(True)
-            picture.set_vexpand(True)
-            picture.set_can_shrink(True)
-            if hasattr(Gtk, "ContentFit"):
-                picture.set_content_fit(Gtk.ContentFit.COVER)
-            else:
-                picture.set_keep_aspect_ratio(True)
+            picture = state.get("animated_picture")
+            if not isinstance(picture, Gtk.Picture):
+                picture = Gtk.Picture()
+                picture.set_size_request(width, height)
+                picture.set_hexpand(True)
+                picture.set_vexpand(True)
+                picture.set_can_shrink(True)
+                if hasattr(Gtk, "ContentFit"):
+                    picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+                else:
+                    picture.set_keep_aspect_ratio(True)
+                state["animated_picture"] = picture
+                stack.add_named(picture, "animated-preview")
             iterator = animation.get_iter(None)
             state["iterator"] = iterator
-            state["animated_picture"] = picture
-            stack.add_named(picture, "animated-preview")
+            state["last_frame"] = None
             stack.set_visible_child(picture)
 
             def advance_frame() -> bool:
@@ -283,12 +280,7 @@ def preview(
                 stack.set_visible_child_name("preview")
             else:
                 stack.set_visible_child_name("placeholder")
-            animated_picture = state.get("animated_picture")
-            if isinstance(animated_picture, Gtk.Widget):
-                stack.remove(animated_picture)
-            state["animation"] = None
             state["iterator"] = None
-            state["animated_picture"] = None
             state["last_frame"] = None
 
         controller.connect("enter", enter)

@@ -372,7 +372,7 @@ button.language-choice-active { border-color: #ff7417; }
 .theme-popover { min-width: 330px; padding: 16px; }
 popover.theme-popover { background: #19120f; border: 1px solid rgba(255,255,255,0.12); }
 .theme-preview { min-height: 74px; }
-scale.hue-slider trough highlight { min-width: 0; min-height: 0; background: transparent; }
+scale.hue-slider trough highlight { background: transparent; }
 scale.intensity-slider trough highlight { background: #ff7417; }
 button.preset-dot { min-width: 30px; min-height: 30px; padding: 0; color: transparent; }
 .settings-row { min-height: 0; }

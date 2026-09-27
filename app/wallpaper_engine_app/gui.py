@@ -25,7 +25,7 @@ from .theme import install_theme
 
 SERVICE = "linux-wallpaperengine-app.service"
 CARD_WIDTH = 240
-CARD_PREVIEW_HEIGHT = round(CARD_WIDTH * 9 / 16)
+CARD_PREVIEW_HEIGHT = CARD_WIDTH
 CARD_HEIGHT = CARD_PREVIEW_HEIGHT + 56
 FILTERS = ("Todos", "Cenas", "Vídeos", "Favoritos")
 SCALINGS = ("fill", "fit", "stretch", "default")
@@ -133,6 +133,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._theme_save_timer = 0
         self._theme_updating = False
         self._ui_language = self.config.get("language", "auto")
+        self._last_applied_config: dict | None = None
 
         self._build()
         self._load_catalog()
@@ -728,8 +729,11 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         gallery_scroll = Gtk.ScrolledWindow()
         gallery_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.gallery = Gtk.FlowBox()
+        self.gallery.set_halign(Gtk.Align.START)
         self.gallery.set_valign(Gtk.Align.START)
-        self.gallery.set_homogeneous(True)
+        # Each card has a fixed request below; let FlowBox keep that compact
+        # size instead of stretching cells to the available row width.
+        self.gallery.set_homogeneous(False)
         self.gallery.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         # GTK's single-click activation bypasses its Ctrl/Shift selection handling.
         # Let the FlowBox select first, then apply a plain click below.
@@ -742,10 +746,12 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         gallery_click.connect("pressed", self._gallery_pressed)
         gallery_click.connect("released", self._gallery_released)
         self.gallery.add_controller(gallery_click)
-        self.gallery.set_column_spacing(14)
-        self.gallery.set_row_spacing(14)
+        self.gallery.set_column_spacing(10)
+        self.gallery.set_row_spacing(10)
         self.gallery.set_min_children_per_line(1)
-        self.gallery.set_max_children_per_line(3)
+        # Let the gallery use the available width at larger window sizes;
+        # the former three-column cap left large empty gutters on maximized displays.
+        self.gallery.set_max_children_per_line(6)
         gallery_scroll.set_child(self.gallery)
         self.gallery_state = Gtk.Stack()
         self.gallery_state.set_hhomogeneous(False)
@@ -1642,7 +1648,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             title.set_ellipsize(Pango.EllipsizeMode.END)
             title.set_single_line_mode(True)
             title.set_size_request(CARD_WIDTH - 20, -1)
-            title.set_max_width_chars(32)
+            title.set_max_width_chars(24)
+            title.set_hexpand(False)
+            title.set_halign(Gtk.Align.START)
             title.set_margin_start(10)
             title.set_margin_end(10)
             content.append(title)
@@ -1653,6 +1661,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             subtitle.set_ellipsize(Pango.EllipsizeMode.END)
             subtitle.set_single_line_mode(True)
             subtitle.set_size_request(CARD_WIDTH - 20, -1)
+            subtitle.set_max_width_chars(24)
+            subtitle.set_hexpand(False)
+            subtitle.set_halign(Gtk.Align.START)
             subtitle.set_margin_start(10)
             subtitle.set_margin_end(10)
             subtitle.set_margin_bottom(8)
@@ -1988,6 +1999,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self._theme_updating = False
         self._apply_theme_preview()
         self._filter_cards()
+        self._last_applied_config = dict(self.config)
 
     def _command(self, command: str, **kwargs: object) -> None:
         self._mutation_generation += 1
@@ -2054,14 +2066,18 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         old_active_playlist = self.config.get("active_playlist")
         self.status = status
         self.status_strip.remove_css_class("error")
+        configuration_changed = False
         if accept_config:
-            self.config = status.get("config") or self.config
-            self.config.update(self._ui_preferences)
+            updated_config = dict(status.get("config") or self.config)
+            updated_config.update(self._ui_preferences)
+            configuration_changed = updated_config != self.config
+            self.config = updated_config
             if self.config.get("language", "auto") != self._ui_language:
                 set_language(self.config.get("language", "auto"))
                 self._rebuild_localized_ui()
                 return
-        self._apply_config()
+        if configuration_changed or self._last_applied_config != self.config:
+            self._apply_config()
         running = bool(status.get("renderer_running"))
         self.status_dot.set_text("●" if running else "○")
         current_id = status.get("current_id")
