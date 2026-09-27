@@ -119,7 +119,10 @@ install -Dm644 "${ROOT}/app/linux-wallpaperengine-app.svg" "${APPDIR}/linux-wall
 [[ -f "${ENGINE_DIR}/libcef.so" ]] || fail "CEF runtime is missing from the install tree: ${ENGINE_DIR}/libcef.so"
 strip --strip-debug "${ENGINE_DIR}/libcef.so" || fail 'Could not strip CEF debug sections.'
 
-ENGINE_LIBRARY_PATH="${ENGINE_DIR}:${ENGINE_DIR}/lib"
+ENGINE_LIBRARY_PATH="${ENGINE_DIR}:${ENGINE_DIR}/lib:${ENGINE_DIR}/lib64"
+for candidate in "${ENGINE_DIR}"/lib/* "${ENGINE_DIR}"/lib64/*; do
+    [[ -d "${candidate}" ]] && ENGINE_LIBRARY_PATH+=":${candidate}"
+done
 RUNTIME_LDD="$(LD_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
     ldd "${ENGINE_DIR}/linux-wallpaperengine")"
 MISSING_LIBRARIES="$(printf '%s\n' "${RUNTIME_LDD}" | grep 'not found' || true)"

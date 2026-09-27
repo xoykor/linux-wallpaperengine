@@ -3,10 +3,15 @@ set -euo pipefail
 
 APPDIR="${APPDIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
 ENGINE_DIR="${APPDIR}/usr/lib/linux-wallpaperengine"
+ENGINE_LIBRARY_PATH="${ENGINE_DIR}:${ENGINE_DIR}/lib:${ENGINE_DIR}/lib64"
+
+for candidate in "${ENGINE_DIR}"/lib/* "${ENGINE_DIR}"/lib64/*; do
+    [[ -d "${candidate}" ]] && ENGINE_LIBRARY_PATH+=":${candidate}"
+done
 
 export PATH="${ENGINE_DIR}:${PATH}"
 export PYTHONPATH="${APPDIR}/usr/lib${PYTHONPATH:+:${PYTHONPATH}}"
-export LD_LIBRARY_PATH="${ENGINE_DIR}:${ENGINE_DIR}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PYTHONDONTWRITEBYTECODE=1
 export LINUX_WALLPAPERENGINE_APPIMAGE=1
 
