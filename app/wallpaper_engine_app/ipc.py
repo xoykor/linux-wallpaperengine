@@ -10,6 +10,23 @@ from . import model
 from .i18n import tr
 
 
+def _decode_response(line: bytes) -> dict[str, Any]:
+    if not line or len(line) > 1024 * 1024 or not line.endswith(b"\n"):
+        raise RuntimeError(tr("Resposta inválida do serviço de wallpapers."))
+    try:
+        response = json.loads(line)
+    except (ValueError, UnicodeError) as exc:
+        raise RuntimeError(tr("Resposta inválida do serviço de wallpapers.")) from exc
+    if not isinstance(response, dict):
+        raise RuntimeError(tr("Resposta inválida do serviço de wallpapers."))
+    if response.get("ok") is not True:
+        raise RuntimeError(str(response.get("error") or tr("O serviço recusou a solicitação.")))
+    status = response.get("status")
+    if not isinstance(status, dict):
+        raise RuntimeError(tr("Resposta inválida do serviço de wallpapers."))
+    return status
+
+
 def request(command: str, **kwargs: Any) -> dict[str, Any]:
     """Send one JSON-line command and return the daemon's current status.
 
@@ -33,17 +50,4 @@ def request(command: str, **kwargs: Any) -> dict[str, Any]:
                 line = stream.readline(1024 * 1024 + 1)
     except (OSError, TimeoutError) as exc:
         raise RuntimeError(tr("Serviço de wallpapers indisponível. Inicie o serviço e tente novamente.")) from exc
-    if not line or len(line) > 1024 * 1024 or not line.endswith(b"\n"):
-        raise RuntimeError(tr("Resposta inválida do serviço de wallpapers."))
-    try:
-        response = json.loads(line)
-    except (ValueError, UnicodeError) as exc:
-        raise RuntimeError(tr("Resposta inválida do serviço de wallpapers.")) from exc
-    if not isinstance(response, dict):
-        raise RuntimeError(tr("Resposta inválida do serviço de wallpapers."))
-    if response.get("ok") is not True:
-        raise RuntimeError(str(response.get("error") or tr("O serviço recusou a solicitação.")))
-    status = response.get("status")
-    if not isinstance(status, dict):
-        raise RuntimeError(tr("Resposta inválida do serviço de wallpapers."))
-    return status
+    return _decode_response(line)
