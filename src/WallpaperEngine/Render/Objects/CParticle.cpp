@@ -431,7 +431,8 @@ void CParticle::initializeEmittedParticle (ParticleInstance& p, float lifetime) 
 glm::vec3 CParticle::sampleBoxEmitterOffset (const ParticleEmitter& emitter, const glm::vec3& directions) {
     glm::vec3 offset;
     for (int axis = 0; axis < 3; axis++) {
-	float distance = WallpaperEngine::Maths::randomFloat (m_rng, emitter.distanceMin[axis], emitter.distanceMax[axis]);
+	float distance
+	    = WallpaperEngine::Maths::randomFloat (m_rng, emitter.distanceMin[axis], emitter.distanceMax[axis]);
 	if (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) < 0.5f) {
 	    distance = -distance;
 	}
@@ -449,8 +450,7 @@ glm::vec3 CParticle::sampleSphereEmitterOffset (const ParticleEmitter& emitter) 
 	const float maxRadius = emitter.distanceMax.x;
 	const float minRadiusSq = minRadius * minRadius;
 	const float maxRadiusSq = maxRadius * maxRadius;
-	const float radiusXY
-	    = std::sqrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusSq, maxRadiusSq));
+	const float radiusXY = std::sqrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusSq, maxRadiusSq));
 
 	offset = glm::vec3 (
 	    radiusXY * std::cos (angle), radiusXY * std::sin (angle),
