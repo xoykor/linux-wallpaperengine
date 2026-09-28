@@ -4,8 +4,9 @@
 
 namespace WallpaperEngine::Render::Objects::Effects::TexturePipelineOrder {
 
-template <typename VertexDefaults, typename FragmentDefaults, typename PassTextures, typename PassUserTextures,
-          typename OverrideTextures, typename OverrideUserTextures, typename Binds>
+template <
+    typename VertexDefaults, typename FragmentDefaults, typename PassTextures, typename PassUserTextures,
+    typename OverrideTextures, typename OverrideUserTextures, typename Binds>
 void apply (
     VertexDefaults&& vertexDefaults, FragmentDefaults&& fragmentDefaults, PassTextures&& passTextures,
     PassUserTextures&& passUserTextures, OverrideTextures&& overrideTextures, OverrideUserTextures&& overrideUserTextures,
