@@ -21,7 +21,7 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check \
             pylint==3.3.7 pycodestyle==2.14.0 bandit==1.9.4 \
-            ruff==0.15.14 cpplint==2.0.3 flawfinder==2.0.19 \
+            ruff==0.15.14 cpplint==2.0.2 flawfinder==2.0.19 \
             yamllint==1.38.0 lizard==1.17.31
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
