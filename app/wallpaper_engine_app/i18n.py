@@ -316,7 +316,7 @@ def system_language() -> str:
         try:
             plasma_locale.read(config_home / "plasma-localerc", encoding="utf-8")
         except (OSError, UnicodeError, configparser.Error):
-            pass
+            plasma_locale.clear()
         else:
             for section, option in (("Translations", "LANGUAGE"), ("Formats", "LANG")):
                 value = plasma_locale.get(section, option, fallback="")
