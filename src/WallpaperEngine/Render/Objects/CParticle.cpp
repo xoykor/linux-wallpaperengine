@@ -467,8 +467,7 @@ glm::vec3 CParticle::sampleSphereEmitterOffset (const ParticleEmitter& emitter) 
 	const float maxRadius = emitter.distanceMax.x;
 	const float minRadiusCubed = minRadius * minRadius * minRadius;
 	const float maxRadiusCubed = maxRadius * maxRadius * maxRadius;
-	const float radius
-	    = std::cbrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusCubed, maxRadiusCubed));
+	const float radius = std::cbrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusCubed, maxRadiusCubed));
 	offset *= radius;
 	offset *= emitter.directions;
     }
