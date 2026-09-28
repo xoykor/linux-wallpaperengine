@@ -13,9 +13,7 @@ using namespace WallpaperEngine::Render::Objects;
 
 namespace {
 
-uint32_t referenceAccumulateRateEmission (
-    float dt, float rate, bool limitOnePerFrame, float& emissionTimer
-) {
+uint32_t referenceAccumulateRateEmission (float dt, float rate, bool limitOnePerFrame, float& emissionTimer) {
     emissionTimer += dt * rate;
     uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
     emissionTimer -= static_cast<float> (toEmit);
@@ -25,9 +23,8 @@ uint32_t referenceAccumulateRateEmission (
     return toEmit;
 }
 
-glm::vec3 referenceBoxOffset (
-    const ParticleEmitter& emitter, const glm::vec3& directions, std::mt19937& rng
-) {
+glm::vec3
+referenceBoxOffset (const ParticleEmitter& emitter, const glm::vec3& directions, std::mt19937& rng) {
     glm::vec3 randomPos;
     for (int axis = 0; axis < 3; axis++) {
 	float minDist = emitter.distanceMin[axis];
@@ -51,8 +48,7 @@ glm::vec3 referenceSphereOffset (const ParticleEmitter& emitter, uint32_t partic
 	float maxRadius = emitter.distanceMax.x;
 	float minRadiusSq = minRadius * minRadius;
 	float maxRadiusSq = maxRadius * maxRadius;
-	float radiusXY
-	    = std::sqrt (WallpaperEngine::Maths::randomFloat (rng, minRadiusSq, maxRadiusSq));
+	float radiusXY = std::sqrt (WallpaperEngine::Maths::randomFloat (rng, minRadiusSq, maxRadiusSq));
 
 	randomPos = glm::vec3 (
 	    radiusXY * std::cos (angle), radiusXY * std::sin (angle),
@@ -69,8 +65,7 @@ glm::vec3 referenceSphereOffset (const ParticleEmitter& emitter, uint32_t partic
 	float maxRadius = emitter.distanceMax.x;
 	float minRadiusCubed = minRadius * minRadius * minRadius;
 	float maxRadiusCubed = maxRadius * maxRadius * maxRadius;
-	float radius
-	    = std::cbrt (WallpaperEngine::Maths::randomFloat (rng, minRadiusCubed, maxRadiusCubed));
+	float radius = std::cbrt (WallpaperEngine::Maths::randomFloat (rng, minRadiusCubed, maxRadiusCubed));
 	randomPos *= radius;
 	randomPos *= emitter.directions;
     }
@@ -125,8 +120,7 @@ TEST_CASE ("Particle rate accumulation remains bit-for-bit equivalent to the pre
 	    const bool limitOnePerFrame = (pass % 3) == 0;
 	    const float rate = 37.25f + static_cast<float> (pass);
 
-	    const uint32_t expected
-		= referenceAccumulateRateEmission (dt, rate, limitOnePerFrame, referenceTimer);
+	    const uint32_t expected = referenceAccumulateRateEmission (dt, rate, limitOnePerFrame, referenceTimer);
 	    const uint32_t actual
 		= ParticleEmitterAlgorithms::accumulateRateEmission (dt, rate, limitOnePerFrame, actualTimer);
 
@@ -195,8 +189,7 @@ TEST_CASE ("Emitter velocity preserves speed sampling and zero-offset fallback")
     emitter.speedMin = 0.0f;
     emitter.speedMax = 0.0f;
     const std::mt19937 before = actualRng;
-    checkExactVec (
-	ParticleEmitterAlgorithms::resolveVelocity (emitter, glm::vec3 (1.0f), actualRng), glm::vec3 (0.0f)
-    );
+    const glm::vec3 actual = ParticleEmitterAlgorithms::resolveVelocity (emitter, glm::vec3 (1.0f), actualRng);
+    checkExactVec (actual, glm::vec3 (0.0f));
     CHECK (actualRng == before);
 }
