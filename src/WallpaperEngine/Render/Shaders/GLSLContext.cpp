@@ -97,6 +97,39 @@ std::string neutralizeUnmatchedEndifs (const std::string& source, std::vector<st
  * Narrowing that output is semantics-preserving and gives both linked stages
  * the same interface type. Leave any varying with z/w uses untouched.
  */
+bool varyingUseIsXyOnly (const std::string& code, std::size_t start, std::size_t length) {
+    std::size_t suffix = start + length;
+    while (suffix < code.size () && std::isspace (static_cast<unsigned char> (code[suffix]))) {
+	++suffix;
+    }
+    if (suffix + 3 > code.size () || code.compare (suffix, 3, ".xy") != 0) {
+	return false;
+    }
+    if (suffix + 3 == code.size ()) {
+	return true;
+    }
+    const unsigned char next = static_cast<unsigned char> (code[suffix + 3]);
+    return !std::isalnum (next) && code[suffix + 3] != '_';
+}
+
+bool varyingHasOnlyXyUses (
+    const std::string& code, const std::string& name, std::size_t declarationStart, std::size_t declarationEnd
+) {
+    const std::regex identifier ("\\b" + name + "\\b");
+    bool hasUse = false;
+    for (std::sregex_iterator use (code.begin (), code.end (), identifier), end; use != end; ++use) {
+	const auto useStart = static_cast<std::size_t> (use->position ());
+	if (useStart >= declarationStart && useStart < declarationEnd) {
+	    continue;
+	}
+	hasUse = true;
+	if (!varyingUseIsXyOnly (code, useStart, static_cast<std::size_t> (use->length ()))) {
+	    return false;
+	}
+    }
+    return hasUse;
+}
+
 std::string normalizeXyOnlyVaryingMismatches (
     const std::string& vertex, const std::string& fragment, std::vector<std::string>& adjusted
 ) {
@@ -104,6 +137,7 @@ std::string normalizeXyOnlyVaryingMismatches (
     const std::string fragmentCode = stripCommentsPreservingOffsets (fragment);
     const std::regex vertexVec4Declaration (R"(\bvarying\s+vec4\s+([A-Za-z_]\w*)\s*;)");
     std::vector<std::pair<std::size_t, std::size_t>> declarations;
+
     for (
 	std::sregex_iterator it (vertexCode.begin (), vertexCode.end (), vertexVec4Declaration), end; it != end;
 	++it
@@ -116,30 +150,7 @@ std::string normalizeXyOnlyVaryingMismatches (
 
 	const std::size_t declarationStart = static_cast<std::size_t> (it->position ());
 	const std::size_t declarationEnd = declarationStart + static_cast<std::size_t> (it->length ());
-	const std::regex identifier ("\\b" + name + "\\b");
-	bool hasUse = false;
-	bool xyOnly = true;
-	for (std::sregex_iterator use (vertexCode.begin (), vertexCode.end (), identifier), end; use != end; ++use) {
-	    const auto useStart = static_cast<std::size_t> (use->position ());
-	    if (useStart >= declarationStart && useStart < declarationEnd) {
-		continue;
-	    }
-	    hasUse = true;
-	    std::size_t suffix = useStart + static_cast<std::size_t> (use->length ());
-	    while (suffix < vertexCode.size () && std::isspace (static_cast<unsigned char> (vertexCode[suffix]))) {
-		++suffix;
-	    }
-	    if (suffix + 3 > vertexCode.size () || vertexCode.compare (suffix, 3, ".xy") != 0) {
-		xyOnly = false;
-		break;
-	    }
-	    if (suffix + 3 < vertexCode.size ()
-		&& (std::isalnum (static_cast<unsigned char> (vertexCode[suffix + 3])) || vertexCode[suffix + 3] == '_')) {
-		xyOnly = false;
-		break;
-	    }
-	}
-	if (!hasUse || !xyOnly) {
+	if (!varyingHasOnlyXyUses (vertexCode, name, declarationStart, declarationEnd)) {
 	    continue;
 	}
 
@@ -155,64 +166,63 @@ std::string normalizeXyOnlyVaryingMismatches (
     return result;
 }
 
-std::string preprocessorConditionAt (const std::string& source, const std::size_t offset) {
-    const std::string code = stripCommentsPreservingOffsets (source);
-    struct Conditional {
-	std::vector<std::string> branches;
-	std::string active;
-    };
-    std::vector<Conditional> stack;
-    const std::regex directive (R"(^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$)");
-    for (std::size_t lineStart = 0; lineStart < offset && lineStart < code.size ();) {
-	const std::size_t lineEnd = code.find ('\n', lineStart);
-	const std::size_t end = lineEnd == std::string::npos ? code.size () : lineEnd;
-	std::string line = code.substr (lineStart, end - lineStart);
-	if (!line.empty () && line.back () == '\r') {
-	    line.pop_back ();
-	}
-	std::smatch match;
-	if (std::regex_search (line, match, directive, std::regex_constants::match_continuous)) {
-	    const std::string kind = match[1].str ();
-	    std::string expression = match[2].str ();
-	    const std::size_t first = expression.find_first_not_of (" \t\r");
-	    const std::size_t last = expression.find_last_not_of (" \t\r");
-	    expression = first == std::string::npos ? "" : expression.substr (first, last - first + 1);
-	    if (kind == "if" || kind == "ifdef" || kind == "ifndef") {
-		if (kind == "ifdef") {
-		    expression = "defined(" + expression + ")";
-		} else if (kind == "ifndef") {
-		    expression = "!defined(" + expression + ")";
-		}
-		stack.push_back ({ { expression }, expression });
-	    } else if (kind == "elif" && !stack.empty ()) {
-		std::string previousBranches;
-		for (const auto& branch : stack.back ().branches) {
-		    if (!previousBranches.empty ()) {
-			previousBranches += " || ";
-		    }
-		    previousBranches += "(" + branch + ")";
-		}
-		stack.back ().active = "!(" + previousBranches + ") && (" + expression + ")";
-		stack.back ().branches.push_back (expression);
-	    } else if (kind == "else" && !stack.empty ()) {
-		std::string previousBranches;
-		for (const auto& branch : stack.back ().branches) {
-		    if (!previousBranches.empty ()) {
-			previousBranches += " || ";
-		    }
-		    previousBranches += "(" + branch + ")";
-		}
-		stack.back ().active = "!(" + previousBranches + ")";
-	    } else if (kind == "endif" && !stack.empty ()) {
-		stack.pop_back ();
-	    }
-	}
-	if (lineEnd == std::string::npos || lineEnd + 1 >= offset) {
-	    break;
-	}
-	lineStart = lineEnd + 1;
-    }
+struct ConditionalBranchState {
+    std::vector<std::string> branches;
+    std::string active;
+};
 
+std::string trimHorizontalWhitespace (const std::string& value) {
+    const std::size_t first = value.find_first_not_of (" \t\r");
+    if (first == std::string::npos) {
+	return "";
+    }
+    const std::size_t last = value.find_last_not_of (" \t\r");
+    return value.substr (first, last - first + 1);
+}
+
+std::string joinedBranches (const std::vector<std::string>& branches) {
+    std::string result;
+    for (const auto& branch : branches) {
+	if (!result.empty ()) {
+	    result += " || ";
+	}
+	result += "(" + branch + ")";
+    }
+    return result;
+}
+
+std::string normalizeDirectiveExpression (const std::string& kind, const std::string& rawExpression) {
+    const std::string expression = trimHorizontalWhitespace (rawExpression);
+    if (kind == "ifdef") {
+	return "defined(" + expression + ")";
+    }
+    if (kind == "ifndef") {
+	return "!defined(" + expression + ")";
+    }
+    return expression;
+}
+
+void applyConditionalDirective (
+    const std::string& kind, const std::string& expression, std::vector<ConditionalBranchState>& stack
+) {
+    if (kind == "if" || kind == "ifdef" || kind == "ifndef") {
+	stack.push_back ({ { expression }, expression });
+	return;
+    }
+    if (stack.empty ()) {
+	return;
+    }
+    if (kind == "elif") {
+	stack.back ().active = "!(" + joinedBranches (stack.back ().branches) + ") && (" + expression + ")";
+	stack.back ().branches.push_back (expression);
+    } else if (kind == "else") {
+	stack.back ().active = "!(" + joinedBranches (stack.back ().branches) + ")";
+    } else if (kind == "endif") {
+	stack.pop_back ();
+    }
+}
+
+std::string activeConditionalExpression (const std::vector<ConditionalBranchState>& stack) {
     std::string condition;
     for (const auto& conditional : stack) {
 	if (!condition.empty ()) {
@@ -221,6 +231,34 @@ std::string preprocessorConditionAt (const std::string& source, const std::size_
 	condition += "(" + conditional.active + ")";
     }
     return condition;
+}
+
+std::string preprocessorConditionAt (const std::string& source, const std::size_t offset) {
+    const std::string code = stripCommentsPreservingOffsets (source);
+    std::vector<ConditionalBranchState> stack;
+    const std::regex directive (R"(^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$)");
+
+    for (std::size_t lineStart = 0; lineStart < offset && lineStart < code.size ();) {
+	const std::size_t lineEnd = code.find ('\n', lineStart);
+	const std::size_t end = lineEnd == std::string::npos ? code.size () : lineEnd;
+	std::string line = code.substr (lineStart, end - lineStart);
+	if (!line.empty () && line.back () == '\r') {
+	    line.pop_back ();
+	}
+
+	std::smatch match;
+	if (std::regex_search (line, match, directive, std::regex_constants::match_continuous)) {
+	    const std::string kind = match[1].str ();
+	    const std::string expression = normalizeDirectiveExpression (kind, match[2].str ());
+	    applyConditionalDirective (kind, expression, stack);
+	}
+
+	if (lineEnd == std::string::npos || lineEnd + 1 >= offset) {
+	    break;
+	}
+	lineStart = lineEnd + 1;
+    }
+    return activeConditionalExpression (stack);
 }
 
 /**
@@ -357,6 +395,24 @@ std::string normalizeWritableFragmentVaryings (
  * pass a vec2 temporary derived from their UVs. In that call context the first
  * component is the scalar coverage value the helper can consume.
  */
+std::vector<std::pair<std::size_t, std::size_t>> callArguments (
+    const std::string& code, std::size_t open
+);
+
+std::string scalarizeVectorNames (
+    std::string expression, const std::set<std::string>& vectorNames, std::vector<std::string>& adjusted
+) {
+    for (const auto& name : vectorNames) {
+	const std::regex vectorUse ("\\b" + name + "\\b(?!\\s*\\.)");
+	const std::string scalarized = std::regex_replace (expression, vectorUse, name + ".x");
+	if (scalarized != expression) {
+	    expression = scalarized;
+	    adjusted.push_back (name);
+	}
+    }
+    return expression;
+}
+
 std::string normalizeApplyBlendingVectorOpacity (std::string source, std::vector<std::string>& adjusted) {
     const std::string code = stripCommentsPreservingOffsets (source);
     const std::regex scalarApplyBlending (
@@ -381,50 +437,20 @@ std::string normalizeApplyBlendingVectorOpacity (std::string source, std::vector
     const std::regex functionName (R"(\bApplyBlending\s*\()");
     for (std::sregex_iterator it (code.begin (), code.end (), functionName), end; it != end; ++it) {
 	const std::size_t open = static_cast<std::size_t> (it->position () + it->length () - 1);
-	std::vector<std::pair<std::size_t, std::size_t>> arguments;
-	std::size_t argumentStart = open + 1;
-	int parenDepth = 0;
-	int bracketDepth = 0;
-	for (std::size_t current = open + 1; current < code.size (); ++current) {
-	    if (code[current] == '(') {
-		++parenDepth;
-	    } else if (code[current] == ')') {
-		if (parenDepth == 0 && bracketDepth == 0) {
-		    arguments.emplace_back (argumentStart, current);
-		    break;
-		}
-		--parenDepth;
-	    } else if (code[current] == '[') {
-		++bracketDepth;
-	    } else if (code[current] == ']') {
-		--bracketDepth;
-	    } else if (code[current] == ',' && parenDepth == 0 && bracketDepth == 0) {
-		arguments.emplace_back (argumentStart, current);
-		argumentStart = current + 1;
-	    }
-	}
+	const auto arguments = callArguments (code, open);
 	if (arguments.size () != 4) {
 	    continue;
 	}
 
 	const auto [opacityStart, opacityEnd] = arguments[3];
-	std::string opacity = code.substr (opacityStart, opacityEnd - opacityStart);
-	bool adjustedOpacity = false;
-	for (const auto& name : vectorNames) {
-	    const std::regex vectorUse ("\\b" + name + "\\b(?!\\s*\\.)");
-	    const std::string scalarized = std::regex_replace (opacity, vectorUse, name + ".x");
-	    if (scalarized != opacity) {
-		opacity = scalarized;
-		adjusted.push_back (name);
-		adjustedOpacity = true;
-	    }
-	}
-	if (adjustedOpacity) {
-	    replacements.push_back ({ opacityStart, opacityEnd - opacityStart, opacity });
+	const std::string opacity = code.substr (opacityStart, opacityEnd - opacityStart);
+	const std::string scalarized = scalarizeVectorNames (opacity, vectorNames, adjusted);
+	if (scalarized != opacity) {
+	    replacements.push_back ({ opacityStart, opacityEnd - opacityStart, scalarized });
 	}
     }
 
-    std::sort (replacements.begin (), replacements.end (), [](const auto& lhs, const auto& rhs) {
+    std::sort (replacements.begin (), replacements.end (), [] (const auto& lhs, const auto& rhs) {
 	return lhs.start > rhs.start;
     });
     for (const auto& replacement : replacements) {
@@ -494,6 +520,44 @@ std::size_t expressionEnd (const std::string& code, const std::size_t start) {
  * 2D texture coordinates), use its XY dimensions at that use site instead of
  * changing the uniform's shared ABI.
  */
+struct Vec2Replacement {
+    std::size_t start;
+    std::size_t length;
+    std::string value;
+};
+
+void collectVec4Operands (
+    const std::string& code, const std::set<std::string>& vec4Names, std::size_t start, std::size_t end,
+    std::vector<Vec2Replacement>& replacements, std::vector<std::string>& adjusted
+) {
+    const std::string expression = code.substr (start, end - start);
+    const std::regex identifier (R"(\b[A-Za-z_]\w*\b)");
+    for (std::sregex_iterator it (expression.begin (), expression.end (), identifier), finish; it != finish; ++it) {
+	const std::string name = it->str ();
+	if (!vec4Names.contains (name)) {
+	    continue;
+	}
+
+	const std::size_t localStart = static_cast<std::size_t> (it->position ());
+	const std::size_t localEnd = localStart + static_cast<std::size_t> (it->length ());
+	std::size_t suffix = localEnd;
+	while (suffix < expression.size () && std::isspace (static_cast<unsigned char> (expression[suffix]))) {
+	    ++suffix;
+	}
+	std::size_t prefix = localStart;
+	while (prefix > 0 && std::isspace (static_cast<unsigned char> (expression[prefix - 1]))) {
+	    --prefix;
+	}
+	if ((suffix < expression.size () && expression[suffix] == '.')
+	    || (prefix > 0 && expression[prefix - 1] == '.')) {
+	    continue;
+	}
+
+	replacements.push_back ({ start + localStart, localEnd - localStart, name + ".xy" });
+	adjusted.push_back (name);
+    }
+}
+
 std::string normalizeVec4OperandsInVec2Contexts (const std::string& source, std::vector<std::string>& adjusted) {
     const std::string code = stripCommentsPreservingOffsets (source);
     const std::regex typedName (R"(\b(float|int|uint|bool|vec[234]|[biu]vec[234]|mat[234](?:x[234])?)\s+([A-Za-z_]\w*))");
@@ -502,11 +566,7 @@ std::string normalizeVec4OperandsInVec2Contexts (const std::string& source, std:
     for (std::sregex_iterator it (code.begin (), code.end (), typedName), end; it != end; ++it) {
 	const std::string type = (*it)[1].str ();
 	const std::string name = (*it)[2].str ();
-	if (type == "vec4") {
-	    vec4Names.insert (name);
-	} else {
-	    conflictingNames.insert (name);
-	}
+	(type == "vec4" ? vec4Names : conflictingNames).insert (name);
     }
     for (const auto& name : conflictingNames) {
 	vec4Names.erase (name);
@@ -515,43 +575,11 @@ std::string normalizeVec4OperandsInVec2Contexts (const std::string& source, std:
 	return source;
     }
 
-    struct Replacement {
-	std::size_t start;
-	std::size_t length;
-	std::string value;
-    };
-    std::vector<Replacement> replacements;
-    const auto collectOperands = [&] (const std::size_t start, const std::size_t end) {
-	const std::string expression = code.substr (start, end - start);
-	const std::regex identifier (R"(\b[A-Za-z_]\w*\b)");
-	for (std::sregex_iterator it (expression.begin (), expression.end (), identifier), finish; it != finish; ++it) {
-	    const std::string name = it->str ();
-	    if (!vec4Names.contains (name)) {
-		continue;
-	    }
-	    const std::size_t localStart = static_cast<std::size_t> (it->position ());
-	    const std::size_t localEnd = localStart + static_cast<std::size_t> (it->length ());
-	    std::size_t suffix = localEnd;
-	    while (suffix < expression.size () && std::isspace (static_cast<unsigned char> (expression[suffix]))) {
-		++suffix;
-	    }
-	    std::size_t prefix = localStart;
-	    while (prefix > 0 && std::isspace (static_cast<unsigned char> (expression[prefix - 1]))) {
-		--prefix;
-	    }
-	    if ((suffix < expression.size () && expression[suffix] == '.')
-		|| (prefix > 0 && expression[prefix - 1] == '.')) {
-		continue;
-	    }
-	    replacements.push_back ({ start + localStart, localEnd - localStart, name + ".xy" });
-	    adjusted.push_back (name);
-	}
-    };
-
+    std::vector<Vec2Replacement> replacements;
     const std::regex vec2Initializer (R"(\bvec2\s+[A-Za-z_]\w*\s*=\s*)");
     for (std::sregex_iterator it (code.begin (), code.end (), vec2Initializer), end; it != end; ++it) {
 	const std::size_t start = static_cast<std::size_t> (it->position () + it->length ());
-	collectOperands (start, expressionEnd (code, start));
+	collectVec4Operands (code, vec4Names, start, expressionEnd (code, start), replacements, adjusted);
     }
 
     const std::regex textureCall (R"(\b(?:texSample2D|texture|texture2D|texSample2DLod|textureLod|texture2DLod)\s*\()");
@@ -559,7 +587,7 @@ std::string normalizeVec4OperandsInVec2Contexts (const std::string& source, std:
 	const std::size_t open = static_cast<std::size_t> (it->position () + it->length () - 1);
 	const auto arguments = callArguments (code, open);
 	if (arguments.size () >= 2) {
-	    collectOperands (arguments[1].first, arguments[1].second);
+	    collectVec4Operands (code, vec4Names, arguments[1].first, arguments[1].second, replacements, adjusted);
 	}
     }
 
@@ -569,6 +597,7 @@ std::string normalizeVec4OperandsInVec2Contexts (const std::string& source, std:
     replacements.erase (std::unique (replacements.begin (), replacements.end (), [] (const auto& lhs, const auto& rhs) {
 	return lhs.start == rhs.start;
     }), replacements.end ());
+
     std::string result = source;
     for (const auto& replacement : replacements) {
 	result.replace (replacement.start, replacement.length, replacement.value);
