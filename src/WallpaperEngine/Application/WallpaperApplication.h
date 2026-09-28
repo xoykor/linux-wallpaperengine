@@ -156,6 +156,17 @@ private:
 	const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
     );
     bool selectNextCandidate (ActivePlaylist& playlist, std::size_t& outOrderIndex);
+    bool prepareNextPlaylistCandidate (
+	const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
+    );
+    void schedulePlaylistSwitch (
+	ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
+    ) const;
+    ApplicationContext::SpanGroup* findSpanGroup (const std::string& screen);
+    WallpaperEngine::Render::CWallpaper::SpanInfo calculateSpanInfo (
+	const ApplicationContext::SpanGroup& group
+    ) const;
+    bool loadPlaylistWallpaper (const std::string& screen, const std::filesystem::path& path);
     bool preflightWallpaper (const std::string& path);
     std::vector<std::size_t> buildPlaylistOrder (const ApplicationContext::PlaylistDefinition& definition);
     void ensureBrowserForProject (const Project& project);
