@@ -2,6 +2,7 @@
 
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 
 using WallpaperEngine::Data::JSON::JSON;
