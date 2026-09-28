@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import socket
-import subprocess
+import subprocess  # nosec B404 - fixed argv commands are used for output discovery
 import tempfile
 import time
 from typing import Any
@@ -562,7 +562,7 @@ def detect_outputs() -> list[str]:
     """Discover active outputs using an available desktop/session backend."""
     if shutil.which("kscreen-doctor"):
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - fixed argv list; no shell
                 ["kscreen-doctor", "-j"], capture_output=True, text=True,
                 timeout=5, check=True,
             )
@@ -588,7 +588,7 @@ def detect_outputs() -> list[str]:
     if not shutil.which("xrandr"):
         return []
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 - fixed argv list; no shell
             ["xrandr", "--query"], capture_output=True, text=True,
             timeout=5, check=True,
         )
