@@ -52,6 +52,26 @@ private:
 	std::shared_ptr<FBOProvider> fboProvider;
     };
 
+    struct ParsedSubmesh {
+	size_t verticesOffset = 0;
+	size_t indicesOffset = 0;
+	uint32_t vertexBytes = 0;
+	uint32_t indexBytes = 0;
+	size_t vertexStride = 48;
+	GLuint uvOffset = 40;
+	uint32_t vertexTag = 0;
+	GLsizei indexCount = 0;
+    };
+
+    bool parseMeshHeader (
+	const std::vector<char>& data, uint32_t& mdlvVersion, size_t& offset, uint32_t& submeshCount
+    ) const;
+    bool parseSubmeshRecord (
+	const std::vector<char>& data, size_t& offset, uint32_t mdlvVersion, uint32_t index,
+	ParsedSubmesh& parsed
+    ) const;
+    bool validateSubmeshIndices (const std::vector<char>& data, const ParsedSubmesh& parsed, uint32_t index) const;
+    void uploadSubmesh (const std::vector<char>& data, const ParsedSubmesh& parsed, uint32_t index);
     bool loadMesh ();
     void setupPass (Submesh& submesh);
     void setupAnimationLayers (const std::vector<char>& modelData);
