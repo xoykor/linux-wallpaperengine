@@ -25,7 +25,8 @@ from .theme import install_theme
 
 SERVICE = "linux-wallpaperengine-app.service"
 CARD_WIDTH = 196
-CARD_PREVIEW_HEIGHT = round(CARD_WIDTH * 9 / 16)
+# Workshop preview files are commonly square; a 16:9 frame letterboxes them.
+CARD_PREVIEW_HEIGHT = CARD_WIDTH
 CARD_HEIGHT = CARD_PREVIEW_HEIGHT + 56
 FILTERS = ("Todos", "Cenas", "Vídeos", "Favoritos")
 SCALINGS = ("fill", "fit", "stretch", "default")
@@ -1631,7 +1632,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 item.get("preview"), CARD_WIDTH, CARD_PREVIEW_HEIGHT,
                 animation_path=item.get("preview_animation"),
                 hover_target=artwork,
-                cover=True,
             ))
             type_badge = _badge(tr("CENA" if item.get("type") == "scene" else "VÍDEO"))
             type_badge.add_css_class("type-badge")
