@@ -402,6 +402,28 @@ def steamapps_roots() -> list[Path]:
     return roots
 
 
+def _consume_quoted_vdf_token(source: str, position: int) -> tuple[str, int]:
+    position += 1
+    value: list[str] = []
+    while position < len(source) and source[position] != '"':
+        if (
+            source[position] == "\\"
+            and position + 1 < len(source)
+            and source[position + 1] in ('"', "\\")
+        ):
+            position += 1
+        value.append(source[position])
+        position += 1
+    return "".join(value), position + 1
+
+
+def _consume_bare_vdf_token(source: str, position: int) -> tuple[str, int]:
+    end = position
+    while end < len(source) and not source[end].isspace() and source[end] not in '{}"':
+        end += 1
+    return source[position:end], end
+
+
 def _tokenize_vdf(source: str) -> list[str]:
     tokens: list[str] = []
     position = 0
@@ -418,29 +440,12 @@ def _tokenize_vdf(source: str) -> list[str]:
             tokens.append(char)
             position += 1
             continue
-        if char != '"':
-            end = position
-            while end < len(source) and not source[end].isspace() and source[end] not in '{}"':
-                end += 1
-            tokens.append(source[position:end])
-            position = end
-            continue
-
-        position += 1
-        value: list[str] = []
-        while position < len(source) and source[position] != '"':
-            if (
-                source[position] == "\\"
-                and position + 1 < len(source)
-                and source[position + 1] in ('"', "\\")
-            ):
-                position += 1
-            value.append(source[position])
-            position += 1
-        tokens.append("".join(value))
-        position += 1
+        if char == '"':
+            token, position = _consume_quoted_vdf_token(source, position)
+        else:
+            token, position = _consume_bare_vdf_token(source, position)
+        tokens.append(token)
     return tokens
-
 
 def _read_vdf_object(tokens: list[str], index: int, depth: int = 0) -> tuple[dict[str, Any], int]:
     if depth > 16:
