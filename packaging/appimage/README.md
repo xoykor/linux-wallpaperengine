@@ -4,7 +4,7 @@ The AppImage puts the desktop frontend, C++ wallpaper engine, and CEF runtime in
 
 ## Runtime requirements
 
-The AppImage includes the project binaries, Python frontend, and shared libraries needed by the renderer. The host still needs Python 3, PyGObject, GTK 4 and GdkPixbuf introspection, GTK 3/NSS for CEF, OpenGL drivers, and platform libraries such as Wayland/X11, ALSA, CUPS, and FreeType. The AppRun checks the Python/GTK requirements and gives an error if they are missing. Opening the AppImage starts its user daemon for that GUI session; closing the window stops a daemon started by that AppImage. Session autostart remains disabled in AppImage mode. The AppImage does not include Steam or wallpaper downloads.
+The AppImage includes the project binaries, Python frontend, and shared libraries needed by the renderer. The host still needs Python 3, PyGObject, GTK 4 and GdkPixbuf introspection, GTK 3/NSS for CEF, OpenGL drivers, and platform libraries such as Wayland/X11, ALSA, CUPS, and FreeType. The AppRun checks the Python/GTK requirements and gives an error if they are missing. Opening the AppImage starts a separate AppImage instance for its user daemon; closing the control window leaves the wallpaper running and keeps the daemon's bundled engine files mounted. The **Stop** button stops playback. Reopening the same version reconnects to that daemon; opening a newer version retires the older daemon and starts the new one. Session autostart remains disabled in AppImage mode. The AppImage does not include Steam or wallpaper downloads.
 
 The bundled renderer takes precedence over paths saved by an earlier system installation. On KDE X11/XWayland, the window requests native compositor backdrop blur; other compositors retain the tinted dark surface without the compositor blur effect.
 
@@ -18,7 +18,7 @@ cmake --build build --parallel 2
 packaging/appimage/build-appimage.sh \
   --build-dir build \
   --output-dir outputs \
-  --version 0.0.17 \
+  --version 0.0.18 \
   --appimagetool /path/to/appimagetool.AppImage \
   --linuxdeploy /path/to/linuxdeploy.AppImage
 ```

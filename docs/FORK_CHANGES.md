@@ -76,8 +76,10 @@ assignments, advances playlists on a configurable interval, honors favorite
 and shuffle options, and reports renderer status to the GUI. `ipc.py` defines
 the local command channel; `__main__.py` starts the GUI/daemon entry points.
 The desktop systemd service keeps the renderer running after the control
-window closes. AppImage mode uses a session daemon and avoids enabling a
-system-wide or login autostart service implicitly.
+window closes. AppImage mode starts the daemon through a separate instance
+of the same AppImage so its bundled engine remains available when the control
+window closes. A later AppImage version shuts down the older daemon during
+upgrade. AppImage mode does not enable a system-wide or login autostart service.
 
 ### Appearance, localization and input
 

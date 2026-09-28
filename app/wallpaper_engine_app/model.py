@@ -312,25 +312,29 @@ def _request_daemon(socket_path: Path, command: str) -> dict[str, Any] | None:
 
 
 def stop_previous_appimage_daemons(timeout: float = 4.0) -> bool:
-    """Stop renderers supervised by earlier AppImage versions before upgrade."""
+    """Retire earlier AppImage daemons and their mounted runtimes before upgrade."""
     if not _appimage_mode:
         return True
 
     previous = set(_socket_dir.glob("linux-wallpaperengine-appimage-*-app.sock"))
     previous.add(LEGACY_APPIMAGE_SOCKET_FILE)
     previous.discard(SOCKET_FILE)
-    pending: set[Path] = set()
+    pending: dict[Path, bool] = {}
     for socket_path in previous:
+        if _request_daemon(socket_path, "shutdown") is not None:
+            pending[socket_path] = True
+            continue
+        # AppImages before the shutdown command only know how to stop playback.
         status = _request_daemon(socket_path, "stop")
         if status is not None and status.get("renderer_pid") is not None:
-            pending.add(socket_path)
+            pending[socket_path] = False
 
     deadline = time.monotonic() + max(0.0, timeout)
     while pending and time.monotonic() < deadline:
-        for socket_path in tuple(pending):
+        for socket_path, shutting_down in tuple(pending.items()):
             status = _request_daemon(socket_path, "status")
-            if status is None or status.get("renderer_pid") is None:
-                pending.discard(socket_path)
+            if status is None or (not shutting_down and status.get("renderer_pid") is None):
+                pending.pop(socket_path, None)
         if pending:
             time.sleep(0.1)
     return not pending

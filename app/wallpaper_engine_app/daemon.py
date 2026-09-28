@@ -436,7 +436,7 @@ class WallpaperDaemon:
         expected = {
             "status": set(), "next": set(), "select": {"id"},
             "set": {"settings"}, "assign": {"screen", "id"},
-            "start": set(), "stop": set(), "reload": set(),
+            "start": set(), "stop": set(), "reload": set(), "shutdown": set(),
         }
         if command not in expected:
             raise ValueError(tr("Comando desconhecido: {command}.", command=command))
@@ -574,6 +574,10 @@ class WallpaperDaemon:
         if self.child is not None:
             self._request_switch(None)
 
+    def _command_shutdown(self, message: dict[str, Any]) -> None:
+        self._command_stop(message)
+        self.alive = False
+
     def _command_reload(self, _message: dict[str, Any]) -> None:
         self._refresh(force=True)
         if self.active:
@@ -591,6 +595,7 @@ class WallpaperDaemon:
             "assign": self._command_assign,
             "start": self._command_start,
             "stop": self._command_stop,
+            "shutdown": self._command_shutdown,
             "reload": self._command_reload,
         }
         handlers[command](message)

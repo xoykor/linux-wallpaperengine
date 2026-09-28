@@ -62,23 +62,40 @@ socket_ready() {
         >/dev/null 2>&1
 }
 
-# Reuse an existing user daemon, otherwise keep one alive for this GUI session.
+# Reuse an existing user daemon. A new daemon must own a separate AppImage
+# runtime: this window's runtime unmounts its AppDir when the GUI exits.
 if ! socket_ready; then
-    python3 -m wallpaper_engine_app --daemon >/dev/null 2>&1 &
-    DAEMON_PID=$!
-    cleanup_daemon() {
-        if kill -0 "${DAEMON_PID}" 2>/dev/null; then
-            kill -TERM "${DAEMON_PID}" 2>/dev/null || true
-        fi
-        wait "${DAEMON_PID}" 2>/dev/null || true
-    }
-    trap cleanup_daemon EXIT
+    python3 - <<'PY'
+import os
+import subprocess
+import sys
 
-    for _ in {1..100}; do
-        kill -0 "${DAEMON_PID}" 2>/dev/null || break
+image = os.environ.get("APPIMAGE")
+if image and os.path.isfile(image) and os.access(image, os.X_OK):
+    command = [image, "--daemon"]
+    environment = os.environ.copy()
+    # The second runtime must select its own mount, not inherit this GUI's.
+    for name in ("APPDIR", "PYTHONPATH", "LINUX_WALLPAPERENGINE_LIBRARY_PATH",
+                 "LINUX_WALLPAPERENGINE_RENDERER_PATH"):
+        environment.pop(name, None)
+else:
+    # Support launching an unpacked AppDir during development.
+    command = [sys.executable, "-m", "wallpaper_engine_app", "--daemon"]
+    environment = os.environ.copy()
+
+subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                 start_new_session=True, close_fds=True)
+PY
+
+    for _ in {1..300}; do
         socket_ready && break
         sleep 0.1
     done
+    if ! socket_ready; then
+        printf 'The Wallpaper Engine daemon could not start.\n' >&2
+        exit 1
+    fi
 fi
 
-python3 -m wallpaper_engine_app
+exec python3 -m wallpaper_engine_app
