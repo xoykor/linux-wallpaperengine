@@ -1631,6 +1631,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 item.get("preview"), CARD_WIDTH, CARD_PREVIEW_HEIGHT,
                 animation_path=item.get("preview_animation"),
                 hover_target=artwork,
+                cover=True,
             ))
             type_badge = _badge(tr("CENA" if item.get("type") == "scene" else "VÍDEO"))
             type_badge.add_css_class("type-badge")

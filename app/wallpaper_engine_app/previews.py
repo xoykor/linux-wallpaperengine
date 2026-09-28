@@ -21,7 +21,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
 
-_PreviewKey = tuple[str, int, int]
+_PreviewKey = tuple[str, int, int, bool]
 _Signature = tuple[int, int]
 _JobKey = tuple[_PreviewKey, _Signature]
 
@@ -48,24 +48,33 @@ def _signature(path: str) -> _Signature | None:
     return info.st_mtime_ns, info.st_size
 
 
-def _fit_pixbuf(frame: GdkPixbuf.Pixbuf, width: int, height: int) -> GdkPixbuf.Pixbuf | None:
-    """Scale a frame inside the preview area without cropping its contents."""
+def _fit_pixbuf(
+    frame: GdkPixbuf.Pixbuf, width: int, height: int, *, cover: bool = False
+) -> GdkPixbuf.Pixbuf | None:
+    """Scale a frame into the preview area, optionally cropping to fill it."""
     source_width, source_height = frame.get_width(), frame.get_height()
     if source_width <= 0 or source_height <= 0:
         return None
-    scale = min(width / source_width, height / source_height)
-    fitted_width = max(1, round(source_width * scale))
-    fitted_height = max(1, round(source_height * scale))
-    return frame.scale_simple(fitted_width, fitted_height, GdkPixbuf.InterpType.BILINEAR)
+    scale = max(width / source_width, height / source_height) if cover else min(
+        width / source_width, height / source_height
+    )
+    fitted_width = max(width if cover else 1, round(source_width * scale))
+    fitted_height = max(height if cover else 1, round(source_height * scale))
+    fitted = frame.scale_simple(fitted_width, fitted_height, GdkPixbuf.InterpType.BILINEAR)
+    if fitted is None or not cover:
+        return fitted
+    x = (fitted_width - width) // 2
+    y = (fitted_height - height) // 2
+    return fitted.new_subpixbuf(x, y, width, height).copy()
 
 
-def _decode(path: str, width: int, height: int) -> GdkPixbuf.Pixbuf | None:
-    """Read the first frame and fit it inside the preview area."""
+def _decode(path: str, width: int, height: int, cover: bool) -> GdkPixbuf.Pixbuf | None:
+    """Read the first frame and fit or crop it for the preview area."""
     try:
         frame = GdkPixbuf.PixbufAnimation.new_from_file(path).get_static_image()
         if frame is None:
             return None
-        return _fit_pixbuf(frame, width, height)
+        return _fit_pixbuf(frame, width, height, cover=cover)
     except Exception:
         # A missing or malformed Workshop preview should leave its placeholder.
         return None
@@ -145,6 +154,7 @@ def preview(
     *,
     animation_path: str | None = None,
     hover_target: Gtk.Widget | None = None,
+    cover: bool = False,
 ) -> Gtk.Widget:
     """Return a fixed-size widget that fills asynchronously with a first frame.
 
@@ -231,7 +241,7 @@ def preview(
                 # its pixels for the next GIF frame. Use the iterator's
                 # changed flag instead of Python object identity.
                 if changed or state["last_frame"] is None:
-                    fitted = _fit_pixbuf(frame, width, height)
+                    fitted = _fit_pixbuf(frame, width, height, cover=cover)
                     if fitted is not None:
                         texture = Gdk.Texture.new_for_pixbuf(fitted)
                         target.set_paintable(texture)
@@ -292,7 +302,7 @@ def preview(
     # requests for the same preview behave exactly like the first one.
     enable_gif_hover()
 
-    key = (path, width, height)
+    key = (path, width, height, cover)
     cached = _cache.get(key)
     if cached is not None and cached[0] == signature:
         _cache.move_to_end(key)
