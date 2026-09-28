@@ -34,7 +34,7 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Render::Wallpapers;
 
 namespace {
-std::optional<int> semanticEyeLayerRole (const std::string& name) {
+std::vector<std::string> tokenizeObjectName (const std::string& name) {
     std::vector<std::string> tokens;
     std::string token;
     for (size_t index = 0; index < name.size (); index++) {
@@ -55,7 +55,10 @@ std::optional<int> semanticEyeLayerRole (const std::string& name) {
     if (!token.empty ()) {
 	tokens.push_back (std::move (token));
     }
+    return tokens;
+}
 
+std::optional<int> eyeLayerRole (const std::vector<std::string>& tokens) {
     const auto has
 	= [&tokens] (const std::string& expected) { return std::ranges::find (tokens, expected) != tokens.end (); };
     const bool hasEye = has ("eye") || has ("eyeball");
@@ -71,6 +74,8 @@ std::optional<int> semanticEyeLayerRole (const std::string& name) {
     }
     return std::nullopt;
 }
+
+std::optional<int> semanticEyeLayerRole (const std::string& name) { return eyeLayerRole (tokenizeObjectName (name)); }
 }
 
 CScene::CScene (
