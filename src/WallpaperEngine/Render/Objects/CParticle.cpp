@@ -1,4 +1,5 @@
 #include "CParticle.h"
+#include "ParticleEmitterAlgorithms.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -390,16 +391,6 @@ CParticle::resolveEmitterSpawnOrigin (const glm::vec3& transformedEmitterOrigin,
     return spawnOrigin;
 }
 
-uint32_t CParticle::accumulateRateEmission (float dt, float rate, bool limitOnePerFrame, float& emissionTimer) {
-    emissionTimer += dt * rate;
-    uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
-    emissionTimer -= static_cast<float> (toEmit);
-    if (limitOnePerFrame && toEmit > 1) {
-	toEmit = 1;
-    }
-    return toEmit;
-}
-
 void CParticle::initializeEmittedParticle (ParticleInstance& p, float lifetime) {
     p.acceleration = glm::vec3 (0.0f);
     p.rotation = glm::vec3 (0.0f);
@@ -426,75 +417,6 @@ void CParticle::initializeEmittedParticle (ParticleInstance& p, float lifetime) 
     for (auto& init : m_initializers) {
 	init (p);
     }
-}
-
-glm::vec3 CParticle::sampleBoxEmitterOffset (const ParticleEmitter& emitter, const glm::vec3& directions) {
-    glm::vec3 offset;
-    for (int axis = 0; axis < 3; axis++) {
-	float distance
-	    = WallpaperEngine::Maths::randomFloat (m_rng, emitter.distanceMin[axis], emitter.distanceMax[axis]);
-	if (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) < 0.5f) {
-	    distance = -distance;
-	}
-	offset[axis] = distance;
-    }
-    return offset * directions;
-}
-
-glm::vec3 CParticle::sampleSphereEmitterOffset (const ParticleEmitter& emitter) {
-    glm::vec3 offset;
-
-    if ((m_particle.flags & 4) == 0) {
-	const float angle = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, glm::two_pi<float> ());
-	const float minRadius = emitter.distanceMin.x;
-	const float maxRadius = emitter.distanceMax.x;
-	const float minRadiusSq = minRadius * minRadius;
-	const float maxRadiusSq = maxRadius * maxRadius;
-	const float radiusXY = std::sqrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusSq, maxRadiusSq));
-
-	offset = glm::vec3 (
-	    radiusXY * std::cos (angle), radiusXY * std::sin (angle),
-	    WallpaperEngine::Maths::randomFloat (m_rng, -maxRadius, maxRadius)
-	);
-	offset *= emitter.directions;
-    } else {
-	const float theta = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, glm::two_pi<float> ());
-	const float cosTheta = WallpaperEngine::Maths::randomFloat (m_rng, -1.0f, 1.0f);
-	const float sinTheta = std::sqrt (1.0f - cosTheta * cosTheta);
-	offset = glm::vec3 (sinTheta * std::cos (theta), sinTheta * std::sin (theta), cosTheta);
-
-	const float minRadius = emitter.distanceMin.x;
-	const float maxRadius = emitter.distanceMax.x;
-	const float minRadiusCubed = minRadius * minRadius * minRadius;
-	const float maxRadiusCubed = maxRadius * maxRadius * maxRadius;
-	const float radius = std::cbrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusCubed, maxRadiusCubed));
-	offset *= radius;
-	offset *= emitter.directions;
-    }
-
-    for (int axis = 0; axis < 3; axis++) {
-	if (emitter.sign[axis] == 1) {
-	    offset[axis] = std::abs (offset[axis]);
-	} else if (emitter.sign[axis] == -1) {
-	    offset[axis] = -std::abs (offset[axis]);
-	}
-    }
-
-    return offset;
-}
-
-void CParticle::applyEmitterVelocity (
-    ParticleInstance& particle, const ParticleEmitter& emitter, const glm::vec3& emitterOffset
-) {
-    if (emitter.speedMax > 0.0f || emitter.speedMin != 0.0f) {
-	const glm::vec3 direction
-	    = glm::length (emitterOffset) > 0.0f ? glm::normalize (emitterOffset) : glm::vec3 (0.0f, 1.0f, 0.0f);
-	const float speed = WallpaperEngine::Maths::randomFloat (m_rng, emitter.speedMin, emitter.speedMax);
-	particle.velocity = direction * speed;
-	return;
-    }
-
-    particle.velocity = glm::vec3 (0.0f);
 }
 
 EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
@@ -571,7 +493,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 	    // Rate-based emission with optional cap at 1 per frame
 	    if (emitter.rate > 0.0f) {
-		toEmit += accumulateRateEmission (dt, rate, limitOnePerFrame, emissionTimer);
+		toEmit += ParticleEmitterAlgorithms::accumulateRateEmission (dt, rate, limitOnePerFrame, emissionTimer);
 	    }
 
 	    // Emit particles
@@ -580,7 +502,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 		const glm::vec3 spawnOrigin = resolveEmitterSpawnOrigin (transformedEmitterOrigin, controlPointIndex);
 
-		const glm::vec3 emitterOffset = sampleBoxEmitterOffset (emitter, flippedDirections);
+		const glm::vec3 emitterOffset = ParticleEmitterAlgorithms::sampleBoxOffset (emitter, flippedDirections, m_rng);
 		p.position = spawnOrigin + emitterOffset;
 
 		// Emitter does not set velocity - initializers handle that
@@ -613,7 +535,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	}
 
 	// Rate-based emission with optional cap at 1 per frame
-	uint32_t toEmit = accumulateRateEmission (dt, rate, limitOnePerFrame, emissionTimer);
+	uint32_t toEmit = ParticleEmitterAlgorithms::accumulateRateEmission (dt, rate, limitOnePerFrame, emissionTimer);
 
 	if (remaining > 0) {
 	    toEmit = remaining;
@@ -626,9 +548,9 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    // Determine spawn origin (control point or emitter origin)
 	    const glm::vec3 spawnOrigin = resolveEmitterSpawnOrigin (transformedEmitterOrigin, controlPointIndex);
 
-	    const glm::vec3 emitterOffset = sampleSphereEmitterOffset (emitter);
+	    const glm::vec3 emitterOffset = ParticleEmitterAlgorithms::sampleSphereOffset (emitter, m_particle.flags, m_rng);
 	    p.position = spawnOrigin + emitterOffset;
-	    applyEmitterVelocity (p, emitter, emitterOffset);
+	    p.velocity = ParticleEmitterAlgorithms::resolveVelocity (emitter, emitterOffset, m_rng);
 
 	    initializeEmittedParticle (p, lifetime);
 	    count++;
