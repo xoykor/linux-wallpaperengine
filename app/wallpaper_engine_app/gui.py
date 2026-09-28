@@ -2291,6 +2291,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 capture_output=True,
                 text=True,
                 timeout=15,
+                check=False,
             )
             if result.returncode:
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip() or tr("systemctl falhou"))
@@ -2312,6 +2313,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 capture_output=True,
                 text=True,
                 timeout=5,
+                check=False,
             )
             return result.returncode == 0 and result.stdout.strip() == "enabled"
 
