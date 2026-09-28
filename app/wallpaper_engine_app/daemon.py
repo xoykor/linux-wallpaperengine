@@ -167,23 +167,21 @@ class WallpaperDaemon:
             raise RuntimeError(tr("Renderizador linux-wallpaperengine não encontrado ou sem permissão de execução."))
         return path
 
-    def _build_command(self, wallpaper_id: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    def _screen_wallpapers(self, wallpaper_id: str) -> dict[str, str]:
         if wallpaper_id not in self.catalog:
             raise ValueError(tr("Wallpaper selecionado não está mais instalado."))
         if not self.outputs:
             raise RuntimeError(tr("Nenhum monitor ativo detectado."))
-        screens = {}
+
+        screens: dict[str, str] = {}
         for screen in self.outputs:
             assigned = self.config["screen_assignments"].get(screen)
             # An unavailable fixed wallpaper must not crash the renderer on
             # every display while its cooldown is active.
             screens[screen] = assigned if self._available(assigned) else wallpaper_id
+        return screens
 
-        renderer = self._resolve_renderer()
-        command = [
-            renderer, "--disable-mouse", "--fps", str(self.config["fps"]),
-            "--layer", "bottom", "--no-fullscreen-pause",
-        ]
+    def _renderer_environment(self) -> dict[str, str]:
         environment = os.environ.copy()
         bundled_libraries = environment.get("LINUX_WALLPAPERENGINE_LIBRARY_PATH")
         if bundled_libraries:
@@ -192,17 +190,19 @@ class WallpaperDaemon:
                 f"{bundled_libraries}:{existing_libraries}" if existing_libraries else bundled_libraries
             )
         if self.config["mute"]:
-            command.extend(("--silent", "--noautomute", "--no-audio-processing"))
             environment.update(
                 SDL_AUDIODRIVER="dummy", PULSE_SERVER="none", PIPEWIRE_REMOTE="none"
             )
+        return environment
 
+    def _append_asset_directory(self, command: list[str], screens: dict[str, str]) -> None:
         assets = [self.catalog[selected]["assets"] for selected in screens.values()]
         existing_assets = [path for path in assets if Path(path).is_dir()]
         if existing_assets:
             # The renderer has one global assets directory for all screens.
             command.extend(("--assets-dir", existing_assets[0]))
 
+    def _append_screen_options(self, command: list[str], screens: dict[str, str]) -> None:
         for screen, selected in screens.items():
             command.extend((
                 "--screen-root", screen,
@@ -214,6 +214,19 @@ class WallpaperDaemon:
             for name, value in overrides.items():
                 if name in supported:
                     command.extend(("--screen-property", f"{name}={'true' if value else 'false'}"))
+
+    def _build_command(self, wallpaper_id: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+        screens = self._screen_wallpapers(wallpaper_id)
+        renderer = self._resolve_renderer()
+        command = [
+            renderer, "--disable-mouse", "--fps", str(self.config["fps"]),
+            "--layer", "bottom", "--no-fullscreen-pause",
+        ]
+        environment = self._renderer_environment()
+        if self.config["mute"]:
+            command.extend(("--silent", "--noautomute", "--no-audio-processing"))
+        self._append_asset_directory(command, screens)
+        self._append_screen_options(command, screens)
         return command, environment, screens
 
     def _request_switch(self, wallpaper_id: str | None) -> None:
@@ -296,6 +309,78 @@ class WallpaperDaemon:
             self.next_change_at = None
         print(f"Wallpaper: {wallpaper_id} — {self.catalog[wallpaper_id]['title']}", flush=True)
 
+    def _advance_rotation_if_due(self, now: float) -> None:
+        if self.child is None or self.terminating or self.next_change_mono is None:
+            return
+        if now < self.next_change_mono:
+            return
+        selected = self._next_id()
+        if selected and selected != self.current_id:
+            self._request_switch(selected)
+            return
+        interval = self.config["interval_minutes"] * 60
+        self.next_change_mono = now + interval
+        self.next_change_at = time.time() + interval
+
+    def _restore_fixed_assignments(self) -> None:
+        if self.child is None or self.terminating:
+            return
+        for screen in self.outputs:
+            assigned = self.config["screen_assignments"].get(screen)
+            if (
+                assigned in self.catalog
+                and self.screens.get(screen) != assigned
+                and self._available(assigned)
+            ):
+                # A fixed wallpaper that crashed is temporarily replaced
+                # while it is cooling down. Rebuild the renderer once the
+                # cooldown expires so the fixed assignment is restored.
+                self._request_switch(self.current_id)
+                return
+
+    def _pending_wallpaper(self) -> str | None:
+        pending_allowed = self._available(self.pending_id)
+        if self.config["rotation_enabled"]:
+            pending_allowed = pending_allowed and self.pending_id in self._eligible()
+        selected = self.pending_id if pending_allowed else self._first_id()
+        if selected is not None:
+            return selected
+
+        assignments = self.config["screen_assignments"]
+        all_outputs_fixed = self.outputs and all(
+            screen in assignments and self._available(assignments[screen])
+            for screen in self.outputs
+        )
+        if all_outputs_fixed:
+            return assignments[self.outputs[0]]
+        return None
+
+    def _set_selection_error(self, now: float) -> None:
+        if self.config["active_playlist"] is not None:
+            self.error = tr(
+                "A playlist '{playlist}' não contém wallpapers instalados e disponíveis para rotação.",
+                playlist=self.config["active_playlist"],
+            )
+        elif self.catalog:
+            self.error = tr(
+                "Nenhum wallpaper elegível encontrado. Confira as assinaturas da Steam e o filtro de favoritos."
+            )
+        else:
+            self.error = tr("Nenhum wallpaper scene ou video do Workshop encontrado.")
+        self.retry_at = now + _SCAN_SECONDS
+
+    def _start_child_if_ready(self, now: float) -> None:
+        if self.child is not None or now < self.retry_at:
+            return
+        selected = self._pending_wallpaper()
+        if selected is None:
+            self._set_selection_error(now)
+        elif not self.outputs:
+            self.error = tr("Nenhum monitor ativo detectado.")
+            self.retry_at = now + _SCAN_SECONDS
+        else:
+            self._start_child(selected)
+
     def _tick(self) -> None:
         if self.skip_requested:
             self.skip_requested = False
@@ -305,57 +390,11 @@ class WallpaperDaemon:
         if not self.active:
             self._publish()
             return
+
         now = time.monotonic()
-        if self.child is not None and not self.terminating and self.next_change_mono is not None:
-            if now >= self.next_change_mono:
-                selected = self._next_id()
-                if selected and selected != self.current_id:
-                    self._request_switch(selected)
-                else:
-                    interval = self.config["interval_minutes"] * 60
-                    self.next_change_mono = now + interval
-                    self.next_change_at = time.time() + interval
-        if self.child is not None and not self.terminating:
-            for screen in self.outputs:
-                assigned = self.config["screen_assignments"].get(screen)
-                if (
-                    assigned in self.catalog
-                    and self.screens.get(screen) != assigned
-                    and self._available(assigned)
-                ):
-                    # A fixed wallpaper that crashed is temporarily replaced
-                    # while it is cooling down. Rebuild the renderer once the
-                    # cooldown expires so the fixed assignment is restored.
-                    self._request_switch(self.current_id)
-                    break
-        if self.child is None and now >= self.retry_at:
-            pending_allowed = self._available(self.pending_id)
-            if self.config["rotation_enabled"]:
-                pending_allowed = pending_allowed and self.pending_id in self._eligible()
-            selected = self.pending_id if pending_allowed else self._first_id()
-            assignments = self.config["screen_assignments"]
-            if selected is None and self.outputs and all(
-                screen in assignments and self._available(assignments[screen])
-                for screen in self.outputs
-            ):
-                # Every display has a fixed, currently healthy wallpaper.
-                selected = assignments[self.outputs[0]]
-            if selected is None:
-                if self.config["active_playlist"] is not None:
-                    self.error = tr(
-                        "A playlist '{playlist}' não contém wallpapers instalados e disponíveis para rotação.",
-                        playlist=self.config["active_playlist"],
-                    )
-                elif self.catalog:
-                    self.error = tr("Nenhum wallpaper elegível encontrado. Confira as assinaturas da Steam e o filtro de favoritos.")
-                else:
-                    self.error = tr("Nenhum wallpaper scene ou video do Workshop encontrado.")
-                self.retry_at = now + _SCAN_SECONDS
-            elif not self.outputs:
-                self.error = tr("Nenhum monitor ativo detectado.")
-                self.retry_at = now + _SCAN_SECONDS
-            else:
-                self._start_child(selected)
+        self._advance_rotation_if_due(now)
+        self._restore_fixed_assignments()
+        self._start_child_if_ready(now)
         self._publish()
 
     def _validate_known_id(self, value: Any) -> str:
