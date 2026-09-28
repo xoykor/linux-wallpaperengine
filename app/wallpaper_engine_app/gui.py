@@ -1202,6 +1202,45 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._append_playlist_controls(name, identifiers)
         self._append_playlist_order(name, identifiers)
 
+    def _save_playlist_name(
+        self,
+        entry: Gtk.Entry,
+        previous: str | None,
+        initial_ids: list[str] | None,
+    ) -> bool:
+        try:
+            name = model.normalize_playlist_name(entry.get_text())
+        except ValueError as exc:
+            self._notice(str(exc), error=True)
+            return False
+
+        playlists = dict(self.config.get("playlists") or {})
+        if name != previous and name.casefold() in {value.casefold() for value in playlists}:
+            self._notice(tr("Já existe uma playlist com esse nome."), error=True)
+            return False
+
+        if previous is not None and previous in playlists:
+            playlists = {
+                name if key == previous else key: value
+                for key, value in playlists.items()
+            }
+            active = self.config.get("active_playlist")
+            settings = {
+                "playlists": playlists,
+                "active_playlist": name if active == previous else active,
+            }
+        else:
+            playlists[name] = list(dict.fromkeys(
+                item_id for item_id in (initial_ids or []) if item_id in self.catalog
+            ))
+            settings = {"playlists": playlists}
+
+        self.playlist_name = name
+        self._set_settings(**settings)
+        if initial_ids:
+            self.gallery.unselect_all()
+        return True
+
     def _playlist_name_dialog(self, title: str, previous: str | None,
                               initial_ids: list[str] | None = None) -> None:
         dialog = Gtk.Dialog(title=title, transient_for=self, modal=True)
@@ -1220,36 +1259,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         content.append(entry)
 
         def response(_dialog: Gtk.Dialog, code: int) -> None:
-            if code == Gtk.ResponseType.ACCEPT:
-                try:
-                    name = model.normalize_playlist_name(entry.get_text())
-                except ValueError as exc:
-                    self._notice(str(exc), error=True)
-                    return
-                playlists = dict(self.config.get("playlists") or {})
-                if name != previous and name.casefold() in {value.casefold() for value in playlists}:
-                    self._notice(tr("Já existe uma playlist com esse nome."), error=True)
-                    return
-                else:
-                    if previous is not None and previous in playlists:
-                        playlists = {
-                            name if key == previous else key: value
-                            for key, value in playlists.items()
-                        }
-                        active = self.config.get("active_playlist")
-                        settings = {
-                            "playlists": playlists,
-                            "active_playlist": name if active == previous else active,
-                        }
-                    else:
-                        playlists[name] = list(dict.fromkeys(
-                            item_id for item_id in (initial_ids or []) if item_id in self.catalog
-                        ))
-                        settings = {"playlists": playlists}
-                    self.playlist_name = name
-                    self._set_settings(**settings)
-                    if initial_ids:
-                        self.gallery.unselect_all()
+            if code == Gtk.ResponseType.ACCEPT and not self._save_playlist_name(
+                entry, previous, initial_ids
+            ):
+                return
             dialog.destroy()
 
         dialog.connect("response", response)
