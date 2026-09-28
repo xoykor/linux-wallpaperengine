@@ -398,6 +398,66 @@ def steamapps_roots() -> list[Path]:
     return roots
 
 
+def _tokenize_vdf(source: str) -> list[str]:
+    tokens: list[str] = []
+    position = 0
+    while position < len(source):
+        char = source[position]
+        if char.isspace():
+            position += 1
+            continue
+        if source.startswith("//", position):
+            end = source.find("\n", position)
+            position = len(source) if end < 0 else end + 1
+            continue
+        if char in "{}":
+            tokens.append(char)
+            position += 1
+            continue
+        if char != '"':
+            end = position
+            while end < len(source) and not source[end].isspace() and source[end] not in '{}"':
+                end += 1
+            tokens.append(source[position:end])
+            position = end
+            continue
+
+        position += 1
+        value: list[str] = []
+        while position < len(source) and source[position] != '"':
+            if (
+                source[position] == "\\"
+                and position + 1 < len(source)
+                and source[position + 1] in ('"', "\\")
+            ):
+                position += 1
+            value.append(source[position])
+            position += 1
+        tokens.append("".join(value))
+        position += 1
+    return tokens
+
+
+def _read_vdf_object(tokens: list[str], index: int, depth: int = 0) -> tuple[dict[str, Any], int]:
+    if depth > 16:
+        return {}, len(tokens)
+    values: dict[str, Any] = {}
+    while index < len(tokens):
+        key = tokens[index]
+        index += 1
+        if key == "}" or index >= len(tokens):
+            break
+        value = tokens[index]
+        index += 1
+        if value == "{":
+            values[key], index = _read_vdf_object(tokens, index, depth + 1)
+        elif value == "}":
+            break
+        else:
+            values[key] = value
+    return values, index
+
+
 def _steam_library_paths(listing: Path) -> list[Path]:
     """Read both current and older Steam libraryfolders.vdf layouts."""
     try:
@@ -405,59 +465,11 @@ def _steam_library_paths(listing: Path) -> list[Path]:
     except (OSError, UnicodeError):
         return []
 
-    tokens: list[str] = []
-    position = 0
-    while position < len(source):
-        char = source[position]
-        if char.isspace():
-            position += 1
-        elif source.startswith("//", position):
-            end = source.find("\n", position)
-            position = len(source) if end < 0 else end + 1
-        elif char in "{}":
-            tokens.append(char)
-            position += 1
-        elif char == '"':
-            position += 1
-            value: list[str] = []
-            while position < len(source) and source[position] != '"':
-                if source[position] == "\\" and position + 1 < len(source) and source[position + 1] in ('"', "\\"):
-                    position += 1
-                value.append(source[position])
-                position += 1
-            tokens.append("".join(value))
-            position += 1
-        else:
-            end = position
-            while end < len(source) and not source[end].isspace() and source[end] not in '{}"':
-                end += 1
-            tokens.append(source[position:end])
-            position = end
-
-    def read_object(index: int, depth: int = 0) -> tuple[dict[str, Any], int]:
-        if depth > 16:
-            return {}, len(tokens)
-        values: dict[str, Any] = {}
-        while index < len(tokens):
-            key = tokens[index]
-            index += 1
-            if key == "}":
-                break
-            if index >= len(tokens):
-                break
-            value = tokens[index]
-            index += 1
-            if value == "{":
-                values[key], index = read_object(index, depth + 1)
-            elif value == "}":
-                break
-            else:
-                values[key] = value
-        return values, index
-
+    tokens = _tokenize_vdf(source)
     if len(tokens) < 2 or tokens[0].casefold() != "libraryfolders" or tokens[1] != "{":
         return []
-    entries, _ = read_object(2)
+
+    entries, _ = _read_vdf_object(tokens, 2)
     libraries: list[Path] = []
     for key, value in entries.items():
         if not key.isdigit():
@@ -466,7 +478,6 @@ def _steam_library_paths(listing: Path) -> list[Path]:
         if isinstance(raw, str) and raw:
             libraries.append(Path(raw).expanduser())
     return libraries
-
 
 def _libraryfolders_paths(steamapps: Path) -> list[Path]:
     """Return Steam library roots for the existing catalog callers."""
@@ -576,33 +587,36 @@ def _boolean_properties(project: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
-def detect_outputs() -> list[str]:
-    """Discover active outputs using an available desktop/session backend."""
-    if shutil.which("kscreen-doctor"):
-        try:
-            result = subprocess.run(
-                ["kscreen-doctor", "-j"], capture_output=True, text=True,
-                timeout=5, check=True,
-            )
-            data = json.loads(result.stdout)
-            if not isinstance(data, dict):
-                raise TypeError("kscreen-doctor JSON root must be an object")
-            names = [
-                output["name"] for output in data.get("outputs", [])
-                if isinstance(output, dict) and output.get("enabled")
-                and output.get("connected") and isinstance(output.get("name"), str)
-            ]
-            if names:
-                return list(dict.fromkeys(names))
-        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
-            pass
-
-    session_type = os.environ.get("XDG_SESSION_TYPE")
-    if session_type == "wayland" or (
-        session_type != "x11"
-        and (not os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-    ):
+def _kscreen_outputs() -> list[str]:
+    if not shutil.which("kscreen-doctor"):
         return []
+    try:
+        result = subprocess.run(
+            ["kscreen-doctor", "-j"], capture_output=True, text=True,
+            timeout=5, check=True,
+        )
+        data = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    names = [
+        output["name"] for output in data.get("outputs", [])
+        if isinstance(output, dict) and output.get("enabled")
+        and output.get("connected") and isinstance(output.get("name"), str)
+    ]
+    return list(dict.fromkeys(names))
+
+
+def _native_wayland_session() -> bool:
+    session_type = os.environ.get("XDG_SESSION_TYPE")
+    return session_type == "wayland" or (
+        session_type != "x11"
+        and (not os.environ.get("DISPLAY") or bool(os.environ.get("WAYLAND_DISPLAY")))
+    )
+
+
+def _xrandr_outputs() -> list[str]:
     if not shutil.which("xrandr"):
         return []
     try:
@@ -618,3 +632,13 @@ def detect_outputs() -> list[str]:
         if len(parts) >= 2 and parts[1] == "connected":
             names.append(parts[0])
     return list(dict.fromkeys(names))
+
+
+def detect_outputs() -> list[str]:
+    """Discover active outputs using an available desktop/session backend."""
+    names = _kscreen_outputs()
+    if names:
+        return names
+    if _native_wayland_session():
+        return []
+    return _xrandr_outputs()
