@@ -381,6 +381,274 @@ void ApplicationContext::printCatalogJson () const {
 
 ApplicationContext::ApplicationContext (int argc, char* argv[]) : m_argc (argc), m_argv (argv) { }
 
+void ApplicationContext::applyWindowGeometry (const std::string& value) {
+    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
+	sLog.exception ("Cannot run in both background and window mode");
+    }
+    if (this->settings.render.mode == EXPLICIT_WINDOW) {
+	sLog.exception ("Only one window at a time can be specified in explicit window mode");
+    }
+    if (value.empty ()) {
+	sLog.exception ("Window geometry cannot be empty");
+    }
+
+    const char* str = value.c_str ();
+    const char* delim1 = strchr (str, 'x');
+    const char* delim2 = delim1 ? strchr (delim1 + 1, 'x') : nullptr;
+    const char* delim3 = delim2 ? strchr (delim2 + 1, 'x') : nullptr;
+    if (delim1 == nullptr || delim2 == nullptr || delim3 == nullptr) {
+	sLog.exception ("Window geometry must be in the format: XxYxWxH");
+    }
+
+    this->settings.render.mode = EXPLICIT_WINDOW;
+    this->settings.render.window.geometry.x = strtol (str, nullptr, 10);
+    this->settings.render.window.geometry.y = strtol (delim1 + 1, nullptr, 10);
+    this->settings.render.window.geometry.z = strtol (delim2 + 1, nullptr, 10);
+    this->settings.render.window.geometry.w = strtol (delim3 + 1, nullptr, 10);
+}
+
+void ApplicationContext::selectScreenRoot (const std::string& value, std::string& lastScreen) {
+    if (this->settings.general.screenBackgrounds.contains (value)) {
+	sLog.exception ("Cannot specify the same screen more than once: ", value);
+    }
+    for (const auto& group : this->settings.general.spanGroups) {
+	if (std::find (group.screens.begin (), group.screens.end (), value) != group.screens.end ()) {
+	    sLog.exception ("--screen-root: screen '", value, "' already belongs to a span group");
+	}
+    }
+    if (this->settings.render.mode == EXPLICIT_WINDOW) {
+	sLog.exception ("Cannot run in both background and window mode");
+    }
+
+    this->settings.render.mode = DESKTOP_BACKGROUND;
+    lastScreen = value;
+    this->settings.general.screenBackgrounds[lastScreen] = "";
+    this->settings.general.screenScalings[lastScreen] = this->settings.render.window.scalingMode;
+    this->settings.general.screenOffsets[lastScreen] = this->settings.render.window.uvOffset;
+    this->settings.general.screenPostProcess[lastScreen] = this->settings.render.postProcess;
+    this->settings.general.screenClamps[lastScreen] = this->settings.render.window.clamp;
+}
+
+void ApplicationContext::selectScreenSpan (const std::string& value, std::string& lastScreen) {
+    if (this->settings.render.mode == EXPLICIT_WINDOW) {
+	sLog.exception ("Cannot run in both background and window mode");
+    }
+
+    SpanGroup group;
+    std::string screen;
+    std::istringstream ss (value);
+    while (std::getline (ss, screen, ',')) {
+	if (screen.empty ()) {
+	    continue;
+	}
+	if (this->settings.general.screenBackgrounds.contains (screen)) {
+	    sLog.exception ("--screen-span: screen '", screen, "' is already configured individually");
+	}
+	if (std::find (group.screens.begin (), group.screens.end (), screen) != group.screens.end ()) {
+	    sLog.exception ("--screen-span: duplicate screen name '", screen, "'");
+	}
+	for (const auto& existing : this->settings.general.spanGroups) {
+	    if (std::find (existing.screens.begin (), existing.screens.end (), screen) != existing.screens.end ()) {
+		sLog.exception ("--screen-span: screen '", screen, "' already belongs to another span group");
+	    }
+	}
+	group.screens.push_back (screen);
+    }
+    if (group.screens.size () < 2) {
+	sLog.exception ("--screen-span requires at least two comma-separated screen names");
+    }
+
+    this->settings.render.mode = DESKTOP_BACKGROUND;
+    group.scaling = this->settings.render.window.scalingMode;
+    group.clamp = this->settings.render.window.clamp;
+    lastScreen = "span:" + group.screens.front ();
+    this->settings.general.spanGroups.push_back (std::move (group));
+    this->settings.general.screenBackgrounds[lastScreen] = "";
+    this->settings.general.screenOffsets[lastScreen] = this->settings.render.window.uvOffset;
+    this->settings.general.screenPostProcess[lastScreen] = this->settings.render.postProcess;
+}
+
+void ApplicationContext::applyScreenBackground (const std::string& value, const std::string& lastScreen) {
+    const auto background = translateBackground (value);
+    this->settings.general.screenBackgrounds[lastScreen] = background;
+    this->settings.general.defaultBackground = background;
+    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+	this->settings.general.spanGroups.back ().background = background;
+    }
+}
+
+void ApplicationContext::applyPlaylist (const std::string& value, const std::string& lastScreen) {
+    const auto& playlist = this->getPlaylistFromConfig (value);
+    if (lastScreen.empty ()) {
+	this->settings.general.defaultPlaylist = playlist;
+	if (this->settings.general.defaultBackground.empty () && !playlist.items.empty ()) {
+	    this->settings.general.defaultBackground = playlist.items.front ();
+	}
+	return;
+    }
+
+    this->settings.general.screenPlaylists[lastScreen] = playlist;
+    if (!playlist.items.empty ()) {
+	this->settings.general.screenBackgrounds[lastScreen] = playlist.items.front ();
+	if (this->settings.general.defaultBackground.empty ()) {
+	    this->settings.general.defaultBackground = playlist.items.front ();
+	}
+    }
+}
+
+void ApplicationContext::applyScaling (const std::string& value, const std::string& lastScreen) {
+    WallpaperEngine::Render::WallpaperState::TextureUVsScaling mode;
+    if (value == "stretch") {
+	mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::StretchUVs;
+    } else if (value == "fit") {
+	mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::ZoomFitUVs;
+    } else if (value == "fill") {
+	mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::ZoomFillUVs;
+    } else if (value == "default") {
+	mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs;
+    } else {
+	sLog.exception ("Invalid scaling mode: ", value);
+    }
+
+    if (this->settings.render.mode != DESKTOP_BACKGROUND) {
+	this->settings.render.window.scalingMode = mode;
+	return;
+    }
+    this->settings.general.screenScalings[lastScreen] = mode;
+    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+	this->settings.general.spanGroups.back ().scaling = mode;
+    }
+}
+
+void ApplicationContext::applyOffset (
+    const std::string& value, const std::string& lastScreen, const bool horizontal
+) {
+    const float offset = parseFiniteFloat (value, horizontal ? "--offset-x" : "--offset-y");
+    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()) {
+	if (horizontal) {
+	    this->settings.general.screenOffsets[lastScreen].x = offset;
+	} else {
+	    this->settings.general.screenOffsets[lastScreen].y = offset;
+	}
+	return;
+    }
+    if (horizontal) {
+	this->settings.render.window.uvOffset.x = offset;
+    } else {
+	this->settings.render.window.uvOffset.y = offset;
+    }
+}
+
+void ApplicationContext::applyClamp (const std::string& value, const std::string& lastScreen) {
+    TextureFlags flags;
+    if (value == "clamp") {
+	flags = TextureFlags_ClampUVs;
+    } else if (value == "border") {
+	flags = TextureFlags_ClampUVsBorder;
+    } else if (value == "repeat") {
+	flags = TextureFlags_NoFlags;
+    } else {
+	sLog.exception ("Invalid clamp mode: ", value);
+    }
+
+    if (this->settings.render.mode != DESKTOP_BACKGROUND) {
+	this->settings.render.window.clamp = flags;
+	return;
+    }
+    this->settings.general.screenClamps[lastScreen] = flags;
+    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
+	this->settings.general.spanGroups.back ().clamp = flags;
+    }
+}
+
+void ApplicationContext::applyWaylandLayer (const std::string& value) {
+    if (value == "background") {
+	this->settings.render.wayland.layer = WAYLAND_LAYER_BACKGROUND;
+    } else if (value == "bottom") {
+	this->settings.render.wayland.layer = WAYLAND_LAYER_BOTTOM;
+    } else if (value == "top") {
+	this->settings.render.wayland.layer = WAYLAND_LAYER_TOP;
+    } else if (value == "overlay") {
+	this->settings.render.wayland.layer = WAYLAND_LAYER_OVERLAY;
+    } else {
+	sLog.exception ("Invalid wlr-layer-shell layer: ", value);
+    }
+}
+
+void ApplicationContext::applyPostProcessValue (
+    const std::string& value, const std::string& lastScreen, const bool contrast
+) {
+    const float parsed = parseFiniteFloat (value, contrast ? "--contrast" : "--saturation");
+    auto& postProcess = this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()
+	? this->settings.general.screenPostProcess[lastScreen]
+	: this->settings.render.postProcess;
+    if (contrast) {
+	postProcess.contrast = parsed;
+    } else {
+	postProcess.saturation = parsed;
+    }
+}
+
+void ApplicationContext::applyBorderColour (const std::string& value, const std::string& lastScreen) {
+    const auto first = value.find (',');
+    const auto second = first == std::string::npos ? std::string::npos : value.find (',', first + 1);
+    if (first == std::string::npos || second == std::string::npos
+	|| value.find (',', second + 1) != std::string::npos) {
+	sLog.exception ("--border-colour expects exactly three comma-separated values");
+    }
+
+    glm::vec3 colour {
+	parseFiniteFloat (value.substr (0, first), "--border-colour"),
+	parseFiniteFloat (value.substr (first + 1, second - first - 1), "--border-colour"),
+	parseFiniteFloat (value.substr (second + 1), "--border-colour"),
+    };
+    colour = glm::clamp (colour, glm::vec3 (0.0f), glm::vec3 (1.0f));
+    auto& postProcess = this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()
+	? this->settings.general.screenPostProcess[lastScreen]
+	: this->settings.render.postProcess;
+    postProcess.borderColour = colour;
+}
+
+void ApplicationContext::applyScreenProperty (const std::string& value, const std::string& lastScreen) {
+    if (lastScreen.empty ()) {
+	sLog.exception ("--screen-property must follow --screen-root or --screen-span");
+    }
+    const std::string::size_type equals = value.find ('=');
+    if (equals == std::string::npos) {
+	this->settings.general.screenProperties[lastScreen][value] = "1";
+	return;
+    }
+    this->settings.general.screenProperties[lastScreen][value.substr (0, equals)] = value.substr (equals + 1);
+}
+
+void ApplicationContext::applyRenderDebug (const std::string& value) {
+    const auto parseDebugId = [&value] (const std::string& prefix) -> int {
+	try {
+	    return std::stoi (value.substr (prefix.length ()));
+	} catch (const std::invalid_argument&) {
+	    sLog.exception ("Invalid numeric value for --render-debug ", value);
+	} catch (const std::out_of_range&) {
+	    sLog.exception ("Out-of-range numeric value for --render-debug ", value);
+	}
+    };
+
+    if (value == "base-only") {
+	this->settings.render.debug.baseOnly = true;
+    } else if (value == "no-solid-final") {
+	this->settings.render.debug.noSolidFinal = true;
+    } else if (value == "pass-log") {
+	this->settings.render.debug.passLog = true;
+    } else if (value.rfind ("object=", 0) == 0) {
+	this->settings.render.debug.objectFilter = parseDebugId ("object=");
+    } else if (value.rfind ("skip-object=", 0) == 0) {
+	this->settings.render.debug.skipObjects.emplace_back (parseDebugId ("skip-object="));
+    } else if (value.rfind ("skip-effect=", 0) == 0) {
+	this->settings.render.debug.skipEffects.emplace_back (parseDebugId ("skip-effect="));
+    } else {
+	sLog.exception ("Invalid render debug mode: ", value);
+    }
+}
+
 void ApplicationContext::loadSettingsFromArgv () {
     std::string lastScreen;
 
@@ -401,119 +669,25 @@ void ApplicationContext::loadSettingsFromArgv () {
     backgroundMode.add_argument ("-w", "--window")
 	.help ("Window geometry to use for the given screen")
 	.action ([this] (const std::string& value) -> void {
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
-		sLog.exception ("Cannot run in both background and window mode");
-	    }
-	    if (this->settings.render.mode == EXPLICIT_WINDOW) {
-		sLog.exception ("Only one window at a time can be specified in explicit window mode");
-	    }
-
-	    this->settings.render.mode = EXPLICIT_WINDOW;
-
-	    if (value.empty ()) {
-		sLog.exception ("Window geometry cannot be empty");
-	    }
-
-	    const char* str = value.c_str ();
-	    const char* delim1 = strchr (str, 'x');
-	    const char* delim2 = delim1 ? strchr (delim1 + 1, 'x') : nullptr;
-	    const char* delim3 = delim2 ? strchr (delim2 + 1, 'x') : nullptr;
-
-	    if (delim1 == nullptr || delim2 == nullptr || delim3 == nullptr) {
-		sLog.exception ("Window geometry must be in the format: XxYxWxH");
-	    }
-
-	    this->settings.render.window.geometry.x = strtol (str, nullptr, 10);
-	    this->settings.render.window.geometry.y = strtol (delim1 + 1, nullptr, 10);
-	    this->settings.render.window.geometry.z = strtol (delim2 + 1, nullptr, 10);
-	    this->settings.render.window.geometry.w = strtol (delim3 + 1, nullptr, 10);
+	    this->applyWindowGeometry (value);
 	})
 	.append ();
     backgroundMode.add_argument ("-r", "--screen-root")
 	.help ("The screen the following settings will have an effect on")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    if (this->settings.general.screenBackgrounds.find (value)
-		!= this->settings.general.screenBackgrounds.end ()) {
-		sLog.exception ("Cannot specify the same screen more than once: ", value);
-	    }
-	    for (const auto& group : this->settings.general.spanGroups) {
-		if (std::find (group.screens.begin (), group.screens.end (), value) != group.screens.end ()) {
-		    sLog.exception ("--screen-root: screen '", value, "' already belongs to a span group");
-		}
-	    }
-	    if (this->settings.render.mode == EXPLICIT_WINDOW) {
-		sLog.exception ("Cannot run in both background and window mode");
-	    }
-
-	    this->settings.render.mode = DESKTOP_BACKGROUND;
-	    lastScreen = value;
-	    this->settings.general.screenBackgrounds[lastScreen] = "";
-	    this->settings.general.screenScalings[lastScreen] = this->settings.render.window.scalingMode;
-	    this->settings.general.screenOffsets[lastScreen] = this->settings.render.window.uvOffset;
-	    this->settings.general.screenPostProcess[lastScreen] = this->settings.render.postProcess;
-	    this->settings.general.screenClamps[lastScreen] = this->settings.render.window.clamp;
+	    this->selectScreenRoot (value, lastScreen);
 	})
 	.append ();
     backgroundGroup.add_argument ("--screen-span")
 	.help ("Comma-separated list of screens to span a single wallpaper across")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    if (this->settings.render.mode == EXPLICIT_WINDOW) {
-		sLog.exception ("Cannot run in both background and window mode");
-	    }
-
-	    this->settings.render.mode = DESKTOP_BACKGROUND;
-
-	    SpanGroup group;
-	    std::string screen;
-	    std::istringstream ss (value);
-
-	    while (std::getline (ss, screen, ',')) {
-		if (screen.empty ()) {
-		    continue;
-		}
-		if (this->settings.general.screenBackgrounds.find (screen)
-		    != this->settings.general.screenBackgrounds.end ()) {
-		    sLog.exception ("--screen-span: screen '", screen, "' is already configured individually");
-		}
-		// reject duplicates within this group
-		if (std::find (group.screens.begin (), group.screens.end (), screen) != group.screens.end ()) {
-		    sLog.exception ("--screen-span: duplicate screen name '", screen, "'");
-		}
-		// reject screens already claimed by another span group
-		for (const auto& existing : this->settings.general.spanGroups) {
-		    if (std::find (existing.screens.begin (), existing.screens.end (), screen)
-			!= existing.screens.end ()) {
-			sLog.exception ("--screen-span: screen '", screen, "' already belongs to another span group");
-		    }
-		}
-		group.screens.push_back (screen);
-	    }
-
-	    if (group.screens.size () < 2) {
-		sLog.exception ("--screen-span requires at least two comma-separated screen names");
-	    }
-
-	    group.scaling = this->settings.render.window.scalingMode;
-	    group.clamp = this->settings.render.window.clamp;
-	    const std::string groupKey = "span:" + group.screens.front ();
-	    this->settings.general.spanGroups.push_back (std::move (group));
-	    // Use the same key WallpaperApplication uses while loading and rendering the group.
-	    lastScreen = groupKey;
-	    this->settings.general.screenBackgrounds[lastScreen] = "";
-	    this->settings.general.screenOffsets[lastScreen] = this->settings.render.window.uvOffset;
-	    this->settings.general.screenPostProcess[lastScreen] = this->settings.render.postProcess;
+	    this->selectScreenSpan (value, lastScreen);
 	})
 	.append ();
     backgroundGroup.add_argument ("-b", "--bg")
 	.help ("After --screen-root or --screen-span, specifies the background to use")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    this->settings.general.screenBackgrounds[lastScreen] = translateBackground (value);
-	    // set the default background to the last one used
-	    this->settings.general.defaultBackground = translateBackground (value);
-	    // if this targets a span group, update the group's background too
-	    if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
-		this->settings.general.spanGroups.back ().background = translateBackground (value);
-	    }
+	    this->applyScreenBackground (value, lastScreen);
 	})
 	.append ();
     backgroundGroup.add_argument ("--playlist")
@@ -522,23 +696,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    "screen, otherwise it is used in window mode."
 	)
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const auto& playlist = this->getPlaylistFromConfig (value);
-
-	    if (lastScreen.empty ()) {
-		this->settings.general.defaultPlaylist = playlist;
-		if (this->settings.general.defaultBackground.empty () && !playlist.items.empty ()) {
-		    this->settings.general.defaultBackground = playlist.items.front ();
-		}
-	    } else {
-		this->settings.general.screenPlaylists[lastScreen] = playlist;
-		if (!playlist.items.empty ()) {
-		    this->settings.general.screenBackgrounds[lastScreen] = playlist.items.front ();
-		}
-
-		if (this->settings.general.defaultBackground.empty () && !playlist.items.empty ()) {
-		    this->settings.general.defaultBackground = playlist.items.front ();
-		}
-	    }
+	    this->applyPlaylist (value, lastScreen);
 	})
 	.append ();
     backgroundGroup.add_argument ("--scaling")
@@ -548,50 +706,19 @@ void ApplicationContext::loadSettingsFromArgv () {
 	)
 	.choices ("stretch", "fit", "fill", "default")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    WallpaperEngine::Render::WallpaperState::TextureUVsScaling mode;
-
-	    if (value == "stretch") {
-		mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::StretchUVs;
-	    } else if (value == "fit") {
-		mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::ZoomFitUVs;
-	    } else if (value == "fill") {
-		mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::ZoomFillUVs;
-	    } else if (value == "default") {
-		mode = WallpaperEngine::Render::WallpaperState::TextureUVsScaling::DefaultUVs;
-	    } else {
-		sLog.exception ("Invalid scaling mode: ", value);
-	    }
-
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
-		this->settings.general.screenScalings[lastScreen] = mode;
-		// also update span group if targeting one
-		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
-		    this->settings.general.spanGroups.back ().scaling = mode;
-		}
-	    } else {
-		this->settings.render.window.scalingMode = mode;
-	    }
+	    this->applyScaling (value, lastScreen);
 	})
 	.append ();
     backgroundGroup.add_argument ("--offset-x")
 	.help ("UV X offset for the preceding output/span, or the default window when no output is selected")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const float offset = parseFiniteFloat (value, "--offset-x");
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()) {
-		this->settings.general.screenOffsets[lastScreen].x = offset;
-	    } else {
-		this->settings.render.window.uvOffset.x = offset;
-	    }
+	    this->applyOffset (value, lastScreen, true);
 	})
 	.append ();
     backgroundGroup.add_argument ("--offset-y")
 	.help ("UV Y offset for the preceding output/span, or the default window when no output is selected")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const float offset = parseFiniteFloat (value, "--offset-y");
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()) {
-		this->settings.general.screenOffsets[lastScreen].y = offset;
-	    } else
-		this->settings.render.window.uvOffset.y = offset;
+	    this->applyOffset (value, lastScreen, false);
 	})
 	.append ();
 
@@ -602,27 +729,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	)
 	.choices ("clamp", "border", "repeat")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    TextureFlags flags;
-
-	    if (value == "clamp") {
-		flags = TextureFlags_ClampUVs;
-	    } else if (value == "border") {
-		flags = TextureFlags_ClampUVsBorder;
-	    } else if (value == "repeat") {
-		flags = TextureFlags_NoFlags;
-	    } else {
-		sLog.exception ("Invalid clamp mode: ", value);
-	    }
-
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND) {
-		this->settings.general.screenClamps[lastScreen] = flags;
-		// also update span group if targeting one
-		if (lastScreen.rfind ("span:", 0) == 0 && !this->settings.general.spanGroups.empty ()) {
-		    this->settings.general.spanGroups.back ().clamp = flags;
-		}
-	    } else {
-		this->settings.render.window.clamp = flags;
-	    }
+	    this->applyClamp (value, lastScreen);
 	})
 	.append ();
 
@@ -636,17 +743,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.choices ("background", "bottom", "top", "overlay")
 	.default_value (std::string ("bottom"))
 	.action ([this] (const std::string& value) -> void {
-	    if (value == "background") {
-		this->settings.render.wayland.layer = WAYLAND_LAYER_BACKGROUND;
-	    } else if (value == "bottom") {
-		this->settings.render.wayland.layer = WAYLAND_LAYER_BOTTOM;
-	    } else if (value == "top") {
-		this->settings.render.wayland.layer = WAYLAND_LAYER_TOP;
-	    } else if (value == "overlay") {
-		this->settings.render.wayland.layer = WAYLAND_LAYER_OVERLAY;
-	    } else {
-		sLog.exception ("Invalid wlr-layer-shell layer: ", value);
-	    }
+	    this->applyWaylandLayer (value);
 	});
 
     auto& performanceGroup = program.add_group ("Performance options");
@@ -746,42 +843,17 @@ void ApplicationContext::loadSettingsFromArgv () {
     configurationGroup.add_argument ("--contrast")
 	.help ("Post-process contrast for the preceding output/span, or globally when no output is selected")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const float v = parseFiniteFloat (value, "--contrast");
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()) {
-		this->settings.general.screenPostProcess[lastScreen].contrast = v;
-	    } else {
-		this->settings.render.postProcess.contrast = v;
-	    }
+	    this->applyPostProcessValue (value, lastScreen, true);
 	});
     configurationGroup.add_argument ("--saturation")
 	.help ("Post-process saturation for the preceding output/span, or globally when no output is selected")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const float v = parseFiniteFloat (value, "--saturation");
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()) {
-		this->settings.general.screenPostProcess[lastScreen].saturation = v;
-	    } else {
-		this->settings.render.postProcess.saturation = v;
-	    }
+	    this->applyPostProcessValue (value, lastScreen, false);
 	});
     configurationGroup.add_argument ("--border-colour")
 	.help ("RGB border colour as r,g,b with components from 0 to 1")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const auto first = value.find (',');
-	    const auto second = first == std::string::npos ? std::string::npos : value.find (',', first + 1);
-	    if (first == std::string::npos || second == std::string::npos
-		|| value.find (',', second + 1) != std::string::npos) {
-		sLog.exception ("--border-colour expects exactly three comma-separated values");
-	    }
-	    glm::vec3 colour {
-		parseFiniteFloat (value.substr (0, first), "--border-colour"),
-		parseFiniteFloat (value.substr (first + 1, second - first - 1), "--border-colour"),
-		parseFiniteFloat (value.substr (second + 1), "--border-colour"),
-	    };
-	    colour = glm::clamp (colour, glm::vec3 (0.0f), glm::vec3 (1.0f));
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
-		this->settings.general.screenPostProcess[lastScreen].borderColour = colour;
-	    else
-		this->settings.render.postProcess.borderColour = colour;
+	    this->applyBorderColour (value, lastScreen);
 	});
 
     configurationGroup.add_argument ("-l", "--list-properties")
@@ -806,16 +878,7 @@ void ApplicationContext::loadSettingsFromArgv () {
     configurationGroup.add_argument ("--screen-property")
 	.help ("Overrides a project property only for the preceding --screen-root or --screen-span output")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    if (lastScreen.empty ()) {
-		sLog.exception ("--screen-property must follow --screen-root or --screen-span");
-	    }
-
-	    const std::string::size_type equals = value.find ('=');
-	    if (equals == std::string::npos) {
-		this->settings.general.screenProperties[lastScreen][value] = "1";
-	    } else {
-		this->settings.general.screenProperties[lastScreen][value.substr (0, equals)] = value.substr (equals + 1);
-	    }
+	    this->applyScreenProperty (value, lastScreen);
 	})
 	.append ();
 
@@ -832,36 +895,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    "skip-effect=<id>. Can be repeated."
 	)
 	.action ([this] (const std::string& value) -> void {
-	    const auto parseDebugId = [&value] (const std::string& prefix) -> std::optional<int> {
-		try {
-		    return std::stoi (value.substr (prefix.length ()));
-		} catch (const std::invalid_argument&) {
-		    sLog.exception ("Invalid numeric value for --render-debug ", value);
-		} catch (const std::out_of_range&) {
-		    sLog.exception ("Out-of-range numeric value for --render-debug ", value);
-		}
-		return std::nullopt;
-	    };
-
-	    if (value == "base-only") {
-		this->settings.render.debug.baseOnly = true;
-	    } else if (value == "no-solid-final") {
-		this->settings.render.debug.noSolidFinal = true;
-	    } else if (value == "pass-log") {
-		this->settings.render.debug.passLog = true;
-	    } else if (value.rfind ("object=", 0) == 0) {
-		this->settings.render.debug.objectFilter = parseDebugId ("object=");
-	    } else if (value.rfind ("skip-object=", 0) == 0) {
-		if (const auto id = parseDebugId ("skip-object="); id.has_value ()) {
-		    this->settings.render.debug.skipObjects.emplace_back (*id);
-		}
-	    } else if (value.rfind ("skip-effect=", 0) == 0) {
-		if (const auto id = parseDebugId ("skip-effect="); id.has_value ()) {
-		    this->settings.render.debug.skipEffects.emplace_back (*id);
-		}
-	    } else {
-		sLog.exception ("Invalid render debug mode: ", value);
-	    }
+	    this->applyRenderDebug (value);
 	})
 	.append ();
 
