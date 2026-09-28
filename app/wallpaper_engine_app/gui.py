@@ -24,8 +24,8 @@ from .theme import install_theme
 
 
 SERVICE = "linux-wallpaperengine-app.service"
-CARD_WIDTH = 240
-CARD_PREVIEW_HEIGHT = CARD_WIDTH
+CARD_WIDTH = 196
+CARD_PREVIEW_HEIGHT = round(CARD_WIDTH * 9 / 16)
 CARD_HEIGHT = CARD_PREVIEW_HEIGHT + 56
 FILTERS = ("Todos", "Cenas", "Vídeos", "Favoritos")
 SCALINGS = ("fill", "fit", "stretch", "default")
@@ -94,7 +94,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.set_size_request(680, 440)
         self.add_css_class("glass-window")
         self._appimage_renderer_path = os.environ.get("LINUX_WALLPAPERENGINE_RENDERER_PATH")
-        self.connect("realize", lambda *_: enable_backdrop_blur(self))
+        # Apply the KWin hint once the X11/XWayland surface is mapped and has
+        # a stable XID. The helper safely no-ops on other compositors.
+        self.connect("map", lambda *_: enable_backdrop_blur(self))
 
         self.catalog: dict[str, dict] = {}
         self.config: dict = model.load_config()
@@ -746,12 +748,12 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         gallery_click.connect("pressed", self._gallery_pressed)
         gallery_click.connect("released", self._gallery_released)
         self.gallery.add_controller(gallery_click)
-        self.gallery.set_column_spacing(10)
-        self.gallery.set_row_spacing(10)
+        self.gallery.set_column_spacing(8)
+        self.gallery.set_row_spacing(8)
         self.gallery.set_min_children_per_line(1)
-        # Let the gallery use the available width at larger window sizes;
-        # the former three-column cap left large empty gutters on maximized displays.
-        self.gallery.set_max_children_per_line(6)
+        # Keep enough columns available for compact cards on maximized displays;
+        # FlowBox may otherwise allocate overly wide cells across each row.
+        self.gallery.set_max_children_per_line(8)
         gallery_scroll.set_child(self.gallery)
         self.gallery_state = Gtk.Stack()
         self.gallery_state.set_hhomogeneous(False)

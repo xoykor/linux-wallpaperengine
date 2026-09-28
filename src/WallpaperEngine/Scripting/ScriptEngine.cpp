@@ -119,7 +119,14 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
     // scalar types returned directly
     int tag = JS_VALUE_GET_TAG (val);
 
-    if (tag == JS_TAG_UNDEFINED || tag == JS_TAG_UNINITIALIZED || tag == JS_TAG_NULL) {
+    if (tag == JS_TAG_UNDEFINED || tag == JS_TAG_UNINITIALIZED) {
+	// Many Wallpaper Engine scripts use property hooks only for side effects
+	// (for example, controlling another layer) and intentionally return no
+	// value. Keep the current property instead of converting undefined to null.
+	return;
+    }
+
+    if (tag == JS_TAG_NULL) {
 	source.update (DynamicValue::UpdateSource::Script);
 	return;
     }
@@ -131,6 +138,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 
     if (tag == JS_TAG_BOOL) {
 	source.update (static_cast<bool> (JS_VALUE_GET_BOOL (val)), DynamicValue::UpdateSource::Script);
+	return;
     }
 
     if (JS_TAG_IS_FLOAT64 (tag)) {
@@ -726,6 +734,14 @@ void ScriptEngine::tick () {
 	JS_SetPropertyStr (
 	    this->m_context, this->m_globalThis, "thisLayer", JS_DupValue (this->m_context, module.thisLayer)
 	);
+	JSValue updateExport = JS_GetPropertyStr (this->m_context, module.module, "update");
+	const bool hasUpdate = JS_IsFunction (this->m_context, updateExport);
+	JS_FreeValue (this->m_context, updateExport);
+	if (!hasUpdate) {
+	    // Init-only modules keep the property's authored or init-set value. A
+	    // missing update() is not an update returning undefined/null.
+	    continue;
+	}
 	JSValue args[] = { this->dynamicToJs (module.value) };
 	JSValue result = this->call (module.module, 1, args, "update");
 	ScopeGuard guard ([result, args, this] () {

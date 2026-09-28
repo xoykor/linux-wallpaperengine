@@ -247,8 +247,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	    for (const auto& [name, setting] : passOverride.constants) {
 		if (setting != nullptr && setting->value != nullptr) {
 		    this->registerProperty (
-			effectPrefix + "_override" + std::to_string (overrideIndex) + "_" + name,
-			*setting->value
+			effectPrefix + "_override" + std::to_string (overrideIndex) + "_" + name, *setting->value
 		    );
 		}
 	    }
@@ -256,9 +255,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	for (size_t passIndex = 0; passIndex < effect->effect->passes.size (); passIndex++) {
 	    const auto& pass = *effect->effect->passes[passIndex];
 	    if (pass.material.has_value ()) {
-		this->registerMaterialProperties (
-		    effectPrefix + "_pass" + std::to_string (passIndex), **pass.material
-		);
+		this->registerMaterialProperties (effectPrefix + "_pass" + std::to_string (passIndex), **pass.material);
 	    }
 	}
     }
@@ -1292,6 +1289,19 @@ bool CImage::isCompositionLayer () const {
 bool CImage::copiesCompositionBackground () const { return this->m_image.copyBackground; }
 
 std::shared_ptr<const CFBO> CImage::getCompositionFBO () const { return this->m_compositionFBO; }
+
+std::optional<ScriptableObject::AnimationLayerProperties> CImage::findAnimationLayer (const std::string& name) const {
+    for (const auto& binding : this->m_puppetLayers) {
+	if (binding.clip == nullptr || binding.layer == nullptr || binding.clip->name != name
+	    || binding.layer->rate == nullptr || binding.layer->rate->value == nullptr
+	    || binding.layer->visible == nullptr || binding.layer->visible->value == nullptr) {
+	    continue;
+	}
+	return ScriptableObject::AnimationLayerProperties { .rate = binding.layer->rate->value.get (),
+							    .visible = binding.layer->visible->value.get () };
+    }
+    return std::nullopt;
+}
 
 std::optional<glm::mat4> CImage::getPuppetAttachmentMatrix (const std::string& name) const {
     if (!this->m_puppetModel.has_value () || this->m_puppetModel->bones.empty ()) {

@@ -180,9 +180,16 @@ bool parseMdls0004Skeleton (
     Cursor header { data.data (), data.size (), mdlsOffset + markerLength + 1 };
     const uint32_t mdlaOffset = header.read<uint32_t> ();
     const uint32_t boneCount = header.read<uint32_t> ();
-    if (!header.ok || mdlaOffset <= header.off || mdlaOffset > data.size () || boneCount < requiredBones
-	|| boneCount == 0 || boneCount > 512 || mdlaOffset + 4 > data.size ()
-	|| std::memcmp (data.data () + mdlaOffset, "MDLA", 4) != 0) {
+    if (!header.ok || mdlaOffset <= header.off || mdlaOffset > data.size () || data.size () - mdlaOffset < 4
+	|| boneCount < requiredBones || boneCount == 0 || boneCount > 512) {
+	return false;
+    }
+
+    const bool pointsToMdla = std::memcmp (data.data () + mdlaOffset, "MDLA", 4) == 0;
+    // Some valid MDLS0004 packages point at the MDAT chunk immediately after
+    // the bone records; their MDLA animation chunk follows later in the file.
+    const bool pointsToMdat = std::memcmp (data.data () + mdlaOffset, "MDAT", 4) == 0;
+    if (!pointsToMdla && !pointsToMdat) {
 	return false;
     }
 
@@ -197,7 +204,10 @@ bool parseMdls0004Skeleton (
 	const uint32_t flags = cur.read<uint32_t> ();
 	const int32_t parent = cur.read<int32_t> ();
 	const uint32_t matrixBytes = cur.read<uint32_t> ();
-	if (!cur.ok || name.empty () || matrixBytes != 64 || parent < -1 || parent >= static_cast<int32_t> (index)) {
+	// MDLS0004 may contain unnamed helper bones. Names are not used by the
+	// renderer (channels and mesh weights address bones by index), so keep the
+	// record if its terminator, matrix and hierarchy are structurally valid.
+	if (!cur.ok || matrixBytes != 64 || parent < -1 || parent >= static_cast<int32_t> (index)) {
 	    return false;
 	}
 	(void)flags;

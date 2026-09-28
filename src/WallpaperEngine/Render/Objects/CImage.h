@@ -63,6 +63,9 @@ public:
     [[nodiscard]] std::shared_ptr<const CFBO> getCompositionFBO () const;
     [[nodiscard]] std::optional<glm::mat4> getPuppetAttachmentMatrix (const std::string& name) const;
 
+    [[nodiscard]] std::optional<ScriptableObject::AnimationLayerProperties>
+    findAnimationLayer (const std::string& name) const override;
+
 protected:
     void setupPasses ();
 

@@ -38,7 +38,9 @@ CModel::CModel (Wallpapers::CScene& scene, const ModelObject& model) :
 
     this->registerMaterialProperties ("material", *model.material);
     for (size_t materialIndex = 0; materialIndex < model.extraMaterials.size (); materialIndex++) {
-	this->registerMaterialProperties ("extraMaterial" + std::to_string (materialIndex), *model.extraMaterials[materialIndex]);
+	this->registerMaterialProperties (
+	    "extraMaterial" + std::to_string (materialIndex), *model.extraMaterials[materialIndex]
+	);
     }
 
     this->detectTexture ();
@@ -278,6 +280,21 @@ void CModel::setupAnimationLayers (const std::vector<char>& modelData) {
 	"Loaded skinned model ", m_model.modelFile, " bones=", m_puppetModel->bones.size (),
 	" clips=", m_puppetModel->clips.size (), " activeLayers=", m_animationLayers.size ()
     );
+}
+
+std::optional<Scripting::ScriptableObject::AnimationLayerProperties>
+CModel::findAnimationLayer (const std::string& name) const {
+    for (const auto& binding : this->m_animationLayers) {
+	if (binding.clip == nullptr || binding.layer == nullptr || binding.clip->name != name
+	    || binding.layer->rate == nullptr || binding.layer->rate->value == nullptr
+	    || binding.layer->visible == nullptr || binding.layer->visible->value == nullptr) {
+	    continue;
+	}
+	return Scripting::ScriptableObject::AnimationLayerProperties { .rate = binding.layer->rate->value.get (),
+								       .visible
+								       = binding.layer->visible->value.get () };
+    }
+    return std::nullopt;
 }
 
 void CModel::updateSkinning () {
@@ -522,51 +539,91 @@ void CModel::updateMatrices () {
     const float sceneWidth = camera.getWidth ();
     const float sceneHeight = camera.getHeight ();
 
-    if (!camera.isOrthogonal ()) {
-	const glm::vec3 origin = m_model.origin->value->getVec3 ();
-	const glm::vec3 angles = this->effectiveAngles ();
-	const glm::vec3 scale = m_model.scale->value->getVec3 ();
+    // Resolve the full authored parent chain for models, just as image layers
+    // do. Model properties can be script-driven, so read their current values
+    // every frame rather than caching the resulting matrix at setup time.
+    constexpr size_t kMaxParentDepth = 32;
+    std::vector<const Object*> chain { &m_model };
+    const Object* current = &m_model;
+    while (current->parent.has_value () && chain.size () < kMaxParentDepth) {
+	const CObject* parentRender = this->getScene ().getObject (*current->parent);
+	if (parentRender == nullptr) {
+	    break;
+	}
+	current = &parentRender->getObject ();
+	chain.push_back (current);
+    }
 
-	m_modelMatrix = glm::translate (glm::mat4 (1.0f), origin);
-	m_modelMatrix = glm::rotate (m_modelMatrix, angles.z, glm::vec3 (0, 0, 1));
-	m_modelMatrix = glm::rotate (m_modelMatrix, angles.y, glm::vec3 (0, 1, 0));
-	m_modelMatrix = glm::rotate (m_modelMatrix, angles.x, glm::vec3 (1, 0, 0));
-	m_modelMatrix = glm::scale (m_modelMatrix, scale);
+    const bool orthogonal = camera.isOrthogonal ();
+    const auto nodeMatrix = [this, orthogonal, sceneWidth, sceneHeight] (const Object& object, bool root) {
+	glm::vec3 origin = object.origin->value->getVec3 ();
+	glm::vec3 angles = object.groupAngles->value->getVec3 ();
+	glm::vec3 scale = object.groupScale->value->getVec3 ();
 
+	if (object.is<Image> ()) {
+	    const auto* image = object.as<Image> ();
+	    angles = image->angles->value->getVec3 ();
+	    scale = image->scale->value->getVec3 ();
+	} else if (object.is<ModelObject> ()) {
+	    const auto* model = object.as<ModelObject> ();
+	    angles = model->angles->value->getVec3 ();
+	    scale = model->scale->value->getVec3 ();
+	    const CObject* renderObject = this->getScene ().getObject (object.id);
+	    if (const auto* modelRender = dynamic_cast<const CModel*> (renderObject); modelRender != nullptr) {
+		angles = modelRender->effectiveAngles ();
+	    }
+	} else if (object.is<Particle> ()) {
+	    const auto* particle = object.as<Particle> ();
+	    angles = particle->angles->value->getVec3 ();
+	    scale = particle->scale->value->getVec3 ();
+	} else if (object.is<Text> ()) {
+	    scale = object.as<Text> ()->scale->value->getVec3 ();
+	}
+
+	if (orthogonal) {
+	    // The root converts authored top-left scene coordinates to the camera's
+	    // centered, y-up space. Descendant origins are local offsets in that space.
+	    origin.x -= root ? sceneWidth / 2.0f : 0.0f;
+	    origin.y = (root ? sceneHeight / 2.0f : 0.0f) - origin.y;
+	}
+
+	glm::mat4 matrix = glm::translate (glm::mat4 (1.0f), origin);
+	matrix = glm::rotate (matrix, orthogonal ? -angles.z : angles.z, glm::vec3 (0, 0, 1));
+	matrix = glm::rotate (matrix, angles.y, glm::vec3 (0, 1, 0));
+	matrix = glm::rotate (matrix, orthogonal ? -angles.x : angles.x, glm::vec3 (1, 0, 0));
+	matrix = glm::scale (matrix, scale);
+	if (orthogonal) {
+	    matrix = glm::scale (matrix, glm::vec3 (1.0f, -1.0f, 1.0f));
+	}
+	return matrix;
+    };
+
+    // Fold transforms from the root down so animated parents affect every
+    // nested model, including skyboxes and other multi-part scene assets.
+    m_modelMatrix = glm::mat4 (1.0f);
+    for (auto it = chain.rbegin (); it != chain.rend (); ++it) {
+	m_modelMatrix *= nodeMatrix (**it, it == chain.rbegin ());
+    }
+
+    if (!orthogonal) {
 	m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
 	m_eyePosition = camera.getEye ();
+    } else if (m_model.perspective) {
+	const float sceneFov = glm::radians (camera.getFov ());
+	const float overrideFov = camera.getOverrideFov ();
+	const float projectionFov = overrideFov > 0.0f ? glm::radians (overrideFov) : sceneFov;
+	const float eyeZ = (sceneHeight * 0.5f) / std::tan (projectionFov * 0.5f);
+	const float nearz = std::max (camera.getNearZ (), 1.0f);
+	const float farz = std::max (camera.getFarZ (), eyeZ + 10.0f * sceneHeight);
+
+	const glm::mat4 projection = glm::perspective (projectionFov, sceneWidth / sceneHeight, nearz, farz);
+	const glm::mat4 view
+	    = glm::lookAt (glm::vec3 (0.0f, 0.0f, eyeZ), glm::vec3 (0.0f), glm::vec3 (0.0f, 1.0f, 0.0f));
+	m_viewProjectionMatrix = projection * view;
+	m_eyePosition = glm::vec3 (0.0f, 0.0f, eyeZ);
     } else {
-	glm::vec3 origin = m_model.origin->value->getVec3 ();
-	origin.x -= sceneWidth / 2.0f;
-	origin.y = sceneHeight / 2.0f - origin.y;
-
-	const glm::vec3 angles = this->effectiveAngles ();
-	const glm::vec3 scale = m_model.scale->value->getVec3 ();
-
-	m_modelMatrix = glm::translate (glm::mat4 (1.0f), origin);
-	m_modelMatrix = glm::rotate (m_modelMatrix, -angles.z, glm::vec3 (0, 0, 1));
-	m_modelMatrix = glm::rotate (m_modelMatrix, angles.y, glm::vec3 (0, 1, 0));
-	m_modelMatrix = glm::rotate (m_modelMatrix, -angles.x, glm::vec3 (1, 0, 0));
-	m_modelMatrix = glm::scale (m_modelMatrix, scale);
-	m_modelMatrix = glm::scale (m_modelMatrix, glm::vec3 (1.0f, -1.0f, 1.0f));
-
-	if (m_model.perspective) {
-	    const float sceneFov = glm::radians (camera.getFov ());
-	    const float overrideFov = camera.getOverrideFov ();
-	    const float projectionFov = overrideFov > 0.0f ? glm::radians (overrideFov) : sceneFov;
-	    const float eyeZ = (sceneHeight * 0.5f) / std::tan (projectionFov * 0.5f);
-	    const float nearz = std::max (camera.getNearZ (), 1.0f);
-	    const float farz = std::max (camera.getFarZ (), eyeZ + 10.0f * sceneHeight);
-
-	    const glm::mat4 projection = glm::perspective (projectionFov, sceneWidth / sceneHeight, nearz, farz);
-	    const glm::mat4 view
-		= glm::lookAt (glm::vec3 (0.0f, 0.0f, eyeZ), glm::vec3 (0.0f), glm::vec3 (0.0f, 1.0f, 0.0f));
-	    m_viewProjectionMatrix = projection * view;
-	    m_eyePosition = glm::vec3 (0.0f, 0.0f, eyeZ);
-	} else {
-	    m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
-	    m_eyePosition = glm::vec3 (0.0f, 0.0f, 1000.0f);
-	}
+	m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
+	m_eyePosition = glm::vec3 (0.0f, 0.0f, 1000.0f);
     }
 
     m_mvpMatrix = m_viewProjectionMatrix * m_modelMatrix;

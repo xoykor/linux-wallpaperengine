@@ -18,7 +18,7 @@ cmake --build build --parallel 2
 packaging/appimage/build-appimage.sh \
   --build-dir build \
   --output-dir outputs \
-  --version v0.0.6
+  --version 0.0.16
 ```
 
 The script creates an AppDir, installs the engine and its CEF files there, strips CEF debug sections to keep the download smaller, and writes a SHA-256 file next to the AppImage. It does not install files into the host system.

@@ -22,6 +22,9 @@ This fork is maintained under the GitHub fork relationship so upstream history a
 
 The code is distributed under **GNU General Public License v3.0**; see [LICENSE](LICENSE).
 
+For the complete change inventory and upstream review notes, see
+[`docs/FORK_CHANGES.md`](docs/FORK_CHANGES.md).
+
 
 
 Bring **Wallpaper Engine**-style live wallpapers to Linux! This project allows you to run animated wallpapers from Steam’s Wallpaper Engine right on your desktop.

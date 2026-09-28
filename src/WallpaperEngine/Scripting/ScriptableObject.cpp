@@ -26,6 +26,11 @@ DynamicValue& ScriptableObject::getProperty (const std::string& name) {
     return it->second.value;
 }
 
+std::optional<ScriptableObject::AnimationLayerProperties>
+ScriptableObject::findAnimationLayer (const std::string&) const {
+    return std::nullopt;
+}
+
 const std::map<std::string, ScriptableObject::PropertyEntry>& ScriptableObject::getProperties () const {
     return this->m_properties;
 }

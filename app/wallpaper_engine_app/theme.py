@@ -80,7 +80,7 @@ window {
 .wallpaper-card {
   padding: 0;
   border-radius: 14px;
-  min-width: 244px;
+  min-width: 196px;
   min-height: 192px;
   border: 1px solid rgba(255,255,255,0.075);
   background: #15110f;
@@ -268,7 +268,7 @@ button.nav-item-active:hover {
 .library-tools searchentry { min-height: 38px; }
 .library-page { padding: 0; }
 flowboxchild.wallpaper-card {
-  min-width: 240px;
+  min-width: 196px;
   min-height: 0;
   padding: 0;
   border-radius: 14px;
@@ -429,29 +429,29 @@ window.compact-height .theme-popover { padding: 10px; }
 
 /* A dark, tinted glass surface. KWin supplies the actual backdrop blur. */
 window.glass-window {
-  background: rgba(12,10,16,0.90);
+  background: rgba(10,8,14,0.96);
 }
 window.glass-window .app-root {
   background: linear-gradient(122deg,
-    rgba(113,76,156,0.24) 0%,
-    rgba(25,20,36,0.14) 46%,
-    rgba(236,96,46,0.20) 100%);
+    rgba(92,61,126,0.32) 0%,
+    rgba(20,17,29,0.22) 46%,
+    rgba(148,61,39,0.28) 100%);
 }
 window.glass-window .app-sidebar {
   background: linear-gradient(180deg,
-    rgba(40,29,49,0.95) 0%,
-    rgba(25,20,32,0.93) 58%,
-    rgba(16,14,22,0.95) 100%);
+    rgba(34,25,43,0.97) 0%,
+    rgba(22,18,29,0.96) 58%,
+    rgba(14,12,19,0.97) 100%);
 }
 window.glass-window .workspace {
-  background: rgba(13,11,18,0.90);
+  background: rgba(11,9,15,0.95);
 }
 window.glass-window .sidebar-source,
 window.glass-window .panel,
 window.glass-window .inspector,
 window.glass-window .gallery-empty,
 window.glass-window .library-tools {
-  background: rgba(25,21,31,0.90);
+  background: rgba(22,19,28,0.94);
   border-color: rgba(225,211,255,0.13);
 }
 window.glass-window .status-strip {
@@ -465,7 +465,7 @@ window.glass-window .playlist-entry {
   border-color: rgba(225,211,255,0.12);
 }
 window.glass-window flowboxchild.wallpaper-card {
-  min-width: 240px;
+  min-width: 196px;
   background: rgba(20,17,24,0.97);
   border-color: rgba(225,211,255,0.12);
 }
@@ -475,7 +475,7 @@ window.glass-window flowboxchild.wallpaper-card-selected {
   background: rgba(26,21,31,0.98);
 }
 window.glass-window headerbar.topbar {
-  background: rgba(16,13,20,0.90);
+  background: rgba(14,11,18,0.95);
 }
 """
 
