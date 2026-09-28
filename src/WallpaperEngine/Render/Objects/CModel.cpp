@@ -81,9 +81,10 @@ void CModel::setup () {
     m_initialized = true;
 }
 
-bool CModel::parseMeshHeader (
-    const std::vector<char>& data, uint32_t& mdlvVersion, size_t& offset, uint32_t& submeshCount
-) const {
+bool CModel::loadMesh () {
+    const auto stream = this->getScene ().getScene ().project.assetLocator->read (m_model.modelFile);
+    const std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
+
     if (data.size () < 32 || std::memcmp (data.data (), "MDLV", 4) != 0) {
 	sLog.error ("Not an MDLV model: ", m_model.modelFile);
 	return false;
@@ -95,7 +96,7 @@ bool CModel::parseMeshHeader (
 	return false;
     }
 
-    mdlvVersion = 0;
+    uint32_t mdlvVersion = 0;
     if (magicEnd >= 8) {
 	for (size_t digit = 4; digit < 8; digit++) {
 	    const char ch = data[digit];
@@ -107,24 +108,20 @@ bool CModel::parseMeshHeader (
 	}
     }
 
-    offset = magicEnd + 1 + 2 * sizeof (uint32_t);
+    size_t offset = magicEnd + 1 + 2 * sizeof (uint32_t);
     if (offset + sizeof (uint32_t) > data.size ()) {
 	sLog.error ("Truncated MDLV header in ", m_model.modelFile);
 	return false;
     }
 
+    uint32_t submeshCount = 0;
     std::memcpy (&submeshCount, data.data () + offset, sizeof (submeshCount));
     offset += sizeof (submeshCount);
     if (submeshCount == 0 || submeshCount > 16) {
 	sLog.error ("Unexpected submesh count ", submeshCount, " in ", m_model.modelFile);
 	return false;
     }
-    return true;
-}
 
-bool CModel::parseSubmeshRecord (
-    const std::vector<char>& data, size_t& offset, uint32_t mdlvVersion, uint32_t index, ParsedSubmesh& parsed
-) const {
     const auto readU32 = [&data, &offset] (uint32_t& out) -> bool {
 	if (offset + sizeof (uint32_t) > data.size ()) {
 	    return false;
@@ -134,146 +131,121 @@ bool CModel::parseSubmeshRecord (
 	return true;
     };
 
-    if (offset >= data.size ()) {
-	sLog.error ("Truncated submesh record ", index, " in ", m_model.modelFile);
-	return false;
-    }
-
-    const auto* nameEnd = static_cast<const char*> (std::memchr (data.data () + offset, 0, data.size () - offset));
-    if (nameEnd == nullptr) {
-	sLog.error ("Unterminated submesh material name in ", m_model.modelFile);
-	return false;
-    }
-    offset = static_cast<size_t> (nameEnd - data.data ()) + 1;
-
-    if (offset + sizeof (uint32_t) + 6 * sizeof (float) > data.size ()) {
-	sLog.error ("Truncated submesh metadata in ", m_model.modelFile);
-	return false;
-    }
-    offset += sizeof (uint32_t) + 6 * sizeof (float);
-
-    if (!readU32 (parsed.vertexTag)) {
-	sLog.error ("Bad vertex tag in submesh ", index, " of ", m_model.modelFile);
-	return false;
-    }
-
-    if (parsed.vertexTag == 0x0180000fu) {
-	parsed.vertexStride = 80;
-	parsed.uvOffset = 72;
-    } else if (parsed.vertexTag == 0u && mdlvVersion != 0 && mdlvVersion < 16) {
-	parsed.vertexStride = 52;
-	parsed.uvOffset = 44;
-    } else if (parsed.vertexTag != 15u) {
-	sLog.error ("Unsupported MDLV vertex layout tag ", parsed.vertexTag, " in ", m_model.modelFile);
-	return false;
-    }
-
-    if (!readU32 (parsed.vertexBytes) || parsed.vertexBytes == 0 || parsed.vertexBytes % parsed.vertexStride != 0
-	|| offset + parsed.vertexBytes > data.size ()) {
-	sLog.error ("Bad vertex block in submesh ", index, " of ", m_model.modelFile);
-	return false;
-    }
-    parsed.verticesOffset = offset;
-    offset += parsed.vertexBytes;
-
-    if (!readU32 (parsed.indexBytes) || parsed.indexBytes == 0
-	|| parsed.indexBytes % (sizeof (uint16_t) * 3) != 0 || offset + parsed.indexBytes > data.size ()) {
-	sLog.error ("Bad index block in submesh ", index, " of ", m_model.modelFile);
-	return false;
-    }
-    parsed.indicesOffset = offset;
-    offset += parsed.indexBytes;
-
-    if (mdlvVersion >= 23) {
-	constexpr size_t trailerSize = 6;
-	if (offset + trailerSize > data.size ()) {
-	    sLog.error ("Truncated MDLV0023 submesh trailer in ", m_model.modelFile);
-	    return false;
-	}
-	offset += trailerSize;
-    }
-
-    parsed.indexCount = static_cast<GLsizei> (parsed.indexBytes / sizeof (uint16_t));
-    return true;
-}
-
-bool CModel::validateSubmeshIndices (
-    const std::vector<char>& data, const ParsedSubmesh& parsed, uint32_t index
-) const {
-    const size_t vertexCount = parsed.vertexBytes / parsed.vertexStride;
-    const auto* indices = reinterpret_cast<const uint16_t*> (data.data () + parsed.indicesOffset);
-    for (GLsizei i = 0; i < parsed.indexCount; i++) {
-	if (indices[i] >= vertexCount) {
-	    sLog.error ("Mesh index out of range in submesh ", index, " of ", m_model.modelFile);
-	    return false;
-	}
-    }
-    return true;
-}
-
-void CModel::uploadSubmesh (const std::vector<char>& data, const ParsedSubmesh& parsed, uint32_t index) {
-    Submesh submesh {};
-    submesh.indexCount = parsed.indexCount;
-    submesh.stride = static_cast<GLsizei> (parsed.vertexStride);
-    submesh.uvOffset = parsed.uvOffset;
-    submesh.skinned = parsed.vertexTag == 0x0180000fu;
-    if (submesh.skinned) {
-	submesh.bindVertices.assign (
-	    data.data () + parsed.verticesOffset, data.data () + parsed.verticesOffset + parsed.vertexBytes
-	);
-    }
-
-    if (index == 0) {
-	submesh.material = m_model.material.get ();
-    } else if (index - 1 < m_model.extraMaterials.size ()) {
-	submesh.material = m_model.extraMaterials[index - 1].get ();
-    }
-
-    if (submesh.material == nullptr || submesh.material->passes.empty ()) {
-	sLog.error ("Submesh ", index, " of ", m_model.modelFile, " has no material pass");
-	return;
-    }
-
-    glGenVertexArrays (1, &submesh.vao);
-    glGenBuffers (1, &submesh.vbo);
-    glGenBuffers (1, &submesh.ebo);
-
-    glBindVertexArray (submesh.vao);
-    glBindBuffer (GL_ARRAY_BUFFER, submesh.vbo);
-    glBufferData (
-	GL_ARRAY_BUFFER, parsed.vertexBytes, data.data () + parsed.verticesOffset, GL_STATIC_DRAW
-    );
-    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, submesh.ebo);
-    glBufferData (
-	GL_ELEMENT_ARRAY_BUFFER, parsed.indexBytes, data.data () + parsed.indicesOffset, GL_STATIC_DRAW
-    );
-
-    m_submeshes.push_back (std::move (submesh));
-}
-
-bool CModel::loadMesh () {
-    const auto stream = this->getScene ().getScene ().project.assetLocator->read (m_model.modelFile);
-    const std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
-
-    uint32_t mdlvVersion = 0;
-    uint32_t submeshCount = 0;
-    size_t offset = 0;
-    if (!this->parseMeshHeader (data, mdlvVersion, offset, submeshCount)) {
-	return false;
-    }
-
     GLint previousVAO = 0;
     glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &previousVAO);
 
     for (uint32_t index = 0; index < submeshCount; index++) {
-	ParsedSubmesh parsed;
-	if (!this->parseSubmeshRecord (data, offset, mdlvVersion, index, parsed)) {
+	if (offset >= data.size ()) {
+	    sLog.error ("Truncated submesh record ", index, " in ", m_model.modelFile);
 	    break;
 	}
-	if (!this->validateSubmeshIndices (data, parsed, index)) {
+
+	const auto* nameEnd = static_cast<const char*> (std::memchr (data.data () + offset, 0, data.size () - offset));
+	if (nameEnd == nullptr) {
+	    sLog.error ("Unterminated submesh material name in ", m_model.modelFile);
+	    break;
+	}
+	offset = static_cast<size_t> (nameEnd - data.data ()) + 1;
+
+	if (offset + sizeof (uint32_t) + 6 * sizeof (float) > data.size ()) {
+	    sLog.error ("Truncated submesh metadata in ", m_model.modelFile);
+	    break;
+	}
+	offset += sizeof (uint32_t) + 6 * sizeof (float);
+
+	uint32_t vertexTag = 0;
+	if (!readU32 (vertexTag)) {
+	    sLog.error ("Bad vertex tag in submesh ", index, " of ", m_model.modelFile);
+	    break;
+	}
+
+	size_t vertexStride = 48;
+	GLuint uvOffset = 40;
+	if (vertexTag == 0x0180000fu) {
+	    vertexStride = 80;
+	    uvOffset = 72;
+	} else if (vertexTag == 0u && mdlvVersion != 0 && mdlvVersion < 16) {
+	    vertexStride = 52;
+	    uvOffset = 44;
+	} else if (vertexTag != 15u) {
+	    sLog.error ("Unsupported MDLV vertex layout tag ", vertexTag, " in ", m_model.modelFile);
+	    break;
+	}
+
+	uint32_t vertexBytes = 0;
+	if (!readU32 (vertexBytes) || vertexBytes == 0 || vertexBytes % vertexStride != 0
+	    || offset + vertexBytes > data.size ()) {
+	    sLog.error ("Bad vertex block in submesh ", index, " of ", m_model.modelFile);
+	    break;
+	}
+	const size_t verticesOffset = offset;
+	offset += vertexBytes;
+
+	uint32_t indexBytes = 0;
+	if (!readU32 (indexBytes) || indexBytes == 0 || indexBytes % (sizeof (uint16_t) * 3) != 0
+	    || offset + indexBytes > data.size ()) {
+	    sLog.error ("Bad index block in submesh ", index, " of ", m_model.modelFile);
+	    break;
+	}
+	const size_t indicesOffset = offset;
+	offset += indexBytes;
+	// MDLV0023 stores six reserved bytes after each index block. They are part
+	// of the submesh record and must be skipped before reading the next one.
+	if (mdlvVersion >= 23) {
+	    constexpr size_t trailerSize = 6;
+	    if (offset + trailerSize > data.size ()) {
+		sLog.error ("Truncated MDLV0023 submesh trailer in ", m_model.modelFile);
+		break;
+	    }
+	    offset += trailerSize;
+	}
+
+	const size_t vertexCount = vertexBytes / vertexStride;
+	const auto indexCount = static_cast<GLsizei> (indexBytes / sizeof (uint16_t));
+	const auto* indices = reinterpret_cast<const uint16_t*> (data.data () + indicesOffset);
+	bool valid = true;
+	for (GLsizei i = 0; i < indexCount; i++) {
+	    if (indices[i] >= vertexCount) {
+		valid = false;
+		break;
+	    }
+	}
+	if (!valid) {
+	    sLog.error ("Mesh index out of range in submesh ", index, " of ", m_model.modelFile);
 	    continue;
 	}
-	this->uploadSubmesh (data, parsed, index);
+
+	Submesh submesh {};
+	submesh.indexCount = indexCount;
+	submesh.stride = static_cast<GLsizei> (vertexStride);
+	submesh.uvOffset = uvOffset;
+	submesh.skinned = vertexTag == 0x0180000fu;
+	if (submesh.skinned) {
+	    submesh.bindVertices.assign (data.data () + verticesOffset, data.data () + verticesOffset + vertexBytes);
+	}
+
+	if (index == 0) {
+	    submesh.material = m_model.material.get ();
+	} else if (index - 1 < m_model.extraMaterials.size ()) {
+	    submesh.material = m_model.extraMaterials[index - 1].get ();
+	}
+
+	if (submesh.material == nullptr || submesh.material->passes.empty ()) {
+	    sLog.error ("Submesh ", index, " of ", m_model.modelFile, " has no material pass");
+	    continue;
+	}
+
+	glGenVertexArrays (1, &submesh.vao);
+	glGenBuffers (1, &submesh.vbo);
+	glGenBuffers (1, &submesh.ebo);
+
+	glBindVertexArray (submesh.vao);
+	glBindBuffer (GL_ARRAY_BUFFER, submesh.vbo);
+	glBufferData (GL_ARRAY_BUFFER, vertexBytes, data.data () + verticesOffset, GL_STATIC_DRAW);
+	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, submesh.ebo);
+	glBufferData (GL_ELEMENT_ARRAY_BUFFER, indexBytes, data.data () + indicesOffset, GL_STATIC_DRAW);
+
+	m_submeshes.push_back (std::move (submesh));
     }
 
     glBindVertexArray (static_cast<GLuint> (previousVAO));
