@@ -39,6 +39,110 @@ float parseFiniteFloat (const std::string& value, const char* option) {
 	sLog.exception ("Numeric value out of range for ", option, ": ", value);
     }
 }
+
+std::optional<std::string> catalogPreviewPath (
+    const std::filesystem::path& projectDirectory, const std::filesystem::path& relative
+) {
+    if (relative.empty () || relative.is_absolute ()) {
+	return std::nullopt;
+    }
+
+    const auto normalized = (projectDirectory / relative).lexically_normal ();
+    const auto local = normalized.lexically_relative (projectDirectory);
+    if (local.empty () || *local.begin () == "..") {
+	return std::nullopt;
+    }
+
+    std::error_code fileError;
+    if (!std::filesystem::is_regular_file (normalized, fileError) || fileError) {
+	return std::nullopt;
+    }
+    return normalized.string ();
+}
+
+JSON catalogTags (const JSON& project) {
+    JSON result = JSON::array ();
+    const auto tags = project.optional ("tags");
+    if (!tags.has_value ()) {
+	return result;
+    }
+    if (tags->is_array ()) {
+	return *tags;
+    }
+    if (!tags->is_string ()) {
+	return result;
+    }
+
+    std::stringstream values (tags->get<std::string> ());
+    std::string value;
+    while (std::getline (values, value, ',')) {
+	const auto first = value.find_first_not_of (" \t\r\n");
+	const auto last = value.find_last_not_of (" \t\r\n");
+	if (first != std::string::npos) {
+	    result.push_back (value.substr (first, last - first + 1));
+	}
+    }
+    return result;
+}
+
+JSON catalogProperties (const JSON& project) {
+    const auto general = project.optional ("general");
+    if (!general.has_value ()) {
+	return JSON::object ();
+    }
+    const auto properties = general->optional ("properties");
+    return properties.has_value () && properties->is_object () ? *properties : JSON::object ();
+}
+
+std::optional<JSON> readCatalogItem (
+    const std::filesystem::path& root, const std::filesystem::path& projectDirectory, const std::string& wallpaperId
+) {
+    std::ifstream projectFile (projectDirectory / "project.json");
+    if (!projectFile.is_open ()) {
+	return std::nullopt;
+    }
+
+    try {
+	const JSON project = JSON::parse (projectFile);
+	std::string type = project.optional<std::string> ("type", "");
+	std::transform (type.begin (), type.end (), type.begin (), [] (unsigned char value) {
+	    return static_cast<char> (std::tolower (value));
+	});
+	if (type != "scene" && type != "video" && type != "web") {
+	    return std::nullopt;
+	}
+
+	const auto title = project.optional<std::string> ("title", wallpaperId);
+	const auto steamapps = root.parent_path ().parent_path ().parent_path ();
+	JSON item = {
+	    { "title", title.empty () ? wallpaperId : title },
+	    { "type", type },
+	    { "path", projectDirectory.string () },
+	    { "assets", (steamapps / "common/wallpaper_engine/assets").string () },
+	    { "preview", nullptr },
+	    { "tags", catalogTags (project) },
+	    { "properties", catalogProperties (project) },
+	};
+
+	if (const auto configured = project.optional<std::string> ("preview"); configured.has_value ()) {
+	    if (const auto preview = catalogPreviewPath (projectDirectory, *configured); preview.has_value ()) {
+		item["preview"] = *preview;
+	    }
+	}
+	if (item["preview"].is_null ()) {
+	    for (const auto* fallback : { "preview.jpg", "preview.jpeg", "preview.png", "preview.gif" }) {
+		if (const auto preview = catalogPreviewPath (projectDirectory, fallback); preview.has_value ()) {
+		    item["preview"] = *preview;
+		    break;
+		}
+	    }
+	}
+	return item;
+    } catch (const std::exception&) {
+	// A malformed Workshop item must not hide the rest of the installed catalog.
+	return std::nullopt;
+    }
+}
 }
 
 std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::string& raw) const {
@@ -266,7 +370,6 @@ void ApplicationContext::printCatalogJson () const {
 
     for (const auto& root : Steam::FileSystem::workshopDirectories (WORKSHOP_APP_ID)) {
 	std::error_code iteratorError;
-
 	for (std::filesystem::directory_iterator it (root, iteratorError), end; !iteratorError && it != end;
 	     it.increment (iteratorError)) {
 	    std::error_code entryError;
@@ -276,102 +379,16 @@ void ApplicationContext::printCatalogJson () const {
 
 	    const auto projectDirectory = it->path ();
 	    const auto wallpaperId = projectDirectory.filename ().string ();
-	    if (wallpaperId.empty ()
-		|| !std::all_of (wallpaperId.begin (), wallpaperId.end (), [] (unsigned char value) {
+	    const bool validId = !wallpaperId.empty ()
+		&& std::all_of (wallpaperId.begin (), wallpaperId.end (), [] (unsigned char value) {
 		       return std::isdigit (value) != 0;
-		   })
-		|| catalog.contains (wallpaperId)) {
+		   });
+	    if (!validId || catalog.contains (wallpaperId)) {
 		continue;
 	    }
 
-	    std::ifstream projectFile (projectDirectory / "project.json");
-	    if (!projectFile.is_open ()) {
-		continue;
-	    }
-
-	    try {
-		const JSON project = JSON::parse (projectFile);
-		std::string type = project.optional<std::string> ("type", "");
-		std::transform (type.begin (), type.end (), type.begin (), [] (unsigned char value) {
-		    return static_cast<char> (std::tolower (value));
-		});
-		if (type != "scene" && type != "video" && type != "web") {
-		    continue;
-		}
-
-		const auto title = project.optional<std::string> ("title", wallpaperId);
-		const auto steamapps = root.parent_path ().parent_path ().parent_path ();
-
-		JSON item = {
-		    { "title", title.empty () ? wallpaperId : title },
-		    { "type", type },
-		    { "path", projectDirectory.string () },
-		    { "assets", (steamapps / "common/wallpaper_engine/assets").string () },
-		    { "preview", nullptr },
-		    { "tags", JSON::array () },
-		    { "properties", JSON::object () },
-		};
-
-		auto validPreview = [&projectDirectory] (const std::filesystem::path& relative) -> std::optional<std::string> {
-		    if (relative.empty () || relative.is_absolute ()) {
-			return std::nullopt;
-		    }
-
-		    const auto normalized = (projectDirectory / relative).lexically_normal ();
-		    const auto local = normalized.lexically_relative (projectDirectory);
-		    if (local.empty () || *local.begin () == "..") {
-			return std::nullopt;
-		    }
-
-		    std::error_code fileError;
-		    if (!std::filesystem::is_regular_file (normalized, fileError) || fileError) {
-			return std::nullopt;
-		    }
-		    return normalized.string ();
-		};
-
-		if (const auto configured = project.optional<std::string> ("preview"); configured.has_value ()) {
-		    if (const auto preview = validPreview (*configured); preview.has_value ()) {
-			item["preview"] = *preview;
-		    }
-		}
-
-		if (item["preview"].is_null ()) {
-		    for (const auto* fallback : { "preview.jpg", "preview.jpeg", "preview.png", "preview.gif" }) {
-			if (const auto preview = validPreview (fallback); preview.has_value ()) {
-			    item["preview"] = *preview;
-			    break;
-			}
-		    }
-		}
-
-		if (const auto tags = project.optional ("tags"); tags.has_value ()) {
-		    if (tags->is_array ()) {
-			item["tags"] = *tags;
-		    } else if (tags->is_string ()) {
-			std::stringstream values (tags->get<std::string> ());
-			std::string value;
-			while (std::getline (values, value, ',')) {
-			    const auto first = value.find_first_not_of (" \t\r\n");
-			    const auto last = value.find_last_not_of (" \t\r\n");
-			    if (first != std::string::npos) {
-				item["tags"].push_back (value.substr (first, last - first + 1));
-			    }
-			}
-		    }
-		}
-
-		if (const auto general = project.optional ("general"); general.has_value ()) {
-		    if (const auto properties = general->optional ("properties"); properties.has_value ()
-			&& properties->is_object ()) {
-			item["properties"] = *properties;
-		    }
-		}
-
-		catalog[wallpaperId] = std::move (item);
-	    } catch (const std::exception&) {
-		// A malformed Workshop item must not hide the rest of the installed catalog.
-		continue;
+	    if (auto item = readCatalogItem (root, projectDirectory, wallpaperId); item.has_value ()) {
+		catalog[wallpaperId] = std::move (*item);
 	    }
 	}
     }
