@@ -569,6 +569,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.h
         src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp
         src/WallpaperEngine/Testing/Cases/ObjectParser.cpp
+        src/WallpaperEngine/Testing/Cases/ParticleEmitterAlgorithms.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp)
 endif()
 
