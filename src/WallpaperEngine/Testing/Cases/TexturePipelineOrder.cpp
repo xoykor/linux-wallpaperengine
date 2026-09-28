@@ -51,12 +51,10 @@ TEST_CASE ("Texture pipeline preserves the pre-refactor precedence order") {
 	}
     );
 
-    const std::vector<std::string> expectedStages {
-	"vertex", "fragment", "pass", "pass-user", "override", "override-user", "bind"
-    };
-    const std::vector<std::string> expectedChain {
-	"bind", "override-user", "override", "pass-user", "pass", "fragment", "vertex"
-    };
+    const std::vector<std::string> expectedStages
+	= { "vertex", "fragment", "pass", "pass-user", "override", "override-user", "bind" };
+    const std::vector<std::string> expectedChain
+	= { "bind", "override-user", "override", "pass-user", "pass", "fragment", "vertex" };
 
     CHECK (stages == expectedStages);
     CHECK (chains.at (0) == expectedChain);
@@ -70,14 +68,12 @@ TEST_CASE ("Texture pipeline does not disturb independent texture slots") {
 	    chains[0] = { "vertex-0" };
 	    chains[1] = { "vertex-1" };
 	},
-	[&] { prepend (chains, 1, "fragment-1"); },
-	[&] { prepend (chains, 0, "pass-0"); },
-	[&] { },
-	[&] { prepend (chains, 1, "override-1"); },
-	[&] { },
-	[&] { prepend (chains, 0, "bind-0"); }
+	[&] { prepend (chains, 1, "fragment-1"); }, [&] { prepend (chains, 0, "pass-0"); }, [&] { },
+	[&] { prepend (chains, 1, "override-1"); }, [&] { }, [&] { prepend (chains, 0, "bind-0"); }
     );
 
-    CHECK (chains.at (0) == std::vector<std::string> { "bind-0", "pass-0", "vertex-0" });
-    CHECK (chains.at (1) == std::vector<std::string> { "override-1", "fragment-1", "vertex-1" });
+    const std::vector<std::string> expectedSlot0 = { "bind-0", "pass-0", "vertex-0" };
+    const std::vector<std::string> expectedSlot1 = { "override-1", "fragment-1", "vertex-1" };
+    CHECK (chains.at (0) == expectedSlot0);
+    CHECK (chains.at (1) == expectedSlot1);
 }
