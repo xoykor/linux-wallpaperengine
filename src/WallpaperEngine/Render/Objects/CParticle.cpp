@@ -390,8 +390,7 @@ CParticle::resolveEmitterSpawnOrigin (const glm::vec3& transformedEmitterOrigin,
     return spawnOrigin;
 }
 
-uint32_t
-CParticle::accumulateRateEmission (float dt, float rate, bool limitOnePerFrame, float& emissionTimer) {
+uint32_t CParticle::accumulateRateEmission (float dt, float rate, bool limitOnePerFrame, float& emissionTimer) {
     emissionTimer += dt * rate;
     uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
     emissionTimer -= static_cast<float> (toEmit);
@@ -532,9 +531,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 		// Emitter does not set velocity - initializers handle that
 		p.velocity = glm::vec3 (0.0f);
-		initializeEmittedParticle (
-		    p, 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ()
-		);
+		initializeEmittedParticle (p, 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ());
 
 		count++;
 	    }
