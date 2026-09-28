@@ -589,16 +589,26 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             return True
         return False
 
-    def _responsive_geometry(self) -> tuple[int, int, str, int, tuple[bool, bool]]:
+    def _update_responsive(self) -> bool:
         width, height = self.get_width(), self.get_height()
         if width <= 0:
             width = self._initial_size[0]
         if height <= 0:
             height = self._initial_size[1]
         mode = "small" if width < 1100 else "compact" if width < 1200 else "wide"
-        return width, height, mode, self.library_panes.get_width(), (height < 700, height < 980)
-
-    def _apply_height_layout(self, low_height: bool) -> None:
+        pane_width = self.library_panes.get_width()
+        height_band = (height < 700, height < 980)
+        size_changed = (
+            self._last_pane_width is None
+            or abs(pane_width - self._last_pane_width) >= 24
+        )
+        if mode == self._compact_mode and self._last_height_band == height_band and not size_changed:
+            return True
+        previous_mode = self._compact_mode
+        self._compact_mode = mode
+        self._last_height_band = height_band
+        self._last_pane_width = pane_width
+        low_height = height_band[0]
         if low_height:
             self.add_css_class("compact-height")
         else:
@@ -607,8 +617,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.library_page.set_margin_top(6 if low_height else 18)
         self.library_page.set_margin_bottom(6 if low_height else 18)
         self.selection_hint.set_visible(not low_height)
-
-    def _apply_sidebar_layout(self, mode: str) -> tuple[bool, int]:
         collapsed = mode != "wide"
         if collapsed:
             self.sidebar.add_css_class("app-sidebar-collapsed")
@@ -630,16 +638,14 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.hero_art.set_visible(mode == "wide")
         inspector_width = 275 if mode == "small" else 305 if collapsed else 350
         self.detail_shell.set_size_request(inspector_width, -1)
-        return collapsed, inspector_width
-
-    def _apply_selection_layout(self, mode: str, pane_width: int, inspector_width: int) -> None:
+        if pane_width > 0:
+            self.library_panes.set_position(max(220, pane_width - inspector_width - 12))
         selection_compact = mode != "wide" or pane_width - inspector_width < 780
         self._selection_compact = selection_compact
-        count = len(self._selected_ids)
         self.selection_count.set_text(
-            str(count) if selection_compact else tr(
-                "{count} selecionado" if count == 1 else "{count} selecionados",
-                count=count,
+            str(len(self._selected_ids)) if selection_compact else tr(
+                "{count} selecionado" if len(self._selected_ids) == 1 else "{count} selecionados",
+                count=len(self._selected_ids),
             )
         )
         self.bulk_playlist_label.set_visible(not selection_compact)
@@ -649,25 +655,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.selection_bar.add_css_class("selection-bar-compact")
         else:
             self.selection_bar.remove_css_class("selection-bar-compact")
-
-    def _update_responsive(self) -> bool:
-        _width, _height, mode, pane_width, height_band = self._responsive_geometry()
-        size_changed = (
-            self._last_pane_width is None
-            or abs(pane_width - self._last_pane_width) >= 24
-        )
-        if mode == self._compact_mode and self._last_height_band == height_band and not size_changed:
-            return True
-
-        previous_mode = self._compact_mode
-        self._compact_mode = mode
-        self._last_height_band = height_band
-        self._last_pane_width = pane_width
-        self._apply_height_layout(height_band[0])
-        _collapsed, inspector_width = self._apply_sidebar_layout(mode)
-        if pane_width > 0:
-            self.library_panes.set_position(max(220, pane_width - inspector_width - 12))
-        self._apply_selection_layout(mode, pane_width, inspector_width)
         if previous_mode != mode and self.selected_id:
             self._show_details(self.selected_id)
         return True
@@ -1072,35 +1059,34 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.playlist_name = row.playlist_name if row is not None else None
         self._show_playlist_detail()
 
-    def _show_empty_playlist_detail(self) -> None:
-        self.playlist_detail.append(_label(tr("COMECE POR AQUI"), css="page-kicker"))
-        self.playlist_detail.append(
-            _label(tr("Uma trilha para cada clima."), css="detail-title", wrap=True)
-        )
-        self.playlist_detail.append(_label(
-            tr(
-                "Crie uma playlist e escolha vários wallpapers instalados de uma vez. "
-                "Você decide a ordem ou deixa a reprodução aleatória."
-            ),
-            css="subtle", wrap=True,
-        ))
-        create = _icon_button(tr("Criar minha primeira playlist"), "list-add-symbolic")
-        create.add_css_class("primary-action")
-        create.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Criar playlist"), None))
-        self.playlist_detail.append(create)
+    def _show_playlist_detail(self) -> None:
+        if not hasattr(self, "playlist_detail"):
+            return
+        _clear(self.playlist_detail)
+        playlists = self.config.get("playlists") or {}
+        name = self.playlist_name
+        if name is None or name not in playlists:
+            self.playlist_detail.append(_label(tr("COMECE POR AQUI"), css="page-kicker"))
+            self.playlist_detail.append(_label(tr("Uma trilha para cada clima."), css="detail-title", wrap=True))
+            self.playlist_detail.append(_label(
+                tr("Crie uma playlist e escolha vários wallpapers instalados de uma vez. Você decide a ordem ou deixa a reprodução aleatória."),
+                css="subtle", wrap=True,
+            ))
+            create = _icon_button(tr("Criar minha primeira playlist"), "list-add-symbolic")
+            create.add_css_class("primary-action")
+            create.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Criar playlist"), None))
+            self.playlist_detail.append(create)
+            return
 
-    def _append_playlist_editor_controls(self, name: str, identifiers: list[str]) -> None:
         self.playlist_detail.append(_label(tr("EDITOR DE PLAYLIST"), css="page-kicker"))
         heading = _box(spacing=8)
         label = _label(name, css="detail-title")
         label.set_hexpand(True)
         heading.append(label)
-
         rename = Gtk.Button(label=tr("Renomear"))
         rename.add_css_class("compact-button")
         rename.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Renomear playlist"), name))
         heading.append(rename)
-
         delete = Gtk.Button(label=tr("Excluir"))
         delete.add_css_class("danger-action")
         delete.add_css_class("compact-button")
@@ -1113,15 +1099,11 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             "Selecionada para a rotação" if active and self.config.get("rotation_enabled")
             else "Selecionada, com rotação pausada" if active else "Pronta para ativar"
         )
-        self.playlist_detail.append(_label(
-            tr("{count} itens · {state}", count=len(identifiers), state=tr(playlist_state)),
-            css="subtle",
-        ))
-
-        activation = Gtk.Button(
-            label=tr("Voltar à biblioteca na rotação" if active else "Ativar e iniciar rotação")
-        )
-        activation.set_sensitive(active or any(item_id in self.catalog for item_id in identifiers))
+        self.playlist_detail.append(_label(tr(
+            "{count} itens · {state}", count=len(playlists[name]), state=tr(playlist_state)
+        ), css="subtle"))
+        activation = Gtk.Button(label=tr("Voltar à biblioteca na rotação" if active else "Ativar e iniciar rotação"))
+        activation.set_sensitive(active or any(item_id in self.catalog for item_id in playlists[name]))
         if not active:
             activation.add_css_class("suggested-action")
         activation.connect(
@@ -1132,87 +1114,53 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         )
         self.playlist_detail.append(activation)
         self.playlist_detail.append(_label(
-            tr(
-                "A ordem abaixo vale quando a opção aleatória está desligada. "
-                "Itens salvos que não estão instalados serão ignorados até reaparecerem na biblioteca."
-            ),
+            tr("A ordem abaixo vale quando a opção aleatória está desligada. Itens salvos que não estão instalados serão ignorados até reaparecerem na biblioteca."),
             css="subtle", wrap=True,
         ))
 
         add_button = _icon_button(tr("Adicionar wallpapers"), "list-add-symbolic")
         add_button.add_css_class("primary-action")
-        add_button.set_sensitive(any(item_id not in identifiers for item_id in self.catalog))
+        add_button.set_sensitive(any(item_id not in playlists[name] for item_id in self.catalog))
         add_button.connect("clicked", lambda *_: self._playlist_add_dialog(name))
         self.playlist_detail.append(add_button)
 
-        if self.selected_id and self.selected_id not in identifiers:
+        if self.selected_id and self.selected_id not in playlists[name]:
             selected_title = self.catalog.get(self.selected_id, {}).get("title", self.selected_id)
-            add_selected = Gtk.Button(
-                label=tr("Adicionar selecionado: {title}", title=selected_title)
-            )
+            add_selected = Gtk.Button(label=tr("Adicionar selecionado: {title}", title=selected_title))
             add_selected.connect("clicked", lambda *_: self._playlist_add_id(name, self.selected_id))
             self.playlist_detail.append(add_selected)
 
-    def _append_playlist_order(self, name: str, identifiers: list[str]) -> None:
         self.playlist_detail.append(_label(tr("ORDEM DE REPRODUÇÃO"), css="page-kicker"))
-        if not identifiers:
+        if not playlists[name]:
             self.playlist_detail.append(_label(
                 tr("Esta playlist ainda está vazia. Adicione wallpapers instalados para começar."),
                 css="empty-state", wrap=True,
             ))
-
-        for position, wallpaper_id in enumerate(identifiers):
+        for position, wallpaper_id in enumerate(playlists[name]):
             item = self.catalog.get(wallpaper_id)
             title = item.get("title", wallpaper_id) if item else wallpaper_id
             if not item:
                 title = tr("{title} · não instalado", title=title)
-
             row = _box(spacing=7)
             row.add_css_class("settings-row")
             row.append(_preview(item.get("preview") if item else None, 72, 45))
             caption = _label(f"{position + 1}. {title}", wrap=True)
             caption.set_hexpand(True)
             row.append(caption)
-
             up = Gtk.Button(label="↑")
             up.set_sensitive(position > 0)
             up.set_tooltip_text(tr("Mover para cima"))
-            up.connect(
-                "clicked",
-                lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, -1),
-            )
+            up.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, -1))
             row.append(up)
-
             down = Gtk.Button(label="↓")
-            down.set_sensitive(position < len(identifiers) - 1)
+            down.set_sensitive(position < len(playlists[name]) - 1)
             down.set_tooltip_text(tr("Mover para baixo"))
-            down.connect(
-                "clicked",
-                lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, 1),
-            )
+            down.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, 1))
             row.append(down)
-
             remove = Gtk.Button(label=tr("Remover"))
-            remove.connect(
-                "clicked",
-                lambda _button, item_id=wallpaper_id: self._playlist_remove(name, item_id),
-            )
+            remove.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_remove(name, item_id))
             row.append(remove)
             self.playlist_detail.append(row)
-
-    def _show_playlist_detail(self) -> None:
-        if not hasattr(self, "playlist_detail"):
-            return
-        _clear(self.playlist_detail)
-        playlists = self.config.get("playlists") or {}
-        name = self.playlist_name
-        if name is None or name not in playlists:
-            self._show_empty_playlist_detail()
-            return
-
-        identifiers = playlists[name]
-        self._append_playlist_editor_controls(name, identifiers)
-        self._append_playlist_order(name, identifiers)
 
     def _playlist_name_dialog(self, title: str, previous: str | None,
                               initial_ids: list[str] | None = None) -> None:
@@ -2173,7 +2121,15 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         self._background(lambda: ipc.request("status"), done)
 
-    def _apply_status_config(self, status: dict, accept_config: bool) -> bool:
+    def _apply_status(self, status: dict, *, accept_config: bool = True) -> None:
+        old_current = self.status.get("current_id")
+        old_screens = self.status.get("screens")
+        old_assignments = self.config.get("screen_assignments")
+        old_favorites = self.config.get("favorites")
+        old_playlists = self.config.get("playlists")
+        old_active_playlist = self.config.get("active_playlist")
+        self.status = status
+        self.status_strip.remove_css_class("error")
         configuration_changed = False
         if accept_config:
             updated_config = dict(status.get("config") or self.config)
@@ -2183,12 +2139,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             if self.config.get("language", "auto") != self._ui_language:
                 set_language(self.config.get("language", "auto"))
                 self._rebuild_localized_ui()
-                return False
+                return
         if configuration_changed or self._last_applied_config != self.config:
             self._apply_config()
-        return True
-
-    def _update_runtime_status_controls(self, status: dict) -> None:
         running = bool(status.get("renderer_running"))
         self.status_dot.set_text("●" if running else "○")
         current_id = status.get("current_id")
@@ -2202,7 +2155,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.status_label.set_text(tr("Iniciando wallpaper…"))
         else:
             self.status_label.set_text(tr("Serviço ativo · wallpaper parado"))
-
         self.power_button.set_label(tr("Parar" if status.get("running") else "Iniciar"))
         screens = status.get("screens") or []
         assignments = self.config.get("screen_assignments", {})
@@ -2210,56 +2162,20 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.next_button.set_sensitive(bool(status.get("running")) and has_rotating_screen)
         self._update_countdown()
         self._refresh_hero()
-
-    def _refresh_changed_status_views(
-        self,
-        old_current: object,
-        old_screens: object,
-        old_assignments: object,
-        old_favorites: object,
-        old_playlists: object,
-        old_active_playlist: object,
-    ) -> None:
-        card_state_changed = (
-            self.status.get("current_id") != old_current
-            or self.status.get("screens") != old_screens
+        if (
+            current_id != old_current
+            or status.get("screens") != old_screens
             or self.config.get("screen_assignments") != old_assignments
             or self.config.get("favorites") != old_favorites
-        )
-        if card_state_changed:
+        ):
             self._refresh_card_indicators()
             self._show_details(self.selected_id)
-
-        playlist_state_changed = (
+        if (
             self.config.get("playlists") != old_playlists
             or self.config.get("active_playlist") != old_active_playlist
-        )
-        if playlist_state_changed:
+        ):
             self._refresh_playlists()
             self._show_details(self.selected_id)
-
-    def _apply_status(self, status: dict, *, accept_config: bool = True) -> None:
-        old_current = self.status.get("current_id")
-        old_screens = self.status.get("screens")
-        old_assignments = self.config.get("screen_assignments")
-        old_favorites = self.config.get("favorites")
-        old_playlists = self.config.get("playlists")
-        old_active_playlist = self.config.get("active_playlist")
-
-        self.status = status
-        self.status_strip.remove_css_class("error")
-        if not self._apply_status_config(status, accept_config):
-            return
-
-        self._update_runtime_status_controls(status)
-        self._refresh_changed_status_views(
-            old_current,
-            old_screens,
-            old_assignments,
-            old_favorites,
-            old_playlists,
-            old_active_playlist,
-        )
 
     def _update_countdown(self) -> None:
         deadline = self.status.get("next_change_at")
