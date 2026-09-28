@@ -23,8 +23,7 @@ uint32_t referenceAccumulateRateEmission (float dt, float rate, bool limitOnePer
     return toEmit;
 }
 
-glm::vec3
-referenceBoxOffset (const ParticleEmitter& emitter, const glm::vec3& directions, std::mt19937& rng) {
+glm::vec3 referenceBoxOffset (const ParticleEmitter& emitter, const glm::vec3& directions, std::mt19937& rng) {
     glm::vec3 randomPos;
     for (int axis = 0; axis < 3; axis++) {
 	float minDist = emitter.distanceMin[axis];
