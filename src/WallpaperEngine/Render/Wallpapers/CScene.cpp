@@ -39,10 +39,13 @@ std::vector<std::string> tokenizeObjectName (const std::string& name) {
     std::string token;
     for (size_t index = 0; index < name.size (); index++) {
 	const unsigned char value = static_cast<unsigned char> (name[index]);
+	const unsigned char previous
+	    = index == 0 ? 0 : static_cast<unsigned char> (name[index - 1]);
 	const bool camelBoundary = std::isupper (value) && !token.empty ()
-	    && (std::islower (static_cast<unsigned char> (name[index - 1]))
-		|| std::isdigit (static_cast<unsigned char> (name[index - 1])));
-	if (!std::isalnum (value) || camelBoundary) {
+	    && (std::islower (previous) || std::isdigit (previous));
+	const bool numericBoundary = !token.empty () && std::isalnum (value) && std::isalnum (previous)
+	    && (std::isdigit (value) != std::isdigit (previous));
+	if (!std::isalnum (value) || camelBoundary || numericBoundary) {
 	    if (!token.empty ()) {
 		tokens.push_back (std::move (token));
 		token.clear ();
@@ -66,16 +69,43 @@ std::optional<int> eyeLayerRole (const std::vector<std::string>& tokens) {
     if (has ("sclera") || has ("eyewhite") || has ("eyeballwhite") || (hasEye && has ("white"))) {
 	return 0;
     }
-    if (has ("iris") && (hasEye || hasSide || tokens.size () == 1)) {
+    if (has ("iris") && (hasEye || hasSide || tokens.size () <= 2)) {
 	return 1;
     }
-    if (has ("pupil") && (hasEye || hasSide || tokens.size () == 1)) {
+    if (has ("pupil") && (hasEye || hasSide || tokens.size () <= 2)) {
 	return 2;
     }
     return std::nullopt;
 }
 
-std::optional<int> semanticEyeLayerRole (const std::string& name) { return eyeLayerRole (tokenizeObjectName (name)); }
+std::string eyeLayerIdentity (const std::vector<std::string>& tokens) {
+    std::string identity;
+    for (const auto& token : tokens) {
+	if (token == "eye" || token == "eyeball" || token == "white" || token == "sclera"
+	    || token == "eyewhite" || token == "eyeballwhite" || token == "iris" || token == "pupil") {
+	    continue;
+	}
+	if (!identity.empty ()) {
+	    identity += '/';
+	}
+	identity += token;
+    }
+    return identity;
+}
+
+struct EyeLayerSemantics {
+    int role;
+    std::string identity;
+};
+
+std::optional<EyeLayerSemantics> semanticEyeLayer (const std::string& name) {
+    auto tokens = tokenizeObjectName (name);
+    const auto role = eyeLayerRole (tokens);
+    if (!role.has_value ()) {
+	return std::nullopt;
+    }
+    return EyeLayerSemantics { *role, eyeLayerIdentity (tokens) };
+}
 }
 
 CScene::CScene (
@@ -163,39 +193,56 @@ CScene::CScene (
 	this->addObjectToRenderOrder (*object);
     }
 
-    // Some scenes serialize eye-white images after their iris images. Keep the
-    // generic correction local to each parent group and preserve every other
-    // object's authored render position.
-    std::map<std::optional<int>, std::vector<std::pair<size_t, int>>> eyeLayerPositions;
-    for (size_t index = 0; index < this->m_objectsByRenderOrder.size (); index++) {
-	const auto& object = this->m_objectsByRenderOrder[index]->getObject ();
-	if (!object.is<Image> ()) {
-	    continue;
-	}
-	if (const auto role = semanticEyeLayerRole (object.name)) {
-	    eyeLayerPositions[object.parent].emplace_back (index, *role);
-	}
-    }
-
-    for (const auto& [parent, positions] : eyeLayerPositions) {
-	(void)parent;
-	const bool hasEyeBase = std::ranges::any_of (positions, [] (const auto& item) { return item.second == 0; });
-	const bool hasIris = std::ranges::any_of (positions, [] (const auto& item) { return item.second == 1; });
-	if (!hasEyeBase || !hasIris) {
+    // Some scenes serialize eye-white images after their iris images. Correct only
+    // within contiguous eye-layer runs, and keep distinct eyes separate by their
+    // parent and semantic identity so unrelated authored layers never get crossed.
+    size_t eyeRunStart = 0;
+    while (eyeRunStart < this->m_objectsByRenderOrder.size ()) {
+	const auto& firstObject = this->m_objectsByRenderOrder[eyeRunStart]->getObject ();
+	const auto firstSemantics = firstObject.is<Image> () ? semanticEyeLayer (firstObject.name) : std::nullopt;
+	if (!firstSemantics.has_value ()) {
+	    eyeRunStart++;
 	    continue;
 	}
 
-	std::vector<std::pair<CObject*, int>> eyeLayers;
-	eyeLayers.reserve (positions.size ());
-	for (const auto& [index, role] : positions) {
-	    eyeLayers.emplace_back (this->m_objectsByRenderOrder[index], role);
+	std::map<std::pair<std::optional<int>, std::string>, std::vector<std::pair<size_t, int>>> eyeGroups;
+	size_t eyeRunEnd = eyeRunStart;
+	for (; eyeRunEnd < this->m_objectsByRenderOrder.size (); eyeRunEnd++) {
+	    const auto& object = this->m_objectsByRenderOrder[eyeRunEnd]->getObject ();
+	    if (!object.is<Image> ()) {
+		break;
+	    }
+	    const auto semantics = semanticEyeLayer (object.name);
+	    if (!semantics.has_value ()) {
+		break;
+	    }
+	    eyeGroups[{ object.parent, semantics->identity }].emplace_back (eyeRunEnd, semantics->role);
 	}
-	std::ranges::stable_sort (eyeLayers, [] (const auto& left, const auto& right) {
-	    return left.second < right.second;
-	});
-	for (size_t index = 0; index < positions.size (); index++) {
-	    this->m_objectsByRenderOrder[positions[index].first] = eyeLayers[index].first;
+
+	for (const auto& [identity, positions] : eyeGroups) {
+	    (void)identity;
+	    const bool hasEyeBase
+		= std::ranges::any_of (positions, [] (const auto& item) { return item.second == 0; });
+	    const bool hasIris
+		= std::ranges::any_of (positions, [] (const auto& item) { return item.second == 1; });
+	    if (!hasEyeBase || !hasIris) {
+		continue;
+	    }
+
+	    std::vector<std::pair<CObject*, int>> eyeLayers;
+	    eyeLayers.reserve (positions.size ());
+	    for (const auto& [index, role] : positions) {
+		eyeLayers.emplace_back (this->m_objectsByRenderOrder[index], role);
+	    }
+	    std::ranges::stable_sort (eyeLayers, [] (const auto& left, const auto& right) {
+		return left.second < right.second;
+	    });
+	    for (size_t index = 0; index < positions.size (); index++) {
+		this->m_objectsByRenderOrder[positions[index].first] = eyeLayers[index].first;
+	    }
 	}
+
+	eyeRunStart = eyeRunEnd;
     }
 
     // create extra framebuffers for the bloom effect
