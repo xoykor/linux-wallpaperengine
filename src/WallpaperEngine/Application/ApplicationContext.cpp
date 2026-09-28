@@ -776,7 +776,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 		parseFiniteFloat (value.substr (0, first), "--border-colour"),
 		parseFiniteFloat (value.substr (first + 1, second - first - 1), "--border-colour"),
 		parseFiniteFloat (value.substr (second + 1), "--border-colour"),
-	    }
+	    };
 	    colour = glm::clamp (colour, glm::vec3 (0.0f), glm::vec3 (1.0f));
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
 		this->settings.general.screenPostProcess[lastScreen].borderColour = colour;
