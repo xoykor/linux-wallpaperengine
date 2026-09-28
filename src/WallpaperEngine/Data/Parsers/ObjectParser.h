@@ -22,7 +22,8 @@ private:
     static ObjectData parseBaseData (const JSON& it, const Project& project);
     static ObjectUniquePtr
     parseModelWithFallback (const JSON& it, const Project& project, ObjectData base, const std::string& modelFile);
-    static ObjectUniquePtr parseCameraObject (const JSON& it, const Project& project, ObjectData base);
+    static ObjectUniquePtr
+    parseCameraObject (const JSON& it, const Project& project, ObjectData base, const std::string& camera);
     static ObjectUniquePtr parseLightObject (const JSON& it, const Project& project, ObjectData base);
     static std::vector<int> parseDependencies (const JSON& it);
     static SoundUniquePtr parseSound (const JSON& it, ObjectData base);
