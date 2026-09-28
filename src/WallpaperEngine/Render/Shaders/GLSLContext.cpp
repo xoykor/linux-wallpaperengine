@@ -229,21 +229,22 @@ std::string preprocessorConditionAt (const std::string& source, const std::size_
  * read-only in GLSL, so move that varying interface to a private linked name
  * and initialize a mutable per-fragment copy before main's logic runs.
  */
-std::string normalizeWritableFragmentVaryings (
-    std::string& vertex, std::string fragment, std::vector<std::string>& adjusted
+struct MutableVarying {
+    std::size_t declarationStart;
+    std::size_t declarationLength;
+    std::string type;
+    std::string name;
+    std::string condition;
+};
+
+std::vector<MutableVarying> findMutableFragmentVaryings (
+    const std::string& vertex, const std::string& fragment, std::vector<std::string>& adjusted
 ) {
     const std::regex fragmentVarying (R"(\bvarying\s+([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*;)");
     const std::string fragmentCode = stripCommentsPreservingOffsets (fragment);
-    struct MutableVarying {
-	std::size_t declarationStart;
-	std::size_t declarationLength;
-	std::string type;
-	std::string name;
-	std::string condition;
-    };
+    const std::string vertexCode = stripCommentsPreservingOffsets (vertex);
     std::vector<MutableVarying> mutableVaryings;
     std::set<std::string> mutableNames;
-    const std::string vertexCode = stripCommentsPreservingOffsets (vertex);
 
     for (std::sregex_iterator it (fragmentCode.begin (), fragmentCode.end (), fragmentVarying), end; it != end; ++it) {
 	const std::string type = (*it)[1].str ();
@@ -265,6 +266,7 @@ std::string normalizeWritableFragmentVaryings (
 	if (std::regex_search (fragmentCode, aliasIdentifier) || std::regex_search (vertex, aliasIdentifier)) {
 	    continue;
 	}
+
 	mutableVaryings.push_back ({
 	    static_cast<std::size_t> (it->position ()), static_cast<std::size_t> (it->length ()), type, name,
 	    preprocessorConditionAt (fragment, static_cast<std::size_t> (it->position ()))
@@ -274,9 +276,15 @@ std::string normalizeWritableFragmentVaryings (
 	}
     }
 
-    std::sort (mutableVaryings.begin (), mutableVaryings.end (), [](const auto& lhs, const auto& rhs) {
+    std::sort (mutableVaryings.begin (), mutableVaryings.end (), [] (const auto& lhs, const auto& rhs) {
 	return lhs.declarationStart > rhs.declarationStart;
     });
+    return mutableVaryings;
+}
+
+void rewriteMutableFragmentVaryings (
+    std::string& vertex, std::string& fragment, const std::vector<MutableVarying>& mutableVaryings
+) {
     std::set<std::string> vertexAliasesApplied;
     std::set<std::pair<std::string, std::string>> localDeclarations;
     for (const auto& varying : mutableVaryings) {
@@ -292,38 +300,55 @@ std::string normalizeWritableFragmentVaryings (
 	}
 	fragment.replace (varying.declarationStart, varying.declarationLength, replacement);
     }
+}
 
+std::string mutableVaryingInitialization (const std::vector<MutableVarying>& mutableVaryings) {
+    std::string initialization;
+    std::set<std::pair<std::string, std::string>> initialized;
+    for (const auto& varying : mutableVaryings) {
+	if (!initialized.emplace (varying.name, varying.condition).second) {
+	    continue;
+	}
+	if (!varying.condition.empty ()) {
+	    initialization += "\n#if " + varying.condition + "\n";
+	}
+	initialization += "    " + varying.name + " = _lweInput_" + varying.name + ";\n";
+	if (!varying.condition.empty ()) {
+	    initialization += "#endif\n";
+	}
+    }
+    return initialization;
+}
+
+void injectMutableVaryingInitializers (
+    std::string& fragment, const std::vector<MutableVarying>& mutableVaryings
+) {
+    const std::string fragmentCode = stripCommentsPreservingOffsets (fragment);
+    const std::regex mainFunction (R"(\bvoid\s+main\s*\(\s*\)\s*\{)");
+    std::vector<std::size_t> mainBodies;
+    for (
+	std::sregex_iterator it (fragmentCode.begin (), fragmentCode.end (), mainFunction), end; it != end; ++it
+    ) {
+	mainBodies.push_back (static_cast<std::size_t> (it->position () + it->length () - 1));
+    }
+    std::sort (mainBodies.rbegin (), mainBodies.rend ());
+
+    const std::string initialization = mutableVaryingInitialization (mutableVaryings);
+    for (const std::size_t bodyStart : mainBodies) {
+	fragment.insert (bodyStart + 1, initialization);
+    }
+}
+
+std::string normalizeWritableFragmentVaryings (
+    std::string& vertex, std::string fragment, std::vector<std::string>& adjusted
+) {
+    const auto mutableVaryings = findMutableFragmentVaryings (vertex, fragment, adjusted);
     if (mutableVaryings.empty ()) {
 	return fragment;
     }
 
-    const std::string fragmentWithCommentsRemoved = stripCommentsPreservingOffsets (fragment);
-    const std::regex mainFunction (R"(\bvoid\s+main\s*\(\s*\)\s*\{)");
-    std::vector<std::size_t> mainBodies;
-    for (std::sregex_iterator it (fragmentWithCommentsRemoved.begin (), fragmentWithCommentsRemoved.end (), mainFunction),
-	 end;
-	 it != end; ++it) {
-	mainBodies.push_back (static_cast<std::size_t> (it->position () + it->length () - 1));
-    }
-    std::sort (mainBodies.rbegin (), mainBodies.rend ());
-    for (const std::size_t bodyStart : mainBodies) {
-	std::string initialization;
-	std::set<std::pair<std::string, std::string>> initialized;
-	for (const auto& varying : mutableVaryings) {
-	    if (!initialized.emplace (varying.name, varying.condition).second) {
-		continue;
-	    }
-	    if (!varying.condition.empty ()) {
-		initialization += "\n#if " + varying.condition + "\n";
-	    }
-	    initialization += "    " + varying.name + " = _lweInput_" + varying.name + ";\n";
-	    if (!varying.condition.empty ()) {
-		initialization += "#endif\n";
-	    }
-	}
-	fragment.insert (bodyStart + 1, initialization);
-    }
-
+    rewriteMutableFragmentVaryings (vertex, fragment, mutableVaryings);
+    injectMutableVaryingInitializers (fragment, mutableVaryings);
     return fragment;
 }
 
