@@ -47,13 +47,13 @@ signal.signal(signal.SIGUSR1, next_wallpaper)
 
 def save(name, data):
     temp = STATE / (name + ".tmp")
-    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(STATE / name)
 
 
 def load(name, default):
     try:
-        return json.loads((STATE / name).read_text())
+        return json.loads((STATE / name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
 
