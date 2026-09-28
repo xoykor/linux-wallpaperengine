@@ -17,7 +17,7 @@ import random
 import re
 import shutil
 import signal
-import subprocess  # nosec B404 - fixed argv commands supervise the renderer
+import subprocess
 import time
 
 INTERVAL = 10 * 60
@@ -142,7 +142,7 @@ def catalog():
 
 def outputs():
     try:
-        result = subprocess.run(  # nosec B603 - fixed argv list; no shell
+        result = subprocess.run(
             ["kscreen-doctor", "-j"],
             capture_output=True,
             text=True,
@@ -242,9 +242,7 @@ try:
             PULSE_SERVER="none",
             PIPEWIRE_REMOTE="none",
         )
-        child = subprocess.Popen(  # nosec B603 - argv list; shell execution is never used
-            cmd, start_new_session=True, env=wp_env
-        )
+        child = subprocess.Popen(cmd, start_new_session=True, env=wp_env)
         started_at = time.time()
         save(
             "current.json",
