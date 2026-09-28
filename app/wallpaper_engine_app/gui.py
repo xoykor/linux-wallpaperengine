@@ -1073,25 +1073,21 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.playlist_name = row.playlist_name if row is not None else None
         self._show_playlist_detail()
 
-    def _show_playlist_detail(self) -> None:
-        if not hasattr(self, "playlist_detail"):
-            return
-        _clear(self.playlist_detail)
-        playlists = self.config.get("playlists") or {}
-        name = self.playlist_name
-        if name is None or name not in playlists:
-            self.playlist_detail.append(_label(tr("COMECE POR AQUI"), css="page-kicker"))
-            self.playlist_detail.append(_label(tr("Uma trilha para cada clima."), css="detail-title", wrap=True))
-            self.playlist_detail.append(_label(
-                tr("Crie uma playlist e escolha vários wallpapers instalados de uma vez. Você decide a ordem ou deixa a reprodução aleatória."),
-                css="subtle", wrap=True,
-            ))
-            create = _icon_button(tr("Criar minha primeira playlist"), "list-add-symbolic")
-            create.add_css_class("primary-action")
-            create.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Criar playlist"), None))
-            self.playlist_detail.append(create)
-            return
+    def _show_empty_playlist_detail(self) -> None:
+        self.playlist_detail.append(_label(tr("COMECE POR AQUI"), css="page-kicker"))
+        self.playlist_detail.append(_label(
+            tr("Uma trilha para cada clima."), css="detail-title", wrap=True
+        ))
+        self.playlist_detail.append(_label(
+            tr("Crie uma playlist e escolha vários wallpapers instalados de uma vez. Você decide a ordem ou deixa a reprodução aleatória."),
+            css="subtle", wrap=True,
+        ))
+        create = _icon_button(tr("Criar minha primeira playlist"), "list-add-symbolic")
+        create.add_css_class("primary-action")
+        create.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Criar playlist"), None))
+        self.playlist_detail.append(create)
 
+    def _append_playlist_heading(self, name: str) -> None:
         self.playlist_detail.append(_label(tr("EDITOR DE PLAYLIST"), css="page-kicker"))
         heading = _box(spacing=8)
         label = _label(name, css="detail-title")
@@ -1108,16 +1104,19 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         heading.append(delete)
         self.playlist_detail.append(heading)
 
+    def _append_playlist_controls(self, name: str, identifiers: list[str]) -> None:
         active = self.config.get("active_playlist") == name
         playlist_state = (
             "Selecionada para a rotação" if active and self.config.get("rotation_enabled")
             else "Selecionada, com rotação pausada" if active else "Pronta para ativar"
         )
         self.playlist_detail.append(_label(tr(
-            "{count} itens · {state}", count=len(playlists[name]), state=tr(playlist_state)
+            "{count} itens · {state}", count=len(identifiers), state=tr(playlist_state)
         ), css="subtle"))
-        activation = Gtk.Button(label=tr("Voltar à biblioteca na rotação" if active else "Ativar e iniciar rotação"))
-        activation.set_sensitive(active or any(item_id in self.catalog for item_id in playlists[name]))
+        activation = Gtk.Button(
+            label=tr("Voltar à biblioteca na rotação" if active else "Ativar e iniciar rotação")
+        )
+        activation.set_sensitive(active or any(item_id in self.catalog for item_id in identifiers))
         if not active:
             activation.add_css_class("suggested-action")
         activation.connect(
@@ -1134,23 +1133,26 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         add_button = _icon_button(tr("Adicionar wallpapers"), "list-add-symbolic")
         add_button.add_css_class("primary-action")
-        add_button.set_sensitive(any(item_id not in playlists[name] for item_id in self.catalog))
+        add_button.set_sensitive(any(item_id not in identifiers for item_id in self.catalog))
         add_button.connect("clicked", lambda *_: self._playlist_add_dialog(name))
         self.playlist_detail.append(add_button)
 
-        if self.selected_id and self.selected_id not in playlists[name]:
+        if self.selected_id and self.selected_id not in identifiers:
             selected_title = self.catalog.get(self.selected_id, {}).get("title", self.selected_id)
-            add_selected = Gtk.Button(label=tr("Adicionar selecionado: {title}", title=selected_title))
+            add_selected = Gtk.Button(
+                label=tr("Adicionar selecionado: {title}", title=selected_title)
+            )
             add_selected.connect("clicked", lambda *_: self._playlist_add_id(name, self.selected_id))
             self.playlist_detail.append(add_selected)
 
+    def _append_playlist_order(self, name: str, identifiers: list[str]) -> None:
         self.playlist_detail.append(_label(tr("ORDEM DE REPRODUÇÃO"), css="page-kicker"))
-        if not playlists[name]:
+        if not identifiers:
             self.playlist_detail.append(_label(
                 tr("Esta playlist ainda está vazia. Adicione wallpapers instalados para começar."),
                 css="empty-state", wrap=True,
             ))
-        for position, wallpaper_id in enumerate(playlists[name]):
+        for position, wallpaper_id in enumerate(identifiers):
             item = self.catalog.get(wallpaper_id)
             title = item.get("title", wallpaper_id) if item else wallpaper_id
             if not item:
@@ -1164,17 +1166,41 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             up = Gtk.Button(label="↑")
             up.set_sensitive(position > 0)
             up.set_tooltip_text(tr("Mover para cima"))
-            up.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, -1))
+            up.connect(
+                "clicked",
+                lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, -1),
+            )
             row.append(up)
             down = Gtk.Button(label="↓")
-            down.set_sensitive(position < len(playlists[name]) - 1)
+            down.set_sensitive(position < len(identifiers) - 1)
             down.set_tooltip_text(tr("Mover para baixo"))
-            down.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, 1))
+            down.connect(
+                "clicked",
+                lambda _button, item_id=wallpaper_id: self._playlist_move(name, item_id, 1),
+            )
             row.append(down)
             remove = Gtk.Button(label=tr("Remover"))
-            remove.connect("clicked", lambda _button, item_id=wallpaper_id: self._playlist_remove(name, item_id))
+            remove.connect(
+                "clicked",
+                lambda _button, item_id=wallpaper_id: self._playlist_remove(name, item_id),
+            )
             row.append(remove)
             self.playlist_detail.append(row)
+
+    def _show_playlist_detail(self) -> None:
+        if not hasattr(self, "playlist_detail"):
+            return
+        _clear(self.playlist_detail)
+        playlists = self.config.get("playlists") or {}
+        name = self.playlist_name
+        if name is None or name not in playlists:
+            self._show_empty_playlist_detail()
+            return
+
+        identifiers = playlists[name]
+        self._append_playlist_heading(name)
+        self._append_playlist_controls(name, identifiers)
+        self._append_playlist_order(name, identifiers)
 
     def _playlist_name_dialog(self, title: str, previous: str | None,
                               initial_ids: list[str] | None = None) -> None:
