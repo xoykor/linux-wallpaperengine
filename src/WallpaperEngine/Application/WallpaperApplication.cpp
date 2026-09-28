@@ -383,81 +383,114 @@ bool WallpaperApplication::selectNextCandidate (ActivePlaylist& playlist, std::s
     return false;
 }
 
-void WallpaperApplication::advancePlaylist (
+void WallpaperApplication::schedulePlaylistSwitch (
+    ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
+) const {
+    const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
+    playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
+}
+
+bool WallpaperApplication::prepareNextPlaylistCandidate (
     const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
 ) {
-    if (playlist.order.empty ()) {
-	return;
-    }
-
     playlist.orderIndex = (playlist.orderIndex + 1) % playlist.order.size ();
-
     if (playlist.orderIndex == 0 && playlist.definition.settings.order == "random") {
 	std::shuffle (playlist.order.begin (), playlist.order.end (), this->m_playlistRng);
     }
 
     std::size_t candidateOrderIndex = playlist.orderIndex;
-
     if (!this->selectNextCandidate (playlist, candidateOrderIndex)) {
 	sLog.error ("All playlist items failed for ", screen, ", keeping current wallpaper");
-	const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
-	playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
-	return;
+	this->schedulePlaylistSwitch (playlist, now);
+	return false;
     }
 
     const auto candidateIndex = playlist.order[candidateOrderIndex];
     const auto& candidatePath = playlist.definition.items[candidateIndex];
-
     if (!this->preflightWallpaper (candidatePath.string ())) {
 	playlist.failedIndices.insert (candidateIndex);
-
 	if (!this->selectNextCandidate (playlist, candidateOrderIndex)) {
 	    sLog.error ("All playlist items failed for ", screen, ", keeping current wallpaper");
-	    const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
-	    playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
-	    return;
+	    this->schedulePlaylistSwitch (playlist, now);
+	    return false;
 	}
     }
 
     playlist.orderIndex = candidateOrderIndex;
-    const auto& nextPath = playlist.definition.items[playlist.order[playlist.orderIndex]];
+    return true;
+}
 
-    bool loaded = false;
+ApplicationContext::SpanGroup* WallpaperApplication::findSpanGroup (const std::string& screen) {
+    if (screen.rfind ("span:", 0) != 0) {
+	return nullptr;
+    }
 
+    auto group = std::find_if (
+	this->m_context.settings.general.spanGroups.begin (),
+	this->m_context.settings.general.spanGroups.end (),
+	[&screen] (const ApplicationContext::SpanGroup& candidate) {
+	    return !candidate.screens.empty () && "span:" + candidate.screens.front () == screen;
+	}
+    );
+    if (group == this->m_context.settings.general.spanGroups.end ()) {
+	throw std::runtime_error ("Span playlist target no longer exists");
+    }
+    return &*group;
+}
+
+WallpaperEngine::Render::CWallpaper::SpanInfo WallpaperApplication::calculateSpanInfo (
+    const ApplicationContext::SpanGroup& group
+) const {
+    const auto& viewports = this->m_renderContext->getOutput ().getViewports ();
+    int minX = INT_MAX;
+    int minY = INT_MAX;
+    int maxX = INT_MIN;
+    int maxY = INT_MIN;
+    bool anyFound = false;
+
+    for (const auto& screenName : group.screens) {
+	const auto viewport = viewports.find (screenName);
+	if (viewport == viewports.end ()) {
+	    continue;
+	}
+	anyFound = true;
+	minX = std::min (minX, viewport->second->globalPosition.x);
+	minY = std::min (minY, viewport->second->globalPosition.y);
+	maxX = std::max (maxX, viewport->second->globalPosition.x + viewport->second->logicalSize.x);
+	maxY = std::max (maxY, viewport->second->globalPosition.y + viewport->second->logicalSize.y);
+    }
+    if (!anyFound) {
+	throw std::runtime_error ("No active viewport remains for span playlist");
+    }
+
+    WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo {};
+    spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
+    return spanInfo;
+}
+
+bool WallpaperApplication::loadPlaylistWallpaper (
+    const std::string& screen, const std::filesystem::path& path
+) {
     try {
 	if (!this->makeAnyViewportCurrent ()) {
-	    sLog.error ("Cannot switch playlist on ", screen, ": no active viewport");
 	    throw std::runtime_error ("No viewport available");
 	}
 
-	auto project = this->loadBackground (nextPath.string ());
+	auto project = this->loadBackground (path.string ());
 	this->setupPropertiesForProject (*project, screen);
 	this->ensureBrowserForProject (*project);
-
-	auto spanGroupIt = this->m_context.settings.general.spanGroups.end ();
-	if (screen.rfind ("span:", 0) == 0) {
-	    spanGroupIt = std::find_if (
-		this->m_context.settings.general.spanGroups.begin (),
-		this->m_context.settings.general.spanGroups.end (),
-		[&screen] (const ApplicationContext::SpanGroup& group) {
-		    return !group.screens.empty () && "span:" + group.screens.front () == screen;
-		}
-	    );
-	    if (spanGroupIt == this->m_context.settings.general.spanGroups.end ()) {
-		throw std::runtime_error ("Span playlist target no longer exists");
-	    }
-	}
+	auto* spanGroup = this->findSpanGroup (screen);
 
 	const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
 	const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
+	const auto offsetIt = this->m_context.settings.general.screenOffsets.find (screen);
+	const auto postIt = this->m_context.settings.general.screenPostProcess.find (screen);
 	const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
 	    ? scalingIt->second
 	    : this->m_context.settings.render.window.scalingMode;
 	const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
 	    ? clampIt->second
 	    : this->m_context.settings.render.window.clamp;
-	const auto offsetIt = this->m_context.settings.general.screenOffsets.find (screen);
-	const auto postIt = this->m_context.settings.general.screenPostProcess.find (screen);
 	const auto offset = offsetIt != this->m_context.settings.general.screenOffsets.end ()
 	    ? offsetIt->second
 	    : this->m_context.settings.render.window.uvOffset;
@@ -472,56 +505,47 @@ void WallpaperApplication::advancePlaylist (
 		*project->wallpaper, *this->m_renderContext, *this->m_audioContext, this->m_browserContext.get (),
 		scaling, clamp, offset, postProcess
 	    );
-	    if (spanGroupIt != this->m_context.settings.general.spanGroups.end ()) {
-		const auto& viewports = this->m_renderContext->getOutput ().getViewports ();
-		int minX = INT_MAX, minY = INT_MAX, maxX = INT_MIN, maxY = INT_MIN;
-		bool anyFound = false;
-		for (const auto& screenName : spanGroupIt->screens) {
-		    const auto viewport = viewports.find (screenName);
-		    if (viewport == viewports.end ()) {
-			continue;
-		    }
-		    anyFound = true;
-		    minX = std::min (minX, viewport->second->globalPosition.x);
-		    minY = std::min (minY, viewport->second->globalPosition.y);
-		    maxX = std::max (maxX, viewport->second->globalPosition.x + viewport->second->logicalSize.x);
-		    maxY = std::max (maxY, viewport->second->globalPosition.y + viewport->second->logicalSize.y);
-		}
-		if (!anyFound) {
-		    throw std::runtime_error ("No active viewport remains for span playlist");
-		}
-		spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
+	    if (spanGroup != nullptr) {
+		spanInfo = this->calculateSpanInfo (*spanGroup);
 	    }
 	}
 
 	this->m_backgrounds[screen] = std::move (project);
-	if (rendered && spanGroupIt != this->m_context.settings.general.spanGroups.end ()) {
-	    auto& group = *spanGroupIt;
+	if (rendered && spanGroup != nullptr) {
 	    std::shared_ptr<WallpaperEngine::Render::CWallpaper> shared (std::move (rendered));
 	    shared->setSpanInfo (spanInfo);
-	    for (const auto& screenName : group.screens) {
+	    for (const auto& screenName : spanGroup->screens) {
 		this->m_renderContext->setWallpaper (screenName, shared);
 	    }
-	    group.background = nextPath;
+	    spanGroup->background = path;
 	} else if (rendered) {
 	    this->m_renderContext->setWallpaper (screen, std::move (rendered));
 	}
 
-	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;
-	loaded = true;
+	this->m_context.settings.general.screenBackgrounds[screen] = path;
+	return true;
     } catch (const std::exception& e) {
 	sLog.error ("Failed to advance playlist on ", screen, ": ", e.what ());
+	return false;
+    }
+}
+
+void WallpaperApplication::advancePlaylist (
+    const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
+) {
+    if (playlist.order.empty ()) {
+	return;
+    }
+    if (!this->prepareNextPlaylistCandidate (screen, playlist, now)) {
+	return;
     }
 
-    if (!loaded) {
+    const auto& nextPath = playlist.definition.items[playlist.order[playlist.orderIndex]];
+    if (!this->loadPlaylistWallpaper (screen, nextPath)) {
 	playlist.failedIndices.insert (playlist.order[playlist.orderIndex]);
-
-	// Keep current position; next timer tick will retry advancement
 	sLog.error ("Failed to load wallpaper for ", screen, ", will retry on next cycle");
     }
-
-    const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
-    playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
+    this->schedulePlaylistSwitch (playlist, now);
 }
 
 void WallpaperApplication::updatePlaylists () {
