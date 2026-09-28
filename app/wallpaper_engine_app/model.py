@@ -108,6 +108,84 @@ def normalize_language(value: Any) -> str:
     return canonical[normalized]
 
 
+def _validate_scalar_config(result: dict[str, Any]) -> None:
+    for key in ("rotation_enabled", "shuffle", "only_favorites", "mute"):
+        if type(result[key]) is not bool:
+            raise ValueError(tr("{key} deve ser verdadeiro ou falso.", key=key))
+
+    numeric_ranges = (
+        ("interval_minutes", 1, 1440, "O intervalo deve estar entre 1 e 1440 minutos."),
+        ("fps", 1, 240, "FPS deve estar entre 1 e 240."),
+        ("ui_hue", 0, 360, "Matiz da interface deve estar entre 0 e 360."),
+        ("ui_intensity", 35, 100, "Intensidade da interface deve estar entre 35 e 100."),
+    )
+    for key, low, high, message in numeric_ranges:
+        value = result[key]
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError(tr(message))
+
+    if not isinstance(result["scaling"], str) or result["scaling"] not in _SCALING:
+        raise ValueError(tr("Escala inválida."))
+    result["language"] = normalize_language(result["language"])
+
+
+def _normalize_playlists(raw_playlists: Any) -> dict[str, list[str]]:
+    if not isinstance(raw_playlists, dict):
+        raise ValueError(tr("Playlists deve ser um objeto de nomes e listas de IDs."))
+    playlists: dict[str, list[str]] = {}
+    seen_names: set[str] = set()
+    for raw_name, raw_ids in raw_playlists.items():
+        name = normalize_playlist_name(raw_name)
+        folded_name = name.casefold()
+        if folded_name in seen_names:
+            raise ValueError(tr("Nome de playlist duplicado: {name}.", name=name))
+        seen_names.add(folded_name)
+        if not isinstance(raw_ids, list):
+            raise ValueError(tr("A playlist {name} deve conter uma lista de IDs.", name=name))
+        playlists[name] = list(dict.fromkeys(normalize_id(value) for value in raw_ids))
+    return playlists
+
+
+def _normalize_active_playlist(active: Any, playlists: dict[str, list[str]]) -> str | None:
+    if active is None:
+        return None
+    normalized = normalize_playlist_name(active)
+    matching = [name for name in playlists if name.casefold() == normalized.casefold()]
+    if not matching:
+        raise ValueError(tr("Playlist ativa não encontrada: {name}.", name=normalized))
+    return matching[0]
+
+
+def _normalize_wallpaper_properties(raw_value: Any) -> dict[str, dict[str, bool]]:
+    if not isinstance(raw_value, dict):
+        raise ValueError(tr("As opções dos wallpapers devem ser um objeto."))
+
+    wallpaper_properties: dict[str, dict[str, bool]] = {}
+    for raw_id, raw_properties in raw_value.items():
+        wallpaper_id = normalize_id(raw_id)
+        if not isinstance(raw_properties, dict) or len(raw_properties) > 256:
+            raise ValueError(tr("As opções de cada wallpaper devem ser um objeto válido."))
+
+        properties: dict[str, bool] = {}
+        for name, value in raw_properties.items():
+            if not isinstance(name, str) or not _PROPERTY_PATTERN.fullmatch(name):
+                raise ValueError(tr("Nome de opção de wallpaper inválido."))
+            if type(value) is not bool:
+                raise ValueError(tr("As opções de wallpaper devem ser verdadeiras ou falsas."))
+            properties[name] = value
+        if properties:
+            wallpaper_properties[wallpaper_id] = properties
+    return wallpaper_properties
+
+
+def _validate_renderer_path(renderer: Any) -> str:
+    if not isinstance(renderer, str) or not renderer or len(renderer) > 4096:
+        raise ValueError(tr("Caminho do renderizador inválido."))
+    if renderer != "auto" and (not Path(renderer).is_absolute() or "\x00" in renderer):
+        raise ValueError(tr("O caminho do renderizador deve ser absoluto ou 'auto'."))
+    return renderer
+
+
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError(tr("A configuração deve ser um objeto JSON."))
@@ -117,53 +195,16 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
 
     result = dict(DEFAULT_CONFIG)
     result.update(config)
-    for key in ("rotation_enabled", "shuffle", "only_favorites", "mute"):
-        if type(result[key]) is not bool:
-            raise ValueError(tr("{key} deve ser verdadeiro ou falso.", key=key))
-
-    minutes = result["interval_minutes"]
-    if type(minutes) is not int or not 1 <= minutes <= 1440:
-        raise ValueError(tr("O intervalo deve estar entre 1 e 1440 minutos."))
-    fps = result["fps"]
-    if type(fps) is not int or not 1 <= fps <= 240:
-        raise ValueError(tr("FPS deve estar entre 1 e 240."))
-    hue = result["ui_hue"]
-    if type(hue) is not int or not 0 <= hue <= 360:
-        raise ValueError(tr("Matiz da interface deve estar entre 0 e 360."))
-    intensity = result["ui_intensity"]
-    if type(intensity) is not int or not 35 <= intensity <= 100:
-        raise ValueError(tr("Intensidade da interface deve estar entre 35 e 100."))
-    if not isinstance(result["scaling"], str) or result["scaling"] not in _SCALING:
-        raise ValueError(tr("Escala inválida."))
-    result["language"] = normalize_language(result["language"])
+    _validate_scalar_config(result)
 
     favorites = result["favorites"]
     if not isinstance(favorites, list):
         raise ValueError(tr("Favoritos deve ser uma lista de IDs."))
     result["favorites"] = list(dict.fromkeys(normalize_id(value) for value in favorites))
 
-    raw_playlists = result["playlists"]
-    if not isinstance(raw_playlists, dict):
-        raise ValueError(tr("Playlists deve ser um objeto de nomes e listas de IDs."))
-    playlists: dict[str, list[str]] = {}
-    seen_names: set[str] = set()
-    for raw_name, raw_ids in raw_playlists.items():
-        name = normalize_playlist_name(raw_name)
-        if name.casefold() in seen_names:
-            raise ValueError(tr("Nome de playlist duplicado: {name}.", name=name))
-        seen_names.add(name.casefold())
-        if not isinstance(raw_ids, list):
-            raise ValueError(tr("A playlist {name} deve conter uma lista de IDs.", name=name))
-        playlists[name] = list(dict.fromkeys(normalize_id(value) for value in raw_ids))
+    playlists = _normalize_playlists(result["playlists"])
     result["playlists"] = playlists
-
-    active = result["active_playlist"]
-    if active is not None:
-        normalized = normalize_playlist_name(active)
-        matching = [name for name in playlists if name.casefold() == normalized.casefold()]
-        if not matching:
-            raise ValueError(tr("Playlist ativa não encontrada: {name}.", name=normalized))
-        result["active_playlist"] = matching[0]
+    result["active_playlist"] = _normalize_active_playlist(result["active_playlist"], playlists)
 
     selected = result["selected_id"]
     result["selected_id"] = None if selected is None else normalize_id(selected)
@@ -176,32 +217,9 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
         for screen, wallpaper_id in assignments.items()
     }
 
-    raw_wallpaper_properties = result["wallpaper_properties"]
-    if not isinstance(raw_wallpaper_properties, dict):
-        raise ValueError(tr("As opções dos wallpapers devem ser um objeto."))
-    wallpaper_properties: dict[str, dict[str, bool]] = {}
-    for raw_id, raw_properties in raw_wallpaper_properties.items():
-        wallpaper_id = normalize_id(raw_id)
-        if not isinstance(raw_properties, dict) or len(raw_properties) > 256:
-            raise ValueError(tr("As opções de cada wallpaper devem ser um objeto válido."))
-        properties: dict[str, bool] = {}
-        for name, value in raw_properties.items():
-            if not isinstance(name, str) or not _PROPERTY_PATTERN.fullmatch(name):
-                raise ValueError(tr("Nome de opção de wallpaper inválido."))
-            if type(value) is not bool:
-                raise ValueError(tr("As opções de wallpaper devem ser verdadeiras ou falsas."))
-            properties[name] = value
-        if properties:
-            wallpaper_properties[wallpaper_id] = properties
-    result["wallpaper_properties"] = wallpaper_properties
-
-    renderer = result["renderer_path"]
-    if not isinstance(renderer, str) or not renderer or len(renderer) > 4096:
-        raise ValueError(tr("Caminho do renderizador inválido."))
-    if renderer != "auto" and (not Path(renderer).is_absolute() or "\x00" in renderer):
-        raise ValueError(tr("O caminho do renderizador deve ser absoluto ou 'auto'."))
+    result["wallpaper_properties"] = _normalize_wallpaper_properties(result["wallpaper_properties"])
+    result["renderer_path"] = _validate_renderer_path(result["renderer_path"])
     return result
-
 
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
