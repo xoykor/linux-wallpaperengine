@@ -1,0 +1,5 @@
+[MAIN]
+
+[MESSAGES CONTROL]
+disable=all
+enable=W0718,W1510
