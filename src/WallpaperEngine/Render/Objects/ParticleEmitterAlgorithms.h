@@ -11,9 +11,7 @@
 
 namespace WallpaperEngine::Render::Objects::ParticleEmitterAlgorithms {
 
-inline uint32_t accumulateRateEmission (
-    float dt, float rate, bool limitOnePerFrame, float& emissionTimer
-) {
+inline uint32_t accumulateRateEmission (float dt, float rate, bool limitOnePerFrame, float& emissionTimer) {
     emissionTimer += dt * rate;
     uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
     emissionTimer -= static_cast<float> (toEmit);
@@ -23,9 +21,8 @@ inline uint32_t accumulateRateEmission (
     return toEmit;
 }
 
-inline glm::vec3 sampleBoxOffset (
-    const Data::Model::ParticleEmitter& emitter, const glm::vec3& directions, std::mt19937& rng
-) {
+inline glm::vec3
+sampleBoxOffset (const Data::Model::ParticleEmitter& emitter, const glm::vec3& directions, std::mt19937& rng) {
     glm::vec3 offset;
     for (int axis = 0; axis < 3; axis++) {
 	float distance = Maths::randomFloat (rng, emitter.distanceMin[axis], emitter.distanceMax[axis]);
@@ -37,9 +34,8 @@ inline glm::vec3 sampleBoxOffset (
     return offset * directions;
 }
 
-inline glm::vec3 sampleSphereOffset (
-    const Data::Model::ParticleEmitter& emitter, uint32_t particleFlags, std::mt19937& rng
-) {
+inline glm::vec3
+sampleSphereOffset (const Data::Model::ParticleEmitter& emitter, uint32_t particleFlags, std::mt19937& rng) {
     glm::vec3 offset;
 
     if ((particleFlags & 4) == 0) {
@@ -80,9 +76,8 @@ inline glm::vec3 sampleSphereOffset (
     return offset;
 }
 
-inline glm::vec3 resolveVelocity (
-    const Data::Model::ParticleEmitter& emitter, const glm::vec3& emitterOffset, std::mt19937& rng
-) {
+inline glm::vec3
+resolveVelocity (const Data::Model::ParticleEmitter& emitter, const glm::vec3& emitterOffset, std::mt19937& rng) {
     if (emitter.speedMax > 0.0f || emitter.speedMin != 0.0f) {
 	const glm::vec3 direction
 	    = glm::length (emitterOffset) > 0.0f ? glm::normalize (emitterOffset) : glm::vec3 (0.0f, 1.0f, 0.0f);
