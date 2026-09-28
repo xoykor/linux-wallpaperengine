@@ -46,6 +46,94 @@ std::unique_ptr<PropertyAnimation> parsePropertyAnimation (const JSON& property)
 }
 } // namespace
 
+ObjectData
+ObjectParser::buildBaseData (const JSON& it, const Project& project, int id, std::string name) {
+    return ObjectData {
+	.id = id,
+	.name = std::move (name),
+	.dependencies = parseDependencies (it),
+	.parent = it.optional<int> ("parent"),
+	.attachment = it.optional<std::string> ("attachment"),
+	.origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
+	.groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
+	.groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
+	.groupVisible = it.user ("visible", project.properties, true),
+    };
+}
+
+ObjectData ObjectParser::parseBaseData (const JSON& it, const Project& project) {
+    try {
+	const int id = it.require<int> ("id", "Object must have an id");
+	const std::string name = it.require<std::string> ("name", "Object must have a name");
+	return buildBaseData (it, project, id, name);
+    } catch (const std::exception& e) {
+	sLog.error ("Error parsing object base data: ", e.what ());
+    }
+
+    const auto idIt = it.find ("id");
+    const auto nameIt = it.find ("name");
+    const int id = idIt != it.end () && idIt->is_number () ? idIt->get<int> () : -1;
+
+    std::string name = "unknown";
+    if (nameIt != it.end ()) {
+	if (nameIt->is_string ()) {
+	    name = nameIt->get<std::string> ();
+	} else if (nameIt->is_number ()) {
+	    name = std::to_string (nameIt->get<int> ());
+	}
+    }
+
+    return buildBaseData (it, project, id, std::move (name));
+}
+
+ObjectUniquePtr ObjectParser::parseModelWithFallback (
+    const JSON& it, const Project& project, ObjectData base, const std::string& modelFile
+) {
+    try {
+	return parseModelObject (it, project, std::move (base), modelFile);
+    } catch (const std::exception& e) {
+	sLog.error ("Cannot parse model object: ", e.what ());
+    }
+
+    const auto idIt = it.find ("id");
+    const int id = idIt != it.end () && idIt->is_number () ? idIt->get<int> () : -1;
+    return std::make_unique<Object> (buildBaseData (it, project, id, "model-parse-failed"));
+}
+
+ObjectUniquePtr
+ObjectParser::parseCameraObject (const JSON& it, const Project& project, ObjectData base) {
+    const auto& properties = project.properties;
+    return std::make_unique<CameraObject> (
+	std::move (base),
+	CameraObjectData {
+	    .camera = it.require<std::string> ("camera", "Camera object must have a camera"),
+	    .path = it.optional ("path", std::string {}),
+	    .queueMode = it.optional ("queuemode", std::string ("random")),
+	    .fov = it.user ("fov", properties, 50.0f),
+	    .zoom = it.user ("zoom", properties, 1.0f),
+	}
+    );
+}
+
+ObjectUniquePtr ObjectParser::parseLightObject (const JSON& it, const Project& project, ObjectData base) {
+    const auto lightIt = it.find ("light");
+    if (lightIt == it.end () || !lightIt->is_string ()) {
+	sLog.error ("Ignoring light with invalid type on object ", base.id);
+	return std::make_unique<Object> (std::move (base));
+    }
+
+    return std::make_unique<Light> (
+	std::move (base),
+	LightData {
+	    .type = lightIt->get<std::string> (),
+	    .color = it.user ("color", project.properties, glm::vec3 (1.0f)),
+	    .intensity = it.user ("intensity", project.properties, 1.0f),
+	    .radius = it.user ("radius", project.properties, 1.0f),
+	    .exponent = it.user ("exponent", project.properties, 2.0f),
+	}
+    );
+}
+
 ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto imageIt = it.find ("image");
     const auto soundIt = it.find ("sound");
@@ -57,110 +145,38 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     // use shape to refer to VolumeLight
     const auto shapeIt = it.find ("shape");
 
-    // Parse base object data
-    // Some particle objects have numeric 'name' fields, so handle type mismatches gracefully
-    ObjectData basedata;
-    try {
-	basedata = ObjectData {
-	    .id = it.require<int> ("id", "Object must have an id"),
-	    .name = it.require<std::string> ("name", "Object must have a name"),
-	    .dependencies = parseDependencies (it),
-	    .parent = it.optional<int> ("parent"),
-	    .attachment = it.optional<std::string> ("attachment"),
-	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
-	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
-	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
-	    .groupVisible = it.user ("visible", project.properties, true),
-	};
-    } catch (const std::exception& e) {
-	sLog.error ("Error parsing object base data: ", e.what ());
-	const auto idIt = it.find ("id");
-	const auto nameIt = it.find ("name");
-	int id = (idIt != it.end () && idIt->is_number ()) ? idIt->get<int> () : -1;
-	std::string name = "unknown";
-	if (nameIt != it.end ()) {
-	    if (nameIt->is_string ()) {
-		name = nameIt->get<std::string> ();
-	    } else if (nameIt->is_number ()) {
-		name = std::to_string (nameIt->get<int> ());
-	    }
-	}
-	basedata = ObjectData {
-	    .id = id,
-	    .name = name,
-	    .dependencies = parseDependencies (it),
-	    .parent = it.optional<int> ("parent"),
-	    .attachment = it.optional<std::string> ("attachment"),
-	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
-	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
-	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
-	    .groupVisible = it.user ("visible", project.properties, true),
-	};
-    }
+    ObjectData basedata = parseBaseData (it, project);
 
     if (imageIt != it.end () && imageIt->is_string ()) {
 	return parseImage (it, project, std::move (basedata), *imageIt);
-    } else if (soundIt != it.end () && soundIt->is_array ()) {
+    }
+    if (soundIt != it.end () && soundIt->is_array ()) {
 	return parseSound (it, std::move (basedata));
-    } else if (particleIt != it.end ()) {
+    }
+    if (particleIt != it.end ()) {
 	return parseParticle (it, project, std::move (basedata));
-    } else if (textIt != it.end ()) {
+    }
+    if (textIt != it.end ()) {
 	return parseText (it, project, std::move (basedata));
-    } else if (modelIt != it.end () && modelIt->is_string ()) {
-	try {
-	    return parseModelObject (it, project, std::move (basedata), modelIt->get<std::string> ());
-	} catch (const std::exception& e) {
-	    sLog.error ("Cannot parse model object: ", e.what ());
-	    const auto idIt = it.find ("id");
-	    basedata = ObjectData {
-		.id = (idIt != it.end () && idIt->is_number ()) ? idIt->get<int> () : -1,
-		.name = "model-parse-failed",
-		.dependencies = parseDependencies (it),
-		.parent = it.optional<int> ("parent"),
-		.attachment = it.optional<std::string> ("attachment"),
-		.origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
-		.groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
-		.groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
-		.groupVisible = it.user ("visible", project.properties, true),
-	    };
-	}
-
-    } else if (cameraIt != it.end () && cameraIt->is_string ()) {
-	const auto& properties = project.properties;
-	return std::make_unique<CameraObject> (
-	    std::move (basedata),
-	    CameraObjectData {
-		.camera = cameraIt->get<std::string> (),
-		.path = it.optional ("path", std::string {}),
-		.queueMode = it.optional ("queuemode", std::string ("random")),
-		.fov = it.user ("fov", properties, 50.0f),
-		.zoom = it.user ("zoom", properties, 1.0f),
-	    }
-	);
-    } else if (lightIt != it.end ()) {
-	if (!lightIt->is_string ()) {
-	    sLog.error ("Ignoring light with invalid type on object ", basedata.id);
-	    return std::make_unique<Object> (std::move (basedata));
-	}
-	return std::make_unique<Light> (
-	    std::move (basedata),
-	    LightData {
-		.type = lightIt->get<std::string> (),
-		.color = it.user ("color", project.properties, glm::vec3 (1.0f)),
-		.intensity = it.user ("intensity", project.properties, 1.0f),
-		.radius = it.user ("radius", project.properties, 1.0f),
-		.exponent = it.user ("exponent", project.properties, 2.0f),
-	    }
-	);
-    } else if (shapeIt != it.end ()) {
+    }
+    if (modelIt != it.end () && modelIt->is_string ()) {
+	return parseModelWithFallback (it, project, std::move (basedata), modelIt->get<std::string> ());
+    }
+    if (cameraIt != it.end () && cameraIt->is_string ()) {
+	return parseCameraObject (it, project, std::move (basedata));
+    }
+    if (lightIt != it.end ()) {
+	return parseLightObject (it, project, std::move (basedata));
+    }
+    if (shapeIt != it.end ()) {
 	sLog.error ("VolumeLight objects are not supported yet");
-    } else {
-	if (!it.optional ("solid", false)) {
-	    // dump the object for now, might want to change later
-	    // TODO: RE-EVALUATE IF THIS MAKES SENSE, THERE'S OBJECTS THAT CONTAIN OTHER OBJECTS AND THUS AREN'T REALLY
-	    // ANYTHING SPECIAL
-	    sLog.error ("Unknown object type found: ", it.dump ());
-	}
+	return std::make_unique<Object> (std::move (basedata));
+    }
+    if (!it.optional ("solid", false)) {
+	// dump the object for now, might want to change later
+	// TODO: RE-EVALUATE IF THIS MAKES SENSE, THERE'S OBJECTS THAT CONTAIN OTHER OBJECTS AND THUS AREN'T REALLY
+	// ANYTHING SPECIAL
+	sLog.error ("Unknown object type found: ", it.dump ());
     }
 
     return std::make_unique<Object> (std::move (basedata));
