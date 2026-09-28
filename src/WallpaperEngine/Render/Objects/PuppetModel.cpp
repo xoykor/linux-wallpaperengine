@@ -167,8 +167,58 @@ bool parseSkeletonCandidate (
  * bone records (name, flags, parent, matrix, metadata). The legacy heuristic
  * below assumes adjacent fixed-size records and cannot walk this layout.
  */
-bool parseMdls0004Skeleton (
-    const std::vector<char>& data, size_t mdlsOffset, size_t requiredBones, std::vector<PuppetModel::Bone>& bones
+bool matrixIsFinite (const glm::mat4& matrix) {
+    for (int column = 0; column < 4; ++column) {
+	for (int row = 0; row < 4; ++row) {
+	    if (!std::isfinite (matrix[column][row])) {
+		return false;
+	    }
+	}
+    }
+    return true;
+}
+
+bool readMdls0004Bone (
+    Cursor& cur, uint32_t index, std::vector<glm::mat4>& bindWorld, PuppetModel::Bone& bone
+) {
+    const std::string name = cur.readCString ();
+    const uint32_t flags = cur.read<uint32_t> ();
+    const int32_t parent = cur.read<int32_t> ();
+    const uint32_t matrixBytes = cur.read<uint32_t> ();
+    // MDLS0004 may contain unnamed helper bones. Names are not used by the
+    // renderer (channels and mesh weights address bones by index), so keep the
+    // record if its terminator, matrix and hierarchy are structurally valid.
+    if (!cur.ok || matrixBytes != 64 || parent < -1 || parent >= static_cast<int32_t> (index)) {
+	return false;
+    }
+    (void)name;
+    (void)flags;
+
+    const glm::mat4 bindLocal = readFileMatrix (cur);
+    if (!cur.ok || !matrixIsFinite (bindLocal)) {
+	return false;
+    }
+
+    // Per-bone JSON metadata follows the matrix before the next bone name.
+    const std::string metadata = cur.readCString ();
+    if (!cur.ok || (!metadata.empty () && metadata.front () != '{')) {
+	return false;
+    }
+
+    const glm::mat4 world = parent >= 0 ? bindWorld[static_cast<size_t> (parent)] * bindLocal : bindLocal;
+    const glm::mat4 inverse = glm::inverse (world);
+    if (!matrixIsFinite (inverse)) {
+	return false;
+    }
+
+    bindWorld.push_back (world);
+    bone = PuppetModel::Bone { .parent = parent, .bindLocal = bindLocal, .bindWorldInverse = inverse };
+    return true;
+}
+
+bool parseMdls0004Header (
+    const std::vector<char>& data, size_t mdlsOffset, size_t requiredBones, uint32_t& mdlaOffset, uint32_t& boneCount,
+    Cursor& header
 ) {
     constexpr size_t markerLength = 8;
     if (mdlsOffset + markerLength + 1 + 2 * sizeof (uint32_t) > data.size ()
@@ -177,9 +227,9 @@ bool parseMdls0004Skeleton (
 	return false;
     }
 
-    Cursor header { data.data (), data.size (), mdlsOffset + markerLength + 1 };
-    const uint32_t mdlaOffset = header.read<uint32_t> ();
-    const uint32_t boneCount = header.read<uint32_t> ();
+    header = Cursor { data.data (), data.size (), mdlsOffset + markerLength + 1 };
+    mdlaOffset = header.read<uint32_t> ();
+    boneCount = header.read<uint32_t> ();
     if (!header.ok || mdlaOffset <= header.off || mdlaOffset > data.size () || data.size () - mdlaOffset < 4
 	|| boneCount < requiredBones || boneCount == 0 || boneCount > 512) {
 	return false;
@@ -189,7 +239,21 @@ bool parseMdls0004Skeleton (
     // Some valid MDLS0004 packages point at the MDAT chunk immediately after
     // the bone records; their MDLA animation chunk follows later in the file.
     const bool pointsToMdat = std::memcmp (data.data () + mdlaOffset, "MDAT", 4) == 0;
-    if (!pointsToMdla && !pointsToMdat) {
+    return pointsToMdla || pointsToMdat;
+}
+
+/**
+ * MDLS0004 stores an absolute MDLA offset, the bone count, and variable-sized
+ * bone records (name, flags, parent, matrix, metadata). The legacy heuristic
+ * below assumes adjacent fixed-size records and cannot walk this layout.
+ */
+bool parseMdls0004Skeleton (
+    const std::vector<char>& data, size_t mdlsOffset, size_t requiredBones, std::vector<PuppetModel::Bone>& bones
+) {
+    Cursor header { data.data (), data.size (), 0 };
+    uint32_t mdlaOffset = 0;
+    uint32_t boneCount = 0;
+    if (!parseMdls0004Header (data, mdlsOffset, requiredBones, mdlaOffset, boneCount, header)) {
 	return false;
     }
 
@@ -200,47 +264,11 @@ bool parseMdls0004Skeleton (
     bindWorld.reserve (boneCount);
 
     for (uint32_t index = 0; index < boneCount; ++index) {
-	const std::string name = cur.readCString ();
-	const uint32_t flags = cur.read<uint32_t> ();
-	const int32_t parent = cur.read<int32_t> ();
-	const uint32_t matrixBytes = cur.read<uint32_t> ();
-	// MDLS0004 may contain unnamed helper bones. Names are not used by the
-	// renderer (channels and mesh weights address bones by index), so keep the
-	// record if its terminator, matrix and hierarchy are structurally valid.
-	if (!cur.ok || matrixBytes != 64 || parent < -1 || parent >= static_cast<int32_t> (index)) {
+	PuppetModel::Bone bone;
+	if (!readMdls0004Bone (cur, index, bindWorld, bone)) {
 	    return false;
 	}
-	(void)flags;
-
-	const glm::mat4 bindLocal = readFileMatrix (cur);
-	if (!cur.ok) {
-	    return false;
-	}
-	for (int column = 0; column < 4; ++column) {
-	    for (int row = 0; row < 4; ++row) {
-		if (!std::isfinite (bindLocal[column][row])) {
-		    return false;
-		}
-	    }
-	}
-
-	// Per-bone JSON metadata follows the matrix before the next bone name.
-	const std::string metadata = cur.readCString ();
-	if (!cur.ok || (!metadata.empty () && metadata.front () != '{')) {
-	    return false;
-	}
-
-	const glm::mat4 world = parent >= 0 ? bindWorld[static_cast<size_t> (parent)] * bindLocal : bindLocal;
-	const glm::mat4 inverse = glm::inverse (world);
-	for (int column = 0; column < 4; ++column) {
-	    for (int row = 0; row < 4; ++row) {
-		if (!std::isfinite (inverse[column][row])) {
-		    return false;
-		}
-	    }
-	}
-	bindWorld.push_back (world);
-	parsed.push_back (PuppetModel::Bone { .parent = parent, .bindLocal = bindLocal, .bindWorldInverse = inverse });
+	parsed.push_back (bone);
     }
 
     if (parsed.size () < requiredBones) {
