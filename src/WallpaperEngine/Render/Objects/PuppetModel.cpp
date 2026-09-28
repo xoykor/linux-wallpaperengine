@@ -621,6 +621,303 @@ PuppetModel::Key sampleChannel (const std::vector<PuppetModel::Key>& channel, fl
 			      .scale = glm::mix (a.scale, b.scale, t) };
 }
 
+
+struct SkinnedLayout {
+    size_t stride { 80 };
+    size_t idxOff { 40 };
+    size_t weightOff { 56 };
+    size_t uvOff { 72 };
+};
+
+struct MeshBlock {
+    SkinnedLayout layout {};
+    size_t vertexStride { 80 };
+    size_t verticesOffset { 0 };
+    uint32_t vertexBytes { 0 };
+    uint32_t indexBytes { 0 };
+};
+
+enum class StructuredRecordResult { Invalid, Continue, Found };
+
+uint32_t parseMdlvVersion (const std::vector<char>& data) {
+    uint32_t version = 0;
+    for (size_t digit = 4; digit < 8 && digit < data.size (); digit++) {
+	const char value = data[digit];
+	if (value < '0' || value > '9') {
+	    return 0;
+	}
+	version = version * 10 + static_cast<uint32_t> (value - '0');
+    }
+    return version;
+}
+
+size_t findMaterialsEnd (const std::vector<char>& data) {
+    const size_t marker = findMarker (data, "materials/");
+    if (marker >= data.size ()) {
+	return 9;
+    }
+    const auto* end
+	= static_cast<const char*> (std::memchr (data.data () + marker, 0, data.size () - marker));
+    return end != nullptr ? static_cast<size_t> (end - data.data ()) : 9;
+}
+
+bool readMeshU32 (const std::vector<char>& data, size_t& offset, uint32_t& out) {
+    if (offset + sizeof (uint32_t) > data.size ()) {
+	return false;
+    }
+    std::memcpy (&out, data.data () + offset, sizeof (out));
+    offset += sizeof (uint32_t);
+    return true;
+}
+
+bool skipMaterialNames (const std::vector<char>& data, size_t& offset, uint32_t materialCount) {
+    for (uint32_t material = 0; material < materialCount; material++) {
+	while (offset < data.size () && static_cast<unsigned char> (data[offset]) <= 0x20) {
+	    offset++;
+	}
+	if (offset >= data.size ()) {
+	    return false;
+	}
+	const auto* nameEnd
+	    = static_cast<const char*> (std::memchr (data.data () + offset, 0, data.size () - offset));
+	if (nameEnd == nullptr) {
+	    return false;
+	}
+	offset = static_cast<size_t> (nameEnd - data.data ()) + 1;
+    }
+    return true;
+}
+
+bool buildSkinnedLayout (
+    uint32_t tag, SkinnedLayout& layout, size_t& stride, bool& hasIndices, bool& hasWeights, bool& hasUv
+) {
+    constexpr uint32_t KNOWN_VERTEX_BITS = 0x0181002F;
+    struct AttributeSize {
+	uint32_t bit;
+	size_t bytes;
+    };
+    constexpr AttributeSize ATTRIBUTES[] = {
+	{ 0x00000002, 12 }, { 0x00000004, 16 }, { 0x00010000, 4 }, { 0x00800000, 16 },
+	{ 0x01000000, 16 }, { 0x00000020, 16 }, { 0x00000008, 8 },
+    };
+    if ((tag & ~KNOWN_VERTEX_BITS) != 0) {
+	return false;
+    }
+
+    stride = 12;
+    for (const auto& attribute : ATTRIBUTES) {
+	if ((tag & attribute.bit) == 0) {
+	    continue;
+	}
+	if (attribute.bit == 0x00800000u) {
+	    layout.idxOff = stride;
+	    hasIndices = true;
+	} else if (attribute.bit == 0x01000000u) {
+	    layout.weightOff = stride;
+	    hasWeights = true;
+	} else if (attribute.bit == 0x00000008u) {
+	    layout.uvOff = stride;
+	    hasUv = true;
+	}
+	stride += attribute.bytes;
+    }
+    layout.stride = stride;
+    return true;
+}
+
+StructuredRecordResult parseStructuredMeshRecord (
+    const std::vector<char>& data, uint32_t mdlvVersion, uint32_t headerTag, uint32_t materialCount,
+    size_t& offset, MeshBlock& mesh
+) {
+    if (!skipMaterialNames (data, offset, materialCount)) {
+	return StructuredRecordResult::Invalid;
+    }
+
+    uint32_t flags = 0;
+    if (!readMeshU32 (data, offset, flags)) {
+	return StructuredRecordResult::Invalid;
+    }
+    if ((flags & 0x2u) != 0) {
+	uint32_t extra = 0;
+	if (!readMeshU32 (data, offset, extra)) {
+	    return StructuredRecordResult::Invalid;
+	}
+    }
+    if (mdlvVersion >= 17) {
+	offset += 6 * sizeof (float);
+    }
+
+    uint32_t tag = headerTag;
+    if (mdlvVersion >= 16 && !readMeshU32 (data, offset, tag)) {
+	return StructuredRecordResult::Invalid;
+    }
+
+    SkinnedLayout layout {};
+    size_t stride = 0;
+    bool hasIndices = false;
+    bool hasWeights = false;
+    bool hasUv = false;
+    if (!buildSkinnedLayout (tag, layout, stride, hasIndices, hasWeights, hasUv)) {
+	return StructuredRecordResult::Invalid;
+    }
+
+    uint32_t vertexBytes = 0;
+    if (!readMeshU32 (data, offset, vertexBytes) || vertexBytes == 0 || vertexBytes % stride != 0
+	|| offset + vertexBytes > data.size ()) {
+	return StructuredRecordResult::Invalid;
+    }
+    const size_t verticesOffset = offset;
+    offset += vertexBytes;
+
+    const size_t indexWidth = (flags & 0x1u) != 0 ? 4 : 2;
+    uint32_t indexBytes = 0;
+    if (!readMeshU32 (data, offset, indexBytes) || indexBytes == 0 || indexBytes % (indexWidth * 3) != 0
+	|| offset + indexBytes > data.size ()) {
+	return StructuredRecordResult::Invalid;
+    }
+    offset += indexBytes;
+
+    if (!hasIndices || !hasWeights || !hasUv) {
+	return StructuredRecordResult::Continue;
+    }
+    if (indexWidth != 2) {
+	sLog.error ("Puppet mesh uses 32-bit indices - unsupported, falling back");
+	return StructuredRecordResult::Invalid;
+    }
+
+    mesh.layout = layout;
+    mesh.vertexStride = stride;
+    mesh.verticesOffset = verticesOffset;
+    mesh.vertexBytes = vertexBytes;
+    mesh.indexBytes = indexBytes;
+    return StructuredRecordResult::Found;
+}
+
+bool walkStructuredMesh (const std::vector<char>& data, uint32_t mdlvVersion, MeshBlock& mesh) {
+    const size_t magicEnd = std::string_view (data.data (), data.size ()).find ('\0');
+    if (magicEnd == std::string_view::npos) {
+	return false;
+    }
+    size_t offset = magicEnd + 1;
+
+    uint32_t headerTag = 0;
+    uint32_t materialCount = 0;
+    uint32_t submeshCount = 0;
+    if (!readMeshU32 (data, offset, headerTag) || !readMeshU32 (data, offset, materialCount)
+	|| !readMeshU32 (data, offset, submeshCount)) {
+	return false;
+    }
+    if (submeshCount == 0 || submeshCount > 16 || materialCount == 0 || materialCount > 16) {
+	return false;
+    }
+
+    for (uint32_t record = 0; record < submeshCount; record++) {
+	const auto result
+	    = parseStructuredMeshRecord (data, mdlvVersion, headerTag, materialCount, offset, mesh);
+	if (result == StructuredRecordResult::Found) {
+	    return true;
+	}
+	if (result == StructuredRecordResult::Invalid) {
+	    return false;
+	}
+    }
+    return false;
+}
+
+bool scanMeshRange (
+    const std::vector<char>& data, size_t from, size_t to, size_t skeletonStart, MeshBlock& mesh
+) {
+    for (size_t offset = from; offset + sizeof (uint32_t) < skeletonStart && offset < to; offset++) {
+	uint32_t candidate = 0;
+	std::memcpy (&candidate, data.data () + offset, sizeof (candidate));
+	if (candidate == 0 || candidate % mesh.vertexStride != 0) {
+	    continue;
+	}
+
+	const size_t indexLengthOffset = offset + sizeof (uint32_t) + candidate;
+	if (indexLengthOffset + sizeof (uint32_t) > skeletonStart) {
+	    continue;
+	}
+	uint32_t candidateIndexBytes = 0;
+	std::memcpy (
+	    &candidateIndexBytes, data.data () + indexLengthOffset, sizeof (candidateIndexBytes)
+	);
+	if (candidateIndexBytes == 0 || candidateIndexBytes % (sizeof (uint16_t) * 3) != 0
+	    || indexLengthOffset + sizeof (uint32_t) + candidateIndexBytes > data.size ()) {
+	    continue;
+	}
+
+	mesh.verticesOffset = offset + sizeof (uint32_t);
+	mesh.vertexBytes = candidate;
+	mesh.indexBytes = candidateIndexBytes;
+	return true;
+    }
+    return false;
+}
+
+bool findSkinnedMesh (const std::vector<char>& data, MeshBlock& mesh) {
+    const uint32_t mdlvVersion = parseMdlvVersion (data);
+    if (walkStructuredMesh (data, mdlvVersion, mesh)) {
+	return true;
+    }
+
+    const size_t skeletonStart = findMarker (data, "MDLS");
+    const size_t materialsEnd = findMaterialsEnd (data);
+    if (scanMeshRange (data, materialsEnd, materialsEnd + 128, skeletonStart, mesh)) {
+	return true;
+    }
+    return scanMeshRange (data, 9, skeletonStart, mesh);
+}
+
+bool decodeSkinnedMesh (
+    const std::vector<char>& data, const MeshBlock& mesh, PuppetModel& model, std::string& error
+) {
+    const size_t vertexCount = mesh.vertexBytes / mesh.vertexStride;
+    model.positions.reserve (vertexCount);
+    model.uvs.reserve (vertexCount);
+    model.blendIndices.reserve (vertexCount);
+    model.blendWeights.reserve (vertexCount);
+
+    for (size_t i = 0; i < vertexCount; i++) {
+	const char* vertex = data.data () + mesh.verticesOffset + i * mesh.vertexStride;
+	float position[3];
+	std::memcpy (position, vertex, sizeof (position));
+	uint32_t indices[4];
+	std::memcpy (indices, vertex + mesh.layout.idxOff, sizeof (indices));
+	float weights[4];
+	std::memcpy (weights, vertex + mesh.layout.weightOff, sizeof (weights));
+	float uv[2];
+	std::memcpy (uv, vertex + mesh.layout.uvOff, sizeof (uv));
+	model.positions.emplace_back (position[0], position[1], position[2]);
+	model.blendIndices.emplace_back (indices[0], indices[1], indices[2], indices[3]);
+	model.blendWeights.emplace_back (weights[0], weights[1], weights[2], weights[3]);
+	model.uvs.emplace_back (uv[0], uv[1]);
+    }
+
+    const size_t indicesOffset = mesh.verticesOffset + mesh.vertexBytes + sizeof (uint32_t);
+    const size_t indexCount = mesh.indexBytes / sizeof (uint16_t);
+    model.indices.resize (indexCount);
+    std::memcpy (model.indices.data (), data.data () + indicesOffset, mesh.indexBytes);
+    if (std::any_of (model.indices.begin (), model.indices.end (), [vertexCount] (uint16_t index) {
+	    return index >= vertexCount;
+	})) {
+	error = "mesh index out of range";
+	return false;
+    }
+    return true;
+}
+
+void loadOptionalPuppetData (const std::vector<char>& data, PuppetModel& model) {
+    if (!parseSkeleton (data, model)) {
+	model.bones.clear ();
+	return;
+    }
+    parseAttachments (data, model);
+    if (!parseAnimations (data, model)) {
+	model.clips.clear ();
+    }
+}
+
 } // namespace
 
 const PuppetModel::Clip* PuppetModel::findClip (uint32_t id) const {
@@ -742,246 +1039,22 @@ void PuppetModel::skinPositions (const std::vector<glm::mat4>& skin, std::vector
 }
 
 std::optional<PuppetModel> PuppetModel::parse (const std::vector<char>& data, std::string& error) {
-    struct SkinnedLayout {
-	size_t stride = 80;
-	size_t idxOff = 40;
-	size_t weightOff = 56;
-	size_t uvOff = 72;
-    };
-    SkinnedLayout layout {};
-    size_t vertexStride = 80;
-
     if (data.size () < 32 || std::memcmp (data.data (), "MDLV", 4) != 0) {
 	error = "not an MDLV container";
 	return std::nullopt;
     }
 
-    uint32_t mdlvVersion = 0;
-    for (size_t digit = 4; digit < 8 && digit < data.size (); digit++) {
-	const char c = data[digit];
-	if (c < '0' || c > '9') {
-	    mdlvVersion = 0;
-	    break;
-	}
-	mdlvVersion = mdlvVersion * 10 + static_cast<uint32_t> (c - '0');
-    }
-
-    // Mesh block: scan from the end of the material path for
-    // [u32 vertexBytes][vertices][u32 indexBytes][u16 indices] with stride-80 vertices
-    const size_t skeletonStart = findMarker (data, "MDLS");
-    const size_t materialsEnd = [&data] () -> size_t {
-	const size_t m = findMarker (data, "materials/");
-	if (m >= data.size ()) {
-	    return 9;
-	}
-	const auto* end = static_cast<const char*> (std::memchr (data.data () + m, 0, data.size () - m));
-	return end != nullptr ? static_cast<size_t> (end - data.data ()) : 9;
-    }();
-
-    size_t verticesOffset = 0;
-    uint32_t vertexBytes = 0;
-    uint32_t indexBytes = 0;
-
-    const auto structuredWalk = [&] () -> bool {
-	constexpr uint32_t KNOWN_VERTEX_BITS = 0x0181002F;
-	struct AttributeSize {
-	    uint32_t bit;
-	    size_t bytes;
-	};
-	constexpr AttributeSize ATTRIBUTES[] = {
-	    { 0x00000002, 12 }, { 0x00000004, 16 }, { 0x00010000, 4 }, { 0x00800000, 16 },
-	    { 0x01000000, 16 }, { 0x00000020, 16 }, { 0x00000008, 8 },
-	};
-
-	const size_t magicEnd = std::string_view (data.data (), data.size ()).find ('\0');
-	if (magicEnd == std::string_view::npos) {
-	    return false;
-	}
-	size_t offset = magicEnd + 1;
-
-	const auto readU32 = [&] (uint32_t& out) -> bool {
-	    if (offset + sizeof (uint32_t) > data.size ()) {
-		return false;
-	    }
-	    std::memcpy (&out, data.data () + offset, sizeof (out));
-	    offset += sizeof (uint32_t);
-	    return true;
-	};
-
-	uint32_t headerTag = 0, materialCount = 0, submeshCount = 0;
-	if (!readU32 (headerTag) || !readU32 (materialCount) || !readU32 (submeshCount)) {
-	    return false;
-	}
-	if (submeshCount == 0 || submeshCount > 16 || materialCount == 0 || materialCount > 16) {
-	    return false;
-	}
-
-	for (uint32_t record = 0; record < submeshCount; record++) {
-	    for (uint32_t material = 0; material < materialCount; material++) {
-		while (offset < data.size () && static_cast<unsigned char> (data[offset]) <= 0x20) {
-		    offset++;
-		}
-		const auto* nameEnd
-		    = static_cast<const char*> (std::memchr (data.data () + offset, 0, data.size () - offset));
-		if (nameEnd == nullptr) {
-		    return false;
-		}
-		offset = (nameEnd - data.data ()) + 1;
-	    }
-
-	    uint32_t flags = 0;
-	    if (!readU32 (flags)) {
-		return false;
-	    }
-	    if ((flags & 0x2u) != 0) {
-		uint32_t extra = 0;
-		if (!readU32 (extra)) {
-		    return false;
-		}
-	    }
-	    if (mdlvVersion >= 17) {
-		offset += 6 * sizeof (float);
-	    }
-
-	    uint32_t tag = headerTag;
-	    if (mdlvVersion >= 16 && !readU32 (tag)) {
-		return false;
-	    }
-	    if ((tag & ~KNOWN_VERTEX_BITS) != 0) {
-		return false;
-	    }
-
-	    SkinnedLayout recordLayout {};
-	    size_t recordStride = 12; // implicit position
-	    bool hasIndices = false, hasWeights = false, hasUv = false;
-	    for (const auto& attribute : ATTRIBUTES) {
-		if ((tag & attribute.bit) == 0) {
-		    continue;
-		}
-		if (attribute.bit == 0x00800000u) {
-		    recordLayout.idxOff = recordStride;
-		    hasIndices = true;
-		} else if (attribute.bit == 0x01000000u) {
-		    recordLayout.weightOff = recordStride;
-		    hasWeights = true;
-		} else if (attribute.bit == 0x00000008u) {
-		    recordLayout.uvOff = recordStride;
-		    hasUv = true;
-		}
-		recordStride += attribute.bytes;
-	    }
-	    recordLayout.stride = recordStride;
-
-	    uint32_t recordVertexBytes = 0;
-	    if (!readU32 (recordVertexBytes) || recordVertexBytes == 0 || recordVertexBytes % recordStride != 0
-		|| offset + recordVertexBytes > data.size ()) {
-		return false;
-	    }
-	    const size_t recordVerticesOffset = offset;
-	    offset += recordVertexBytes;
-
-	    const size_t indexWidth = (flags & 0x1u) != 0 ? 4 : 2;
-	    uint32_t recordIndexBytes = 0;
-	    if (!readU32 (recordIndexBytes) || recordIndexBytes == 0 || recordIndexBytes % (indexWidth * 3) != 0
-		|| offset + recordIndexBytes > data.size ()) {
-		return false;
-	    }
-	    offset += recordIndexBytes;
-
-	    if (hasIndices && hasWeights && hasUv) {
-		if (indexWidth != 2) {
-		    sLog.error ("Puppet mesh uses 32-bit indices - unsupported, falling back");
-		    return false;
-		}
-		verticesOffset = recordVerticesOffset;
-		vertexBytes = recordVertexBytes;
-		indexBytes = recordIndexBytes;
-		vertexStride = recordStride;
-		layout = recordLayout;
-		return true;
-	    }
-	}
-	return false;
-    };
-
-    const bool structuredFound = structuredWalk ();
-
-    const auto scanRange = [&] (size_t from, size_t to) {
-	for (size_t offset = from; offset + sizeof (uint32_t) < skeletonStart && offset < to; offset++) {
-	    uint32_t candidate = 0;
-	    std::memcpy (&candidate, data.data () + offset, sizeof (candidate));
-	    if (candidate == 0 || candidate % vertexStride != 0) {
-		continue;
-	    }
-	    const size_t indexLengthOffset = offset + sizeof (uint32_t) + candidate;
-	    if (indexLengthOffset + sizeof (uint32_t) > skeletonStart) {
-		continue;
-	    }
-	    uint32_t candidateIndexBytes = 0;
-	    std::memcpy (&candidateIndexBytes, data.data () + indexLengthOffset, sizeof (candidateIndexBytes));
-	    if (candidateIndexBytes == 0 || candidateIndexBytes % (sizeof (uint16_t) * 3) != 0
-		|| indexLengthOffset + sizeof (uint32_t) + candidateIndexBytes > data.size ()) {
-		continue;
-	    }
-	    verticesOffset = offset + sizeof (uint32_t);
-	    vertexBytes = candidate;
-	    indexBytes = candidateIndexBytes;
-	    return true;
-	}
-	return false;
-    };
-    if (!structuredFound && !scanRange (materialsEnd, materialsEnd + 128)) {
-	scanRange (9, skeletonStart);
-    }
-
-    if (vertexBytes == 0) {
+    MeshBlock mesh;
+    if (!findSkinnedMesh (data, mesh)) {
 	error = "no skinned mesh block found (structured walk + stride-80 scan)";
 	return std::nullopt;
     }
 
     PuppetModel model;
-    const size_t vertexCount = vertexBytes / vertexStride;
-    model.positions.reserve (vertexCount);
-    model.uvs.reserve (vertexCount);
-    model.blendIndices.reserve (vertexCount);
-    model.blendWeights.reserve (vertexCount);
-
-    for (size_t i = 0; i < vertexCount; i++) {
-	const char* v = data.data () + verticesOffset + i * vertexStride;
-	float pos[3];
-	std::memcpy (pos, v, sizeof (pos));
-	uint32_t idx[4];
-	std::memcpy (idx, v + layout.idxOff, sizeof (idx));
-	float weights[4];
-	std::memcpy (weights, v + layout.weightOff, sizeof (weights));
-	float uv[2];
-	std::memcpy (uv, v + layout.uvOff, sizeof (uv));
-	model.positions.emplace_back (pos[0], pos[1], pos[2]);
-	model.blendIndices.emplace_back (idx[0], idx[1], idx[2], idx[3]);
-	model.blendWeights.emplace_back (weights[0], weights[1], weights[2], weights[3]);
-	model.uvs.emplace_back (uv[0], uv[1]);
+    if (!decodeSkinnedMesh (data, mesh, model, error)) {
+	return std::nullopt;
     }
 
-    const size_t indicesOffset = verticesOffset + vertexBytes + sizeof (uint32_t);
-    const size_t indexCount = indexBytes / sizeof (uint16_t);
-    model.indices.resize (indexCount);
-    std::memcpy (model.indices.data (), data.data () + indicesOffset, indexBytes);
-    for (const auto index : model.indices) {
-	if (index >= vertexCount) {
-	    error = "mesh index out of range";
-	    return std::nullopt;
-	}
-    }
-
-    // Skeleton + animations degrade gracefully: a puppet without them renders bind pose
-    if (parseSkeleton (data, model)) {
-	parseAttachments (data, model);
-	if (!parseAnimations (data, model)) {
-	    model.clips.clear ();
-	}
-    } else {
-	model.bones.clear ();
-    }
-
+    loadOptionalPuppetData (data, model);
     return model;
 }
