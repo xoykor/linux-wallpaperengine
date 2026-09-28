@@ -1769,28 +1769,21 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             _clear(self.hero_art)
             self.hero_art.append(_preview(item.get("preview"), 400, 225))
 
-    def _show_details(self, wallpaper_id: str | None) -> None:
-        self.selected_id = wallpaper_id if wallpaper_id in self.catalog else None
-        self.detail_shell.set_visible(self.selected_id is not None)
-        self._last_pane_width = None
-        GLib.idle_add(self._update_responsive_once)
-        _clear(self.detail)
-        if self.selected_id is None:
-            message = _label(
-                tr("Escolha um wallpaper na biblioteca para ver os detalhes e aplicar na tela."),
-                css="empty-state",
-                wrap=True,
-            )
-            message.set_margin_top(40)
-            self.detail.append(message)
-            return
+    def _show_empty_details(self) -> None:
+        message = _label(
+            tr("Escolha um wallpaper na biblioteca para ver os detalhes e aplicar na tela."),
+            css="empty-state",
+            wrap=True,
+        )
+        message.set_margin_top(40)
+        self.detail.append(message)
 
-        selected = self.selected_id
-        item = self.catalog[selected]
+    def _append_detail_header(self, selected: str, item: dict[str, object]) -> None:
         self.detail.append(_label(tr("WALLPAPER SELECIONADO"), css="page-kicker"))
         preview_width = 310 if self._compact_mode in (None, "wide") else 240
         self.detail.append(_preview(item.get("preview"), preview_width, round(preview_width * 9 / 16)))
         self.detail.append(_label(str(item.get("title") or selected), css="detail-title", wrap=True))
+
         metadata = Gtk.FlowBox()
         metadata.set_selection_mode(Gtk.SelectionMode.NONE)
         metadata.set_min_children_per_line(1)
@@ -1802,6 +1795,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         if self.status.get("current_id") == selected and self.status.get("renderer_running"):
             metadata.append(_badge(tr("● EM USO"), "pill-accent"))
         self.detail.append(metadata)
+
         tags = item.get("tags", [])
         if tags:
             self.detail.append(_label(" · ".join(str(tag) for tag in tags[:8]), css="subtle", wrap=True))
@@ -1823,89 +1817,118 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         favorite_button.connect("clicked", lambda *_: self._toggle_favorite(selected))
         self.detail.append(favorite_button)
 
+    def _append_detail_properties(self, selected: str, item: dict[str, object]) -> None:
         properties = item.get("properties", {})
-        if isinstance(properties, dict) and properties:
-            self.detail.append(_label(tr("OPÇÕES DO WALLPAPER"), css="page-kicker"))
-            self.detail.append(_label(
-                tr("Opções booleanas definidas pelo autor do wallpaper."),
-                css="caption", wrap=True,
-            ))
-            saved_properties = self.config.get("wallpaper_properties", {}).get(selected, {})
-            for name, metadata in properties.items():
-                if not isinstance(metadata, dict):
-                    continue
-                row = _box(spacing=8)
-                row.set_valign(Gtk.Align.CENTER)
-                row.add_css_class("settings-row")
-                label = _label(str(metadata.get("label") or name), wrap=True)
-                label.set_hexpand(True)
-                row.append(label)
-                option = Gtk.Switch()
-                option.set_valign(Gtk.Align.CENTER)
-                option.set_active(bool(saved_properties.get(name, metadata.get("value", False))))
-                option.set_tooltip_text(str(name))
-                option.connect(
-                    "notify::active",
-                    lambda switch, _pspec, item_id=selected, property_name=name:
-                        self._wallpaper_property_changed(switch, item_id, property_name),
-                )
-                row.append(option)
-                self.detail.append(row)
+        if not isinstance(properties, dict) or not properties:
+            return
 
+        self.detail.append(_label(tr("OPÇÕES DO WALLPAPER"), css="page-kicker"))
+        self.detail.append(_label(
+            tr("Opções booleanas definidas pelo autor do wallpaper."),
+            css="caption", wrap=True,
+        ))
+        saved_properties = self.config.get("wallpaper_properties", {}).get(selected, {})
+        for name, metadata in properties.items():
+            if not isinstance(metadata, dict):
+                continue
+            row = _box(spacing=8)
+            row.set_valign(Gtk.Align.CENTER)
+            row.add_css_class("settings-row")
+            label = _label(str(metadata.get("label") or name), wrap=True)
+            label.set_hexpand(True)
+            row.append(label)
+            option = Gtk.Switch()
+            option.set_valign(Gtk.Align.CENTER)
+            option.set_active(bool(saved_properties.get(name, metadata.get("value", False))))
+            option.set_tooltip_text(str(name))
+            option.connect(
+                "notify::active",
+                lambda switch, _pspec, item_id=selected, property_name=name:
+                    self._wallpaper_property_changed(switch, item_id, property_name),
+            )
+            row.append(option)
+            self.detail.append(row)
+
+    def _append_detail_playlists(self, selected: str) -> None:
         self.detail.append(_label(tr("PLAYLISTS"), css="page-kicker"))
         playlist_names = list((self.config.get("playlists") or {}).keys())
-        if playlist_names:
-            add_row = _box(vertical=True, spacing=7)
-            display_names = [name if len(name) <= 25 else name[:24] + "…" for name in playlist_names]
-            playlist_picker = Gtk.DropDown.new_from_strings(display_names)
-            if self.playlist_name in playlist_names:
-                playlist_picker.set_selected(playlist_names.index(self.playlist_name))
-            playlist_picker.set_hexpand(True)
-            add_row.append(playlist_picker)
-            add_playlist = Gtk.Button(label=tr("Adicionar"))
-            add_playlist.connect(
-                "clicked", lambda *_: self._playlist_add_id(
-                    playlist_names[playlist_picker.get_selected()], selected
-                )
-            )
-            add_row.append(add_playlist)
-            self.detail.append(add_row)
-        else:
+        if not playlist_names:
             create_playlist = _icon_button(tr("Criar primeira playlist"), "list-add-symbolic")
-            create_playlist.connect("clicked", lambda *_: self._playlist_name_dialog(tr("Criar playlist"), None))
+            create_playlist.connect(
+                "clicked", lambda *_: self._playlist_name_dialog(tr("Criar playlist"), None)
+            )
             self.detail.append(create_playlist)
+            return
 
+        add_row = _box(vertical=True, spacing=7)
+        display_names = [name if len(name) <= 25 else name[:24] + "…" for name in playlist_names]
+        playlist_picker = Gtk.DropDown.new_from_strings(display_names)
+        if self.playlist_name in playlist_names:
+            playlist_picker.set_selected(playlist_names.index(self.playlist_name))
+        playlist_picker.set_hexpand(True)
+        add_row.append(playlist_picker)
+        add_playlist = Gtk.Button(label=tr("Adicionar"))
+        add_playlist.connect(
+            "clicked", lambda *_: self._playlist_add_id(
+                playlist_names[playlist_picker.get_selected()], selected
+            )
+        )
+        add_row.append(add_playlist)
+        self.detail.append(add_row)
+
+    def _append_detail_screens(self, selected: str) -> None:
         screens = self.status.get("screens") or []
+        if not screens:
+            return
+
         assignments = self.config.get("screen_assignments", {})
-        if screens:
-            self.detail.append(_label(tr("TELAS"), css="page-kicker"))
-            for screen in screens:
-                row = _box(spacing=6)
-                row.set_valign(Gtk.Align.CENTER)
-                row.add_css_class("settings-row")
-                name = _label(str(screen))
-                name.set_hexpand(True)
-                row.append(name)
-                assigned = assignments.get(screen)
-                if assigned == selected:
-                    button = Gtk.Button(label=tr("Liberar"))
-                    button.connect(
-                        "clicked", lambda _button, target=screen: self._command(
-                            "assign", screen=target, id=None
-                        )
+        self.detail.append(_label(tr("TELAS"), css="page-kicker"))
+        for screen in screens:
+            row = _box(spacing=6)
+            row.set_valign(Gtk.Align.CENTER)
+            row.add_css_class("settings-row")
+            name = _label(str(screen))
+            name.set_hexpand(True)
+            row.append(name)
+            assigned = assignments.get(screen)
+            if assigned == selected:
+                button = Gtk.Button(label=tr("Liberar"))
+                button.connect(
+                    "clicked", lambda _button, target=screen: self._command(
+                        "assign", screen=target, id=None
                     )
-                else:
-                    button = Gtk.Button(label=tr("Fixar aqui"))
-                    button.connect(
-                        "clicked", lambda _button, target=screen: self._command(
-                            "assign", screen=target, id=selected
-                        )
+                )
+            else:
+                button = Gtk.Button(label=tr("Fixar aqui"))
+                button.connect(
+                    "clicked", lambda _button, target=screen: self._command(
+                        "assign", screen=target, id=selected
                     )
-                row.append(button)
-                self.detail.append(row)
-                if assigned and assigned != selected:
-                    other = self.catalog.get(assigned, {}).get("title", assigned)
-                    self.detail.append(_label(tr("Fixado: {title}", title=other), css="caption", wrap=True))
+                )
+            row.append(button)
+            self.detail.append(row)
+            if assigned and assigned != selected:
+                other = self.catalog.get(assigned, {}).get("title", assigned)
+                self.detail.append(
+                    _label(tr("Fixado: {title}", title=other), css="caption", wrap=True)
+                )
+
+    def _show_details(self, wallpaper_id: str | None) -> None:
+        self.selected_id = wallpaper_id if wallpaper_id in self.catalog else None
+        self.detail_shell.set_visible(self.selected_id is not None)
+        self._last_pane_width = None
+        GLib.idle_add(self._update_responsive_once)
+        _clear(self.detail)
+        if self.selected_id is None:
+            self._show_empty_details()
+            return
+
+        selected = self.selected_id
+        item = self.catalog[selected]
+        self._append_detail_header(selected, item)
+        self._append_detail_properties(selected, item)
+        self._append_detail_playlists(selected)
+        self._append_detail_screens(selected)
         self._refresh_hero()
 
     def _toggle_favorite(self, wallpaper_id: str | None) -> None:
