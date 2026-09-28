@@ -100,13 +100,14 @@ ObjectUniquePtr ObjectParser::parseModelWithFallback (
     return std::make_unique<Object> (buildBaseData (it, project, id, "model-parse-failed"));
 }
 
-ObjectUniquePtr
-ObjectParser::parseCameraObject (const JSON& it, const Project& project, ObjectData base) {
+ObjectUniquePtr ObjectParser::parseCameraObject (
+    const JSON& it, const Project& project, ObjectData base, const std::string& camera
+) {
     const auto& properties = project.properties;
     return std::make_unique<CameraObject> (
 	std::move (base),
 	CameraObjectData {
-	    .camera = it.require<std::string> ("camera", "Camera object must have a camera"),
+	    .camera = camera,
 	    .path = it.optional ("path", std::string {}),
 	    .queueMode = it.optional ("queuemode", std::string ("random")),
 	    .fov = it.user ("fov", properties, 50.0f),
@@ -163,7 +164,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	return parseModelWithFallback (it, project, std::move (basedata), modelIt->get<std::string> ());
     }
     if (cameraIt != it.end () && cameraIt->is_string ()) {
-	return parseCameraObject (it, project, std::move (basedata));
+	return parseCameraObject (it, project, std::move (basedata), cameraIt->get<std::string> ());
     }
     if (lightIt != it.end ()) {
 	return parseLightObject (it, project, std::move (basedata));
