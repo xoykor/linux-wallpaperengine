@@ -244,7 +244,7 @@ class WallpaperDaemon:
         try:
             os.killpg(self.child_group, sig)
         except ProcessLookupError:
-            return
+            pass
 
     def _reap_child(self) -> None:
         if self.child is None:
@@ -620,7 +620,7 @@ class WallpaperDaemon:
             try:
                 client.sendall(json.dumps(response, ensure_ascii=False).encode("utf-8") + b"\n")
             except OSError:
-                return
+                pass
 
     def _open_socket(self) -> socket.socket:
         path = model.SOCKET_FILE
@@ -660,7 +660,7 @@ class WallpaperDaemon:
             if model.SOCKET_FILE.lstat().st_ino == self.socket_inode:
                 model.SOCKET_FILE.unlink()
         except OSError:
-            return
+            pass
 
     def _shutdown_child(self) -> None:
         if self.child is None:
@@ -676,7 +676,7 @@ class WallpaperDaemon:
             try:
                 self.child.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                self.child = None
+                pass
             self.child = None
             self.child_group = None
 
