@@ -136,8 +136,7 @@ protected:
     [[nodiscard]] int resolveEmitterControlPoint (const ParticleEmitter& emitter) const;
     [[nodiscard]] glm::vec3
     resolveEmitterSpawnOrigin (const glm::vec3& transformedEmitterOrigin, int controlPointIndex) const;
-    static uint32_t
-    accumulateRateEmission (float dt, float rate, bool limitOnePerFrame, float& emissionTimer);
+    static uint32_t accumulateRateEmission (float dt, float rate, bool limitOnePerFrame, float& emissionTimer);
     void initializeEmittedParticle (ParticleInstance& particle, float lifetime);
 
     // Initializer creators
