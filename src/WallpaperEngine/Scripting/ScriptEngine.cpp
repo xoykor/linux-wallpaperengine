@@ -111,7 +111,7 @@ JSValue ScriptEngine::anglesToJs (DynamicValue& value) const {
 						  : this->dynamicToJs (value);
 }
 
-static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source) {
+static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source, bool& updateErrorReported) {
     if (JS_IsException (val)) {
 	return;
     }
@@ -167,7 +167,11 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 	});
 
 	if (!JS_IsNumber (x) || !JS_IsNumber (y)) {
-	    sLog.exception ("Vector's x and y components must be numbers");
+	    if (!updateErrorReported) {
+		sLog.error ("Script returned an object without numeric x/y; keeping current value");
+		updateErrorReported = true;
+	    }
+	    return;
 	}
 
 	double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f, wVal = 0.0f;
@@ -758,7 +762,7 @@ void ScriptEngine::tick () {
 	    continue;
 	}
 
-	jsToDynamicValue (this->m_context, result, module.value);
+	jsToDynamicValue (this->m_context, result, module.value, module.updateErrorReported);
     }
 }
 

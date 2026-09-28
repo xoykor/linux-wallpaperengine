@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <glm/common.hpp>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,16 @@
 
 using namespace WallpaperEngine::Application;
 using WallpaperEngine::Data::JSON::JSON;
+
+namespace {
+float parseFiniteFloat (const std::string& value, const char* option) {
+    const float parsed = std::stof (value);
+    if (!std::isfinite (parsed)) {
+	sLog.exception ("Non-finite value for ", option, ": ", value);
+    }
+    return parsed;
+}
+}
 
 std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::string& raw) const {
     if (raw.empty ()) {
@@ -559,20 +570,21 @@ void ApplicationContext::loadSettingsFromArgv () {
     backgroundGroup.add_argument ("--offset-x")
 	.help ("UV X offset for the preceding output/span, or the default window when no output is selected")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const float offset = std::stof (value);
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+	    const float offset = parseFiniteFloat (value, "--offset-x");
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()) {
 		this->settings.general.screenOffsets[lastScreen].x = offset;
-	    else
+	    } else {
 		this->settings.render.window.uvOffset.x = offset;
+	    }
 	})
 	.append ();
     backgroundGroup.add_argument ("--offset-y")
 	.help ("UV Y offset for the preceding output/span, or the default window when no output is selected")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const float offset = std::stof (value);
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+	    const float offset = parseFiniteFloat (value, "--offset-y");
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()) {
 		this->settings.general.screenOffsets[lastScreen].y = offset;
-	    else
+	    } else
 		this->settings.render.window.uvOffset.y = offset;
 	})
 	.append ();
@@ -728,20 +740,22 @@ void ApplicationContext::loadSettingsFromArgv () {
     configurationGroup.add_argument ("--contrast")
 	.help ("Post-process contrast for the preceding output/span, or globally when no output is selected")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const float v = std::stof (value);
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+	    const float v = parseFiniteFloat (value, "--contrast");
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()) {
 		this->settings.general.screenPostProcess[lastScreen].contrast = v;
-	    else
+	    } else {
 		this->settings.render.postProcess.contrast = v;
+	    }
 	});
     configurationGroup.add_argument ("--saturation")
 	.help ("Post-process saturation for the preceding output/span, or globally when no output is selected")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
-	    const float v = std::stof (value);
-	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
+	    const float v = parseFiniteFloat (value, "--saturation");
+	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ()) {
 		this->settings.general.screenPostProcess[lastScreen].saturation = v;
-	    else
+	    } else {
 		this->settings.render.postProcess.saturation = v;
+	    }
 	});
     configurationGroup.add_argument ("--border-colour")
 	.help ("RGB border colour as r,g,b with components from 0 to 1")
@@ -749,11 +763,15 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    const auto first = value.find (',');
 	    const auto second = first == std::string::npos ? std::string::npos : value.find (',', first + 1);
 	    if (first == std::string::npos || second == std::string::npos
-		|| value.find (',', second + 1) != std::string::npos)
+		|| value.find (',', second + 1) != std::string::npos) {
 		sLog.exception ("--border-colour expects exactly three comma-separated values");
+	    }
 	    glm::vec3 colour { std::stof (value.substr (0, first)),
-		std::stof (value.substr (first + 1, second - first - 1)),
-		std::stof (value.substr (second + 1)) };
+			       std::stof (value.substr (first + 1, second - first - 1)),
+			       std::stof (value.substr (second + 1)) };
+	    if (!std::isfinite (colour.x) || !std::isfinite (colour.y) || !std::isfinite (colour.z)) {
+		sLog.exception ("--border-colour requires finite values");
+	    }
 	    colour = glm::clamp (colour, glm::vec3 (0.0f), glm::vec3 (1.0f));
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
 		this->settings.general.screenPostProcess[lastScreen].borderColour = colour;

@@ -246,7 +246,7 @@ def preview(
 
         def deliver_animation(animation: GdkPixbuf.PixbufAnimation | None) -> bool:
             state["loading"] = False
-            if animation is None or animation.is_static_image():
+            if not state["hovering"] or animation is None or animation.is_static_image():
                 return False
             state["animation"] = animation
             start_animation(animation)
@@ -282,6 +282,7 @@ def preview(
                 stack.set_visible_child_name("placeholder")
             state["iterator"] = None
             state["last_frame"] = None
+            state["animation"] = None
 
         controller.connect("enter", enter)
         controller.connect("leave", leave)

@@ -16,8 +16,13 @@
 #include <algorithm>
 #include <cctype>
 #include <glm/gtc/matrix_transform.hpp>
+#include <map>
+#include <optional>
 #include <ranges>
 #include <set>
+#include <string>
+#include <utility>
+#include <vector>
 
 extern float g_Time;
 extern float g_TimeLast;
@@ -27,6 +32,46 @@ using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Data::Model;
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Render::Wallpapers;
+
+namespace {
+std::optional<int> semanticEyeLayerRole (const std::string& name) {
+    std::vector<std::string> tokens;
+    std::string token;
+    for (size_t index = 0; index < name.size (); index++) {
+	const unsigned char value = static_cast<unsigned char> (name[index]);
+	const bool camelBoundary = std::isupper (value) && !token.empty ()
+	    && (std::islower (static_cast<unsigned char> (name[index - 1]))
+		|| std::isdigit (static_cast<unsigned char> (name[index - 1])));
+	if (!std::isalnum (value) || camelBoundary) {
+	    if (!token.empty ()) {
+		tokens.push_back (std::move (token));
+		token.clear ();
+	    }
+	}
+	if (std::isalnum (value)) {
+	    token.push_back (static_cast<char> (std::tolower (value)));
+	}
+    }
+    if (!token.empty ()) {
+	tokens.push_back (std::move (token));
+    }
+
+    const auto has
+	= [&tokens] (const std::string& expected) { return std::ranges::find (tokens, expected) != tokens.end (); };
+    const bool hasEye = has ("eye") || has ("eyeball");
+    const bool hasSide = has ("left") || has ("right");
+    if (has ("sclera") || has ("eyewhite") || has ("eyeballwhite") || (hasEye && has ("white"))) {
+	return 0;
+    }
+    if (has ("iris") && (hasEye || hasSide || tokens.size () == 1)) {
+	return 1;
+    }
+    if (has ("pupil") && (hasEye || hasSide || tokens.size () == 1)) {
+	return 2;
+    }
+    return std::nullopt;
+}
+}
 
 CScene::CScene (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
@@ -113,58 +158,39 @@ CScene::CScene (
 	this->addObjectToRenderOrder (*object);
     }
 
-    // Some Workshop scenes put semantically named white eye layers after the
-    // iris layers. These image passes have depth testing disabled, so that
-    // serialized order paints opaque sclera pixels over the iris. Preserve the
-    // authored positions of all other objects and normalize only the eye stack.
-    std::vector<std::pair<size_t, int>> eyeLayerPositions;
+    // Some scenes serialize eye-white images after their iris images. Keep the
+    // generic correction local to each parent group and preserve every other
+    // object's authored render position.
+    std::map<std::optional<int>, std::vector<std::pair<size_t, int>>> eyeLayerPositions;
     for (size_t index = 0; index < this->m_objectsByRenderOrder.size (); index++) {
 	const auto& object = this->m_objectsByRenderOrder[index]->getObject ();
 	if (!object.is<Image> ()) {
 	    continue;
 	}
-
-	std::string name = object.name;
-	std::ranges::transform (name, name.begin (), [] (unsigned char value) {
-	    return static_cast<char> (std::tolower (value));
-	});
-	if (name.find ("sclera") != std::string::npos || name.find ("eyewhite") != std::string::npos
-	    || name.find ("eyeballwhite") != std::string::npos) {
-	    eyeLayerPositions.emplace_back (index, 0);
-	} else if (name.find ("iris") != std::string::npos) {
-	    eyeLayerPositions.emplace_back (index, 1);
-	} else if (name.find ("pupil") != std::string::npos) {
-	    eyeLayerPositions.emplace_back (index, 2);
+	if (const auto role = semanticEyeLayerRole (object.name)) {
+	    eyeLayerPositions[object.parent].emplace_back (index, *role);
 	}
     }
 
-    const bool hasEyeBase = std::ranges::any_of (eyeLayerPositions, [] (const auto& item) { return item.second == 0; });
-    const bool hasIris = std::ranges::any_of (eyeLayerPositions, [] (const auto& item) { return item.second == 1; });
-    if (hasEyeBase && hasIris) {
-	std::vector<CObject*> eyeLayers;
-	eyeLayers.reserve (eyeLayerPositions.size ());
-	for (const auto& [index, role] : eyeLayerPositions) {
-	    (void)role;
-	    eyeLayers.push_back (this->m_objectsByRenderOrder[index]);
+    for (const auto& [parent, positions] : eyeLayerPositions) {
+	(void)parent;
+	const bool hasEyeBase = std::ranges::any_of (positions, [] (const auto& item) { return item.second == 0; });
+	const bool hasIris = std::ranges::any_of (positions, [] (const auto& item) { return item.second == 1; });
+	if (!hasEyeBase || !hasIris) {
+	    continue;
 	}
-	std::ranges::stable_sort (eyeLayers, [] (const CObject* left, const CObject* right) {
-	    const auto role = [] (const CObject* object) {
-		std::string name = object->getObject ().name;
-		std::ranges::transform (name, name.begin (), [] (unsigned char value) {
-		    return static_cast<char> (std::tolower (value));
-		});
-		if (name.find ("sclera") != std::string::npos || name.find ("eyewhite") != std::string::npos
-		    || name.find ("eyeballwhite") != std::string::npos) {
-		    return 0;
-		}
-		return name.find ("pupil") != std::string::npos ? 2 : 1;
-	    };
-	    return role (left) < role (right);
+
+	std::vector<std::pair<CObject*, int>> eyeLayers;
+	eyeLayers.reserve (positions.size ());
+	for (const auto& [index, role] : positions) {
+	    eyeLayers.emplace_back (this->m_objectsByRenderOrder[index], role);
+	}
+	std::ranges::stable_sort (eyeLayers, [] (const auto& left, const auto& right) {
+	    return left.second < right.second;
 	});
-	for (size_t index = 0; index < eyeLayerPositions.size (); index++) {
-	    this->m_objectsByRenderOrder[eyeLayerPositions[index].first] = eyeLayers[index];
+	for (size_t index = 0; index < positions.size (); index++) {
+	    this->m_objectsByRenderOrder[positions[index].first] = eyeLayers[index].first;
 	}
-	sLog.out ("Normalized eye layer order for scene with ", eyeLayers.size (), " semantic eye layers");
     }
 
     // create extra framebuffers for the bloom effect

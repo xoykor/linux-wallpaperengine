@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <exception>
 #include <variant>
 
 using namespace WallpaperEngine::Data::Utils;
@@ -432,7 +433,12 @@ JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, J
 
     auto value = vector_new<components> ();
     if (argc == 1) {
-	value = vector_get<components> (ctx, argv[0]);
+	try {
+	    value = vector_get<components> (ctx, argv[0]);
+	} catch (const std::exception& exception) {
+	    JS_FreeValue (ctx, result);
+	    return JS_ThrowTypeError (ctx, "%s", exception.what ());
+	}
     } else if (argc > 1) {
 	for (int componentIndex = 0; componentIndex < argc; ++componentIndex) {
 	    double component = 0.0;

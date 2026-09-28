@@ -1040,8 +1040,8 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
 	sLog.error ("GLSL vertex unit parsing Failed in ", shaderName, ": ", vertexShader.getInfoLog ());
 	return { "", "" };
     }
-    const auto configureFragmentShader = [] (glslang::TShader& shader, const char* source) {
-	shader.setStrings (&source, 1);
+    const auto configureFragmentShader = [] (glslang::TShader& shader, const char* const* source) {
+	shader.setStrings (source, 1);
 	shader.setEntryPoint ("main");
 	shader.setEnvInput (glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientOpenGL, 330);
 	shader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
@@ -1054,7 +1054,7 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     glslang::TShader fallbackFragmentShader (EShLangFragment);
     glslang::TShader* fragmentShaderForProgram = &fragmentShader;
     const char* fragmentSource = validFragment.c_str ();
-    configureFragmentShader (fragmentShader, fragmentSource);
+    configureFragmentShader (fragmentShader, &fragmentSource);
     if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
 	const std::string initialError = fragmentShader.getInfoLog ();
 	std::vector<std::string> adjustedBlendOpacities;
@@ -1071,7 +1071,7 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
 	    sLog.out ("Using scalar component for GLSL ApplyBlending opacity in ", shaderName, ": ", name);
 	}
 	fragmentSource = validFragment.c_str ();
-	configureFragmentShader (fallbackFragmentShader, fragmentSource);
+	configureFragmentShader (fallbackFragmentShader, &fragmentSource);
 	if (!fallbackFragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
 	    sLog.error (
 		"GLSL fragment unit parsing Failed after ApplyBlending compatibility in ", shaderName, ": ",

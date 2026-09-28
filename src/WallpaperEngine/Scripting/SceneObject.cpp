@@ -41,7 +41,7 @@ glm::vec3 readVec3 (JSContext* ctx, JSValueConst object, const char* name, const
 		 std::pair<const char*, float*> { "z", &out.z },
 	     }) {
 	    JSValue field = JS_GetPropertyStr (ctx, value, axis);
-	    if (!JS_ToFloat64 (ctx, &component, field)) {
+	    if (JS_IsNumber (field) && JS_ToFloat64 (ctx, &component, field) == 0) {
 		*target = static_cast<float> (component);
 	    }
 	    JS_FreeValue (ctx, field);

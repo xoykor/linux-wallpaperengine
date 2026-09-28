@@ -48,6 +48,14 @@ jobs:
             --output "$RUNNER_TEMP/appimagetool.AppImage"
           chmod +x "$RUNNER_TEMP/appimagetool.AppImage"
 
+      - name: Download linuxdeploy
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+            --output "$RUNNER_TEMP/linuxdeploy.AppImage"
+          echo '36a2d7e274d12e1050d0e9ecfe11d339ed54720b2bec464c286d53f8b07f5c62  '"$RUNNER_TEMP/linuxdeploy.AppImage" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/linuxdeploy.AppImage"
+
       - name: Build integrated AppImage
         env:
           APP_VERSION: ${{ inputs.version || github.ref_name }}
@@ -56,7 +64,8 @@ jobs:
             --build-dir build \
             --output-dir dist \
             --version "$APP_VERSION" \
-            --appimagetool "$RUNNER_TEMP/appimagetool.AppImage"
+            --appimagetool "$RUNNER_TEMP/appimagetool.AppImage" \
+            --linuxdeploy "$RUNNER_TEMP/linuxdeploy.AppImage"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

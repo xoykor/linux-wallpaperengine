@@ -6,6 +6,8 @@ BUILD_DIR="${ROOT}/build"
 OUTPUT_DIR="${ROOT}/build/appimage-output"
 VERSION=""
 APPIMAGETOOL_BIN="${APPIMAGETOOL:-appimagetool}"
+LINUXDEPLOY_BIN="${LINUXDEPLOY:-linuxdeploy}"
+APPDIR=""
 
 fail() {
     printf '::error title=AppImage packaging::%s\n' "$*"
@@ -15,7 +17,7 @@ fail() {
 
 usage() {
     cat <<'EOF'
-Usage: build-appimage.sh [--build-dir DIR] [--output-dir DIR] [--version VERSION] [--appimagetool FILE]
+Usage: build-appimage.sh [--build-dir DIR] [--output-dir DIR] [--version VERSION] [--appimagetool FILE] [--linuxdeploy FILE]
 
 Packages an existing linux-wallpaperengine CMake build and the GTK desktop frontend.
 EOF
@@ -37,6 +39,10 @@ while (($#)); do
             ;;
         --appimagetool)
             APPIMAGETOOL_BIN="$2"
+            shift 2
+            ;;
+        --linuxdeploy)
+            LINUXDEPLOY_BIN="$2"
             shift 2
             ;;
         -h|--help)
@@ -69,6 +75,9 @@ if ! command -v "${APPIMAGETOOL_BIN}" >/dev/null 2>&1 && [[ ! -x "${APPIMAGETOOL
     printf 'appimagetool was not found. Install AppImage/appimagetool 1.9.1 or pass --appimagetool.\n' >&2
     exit 1
 fi
+if ! command -v "${LINUXDEPLOY_BIN}" >/dev/null 2>&1 && [[ ! -x "${LINUXDEPLOY_BIN}" ]]; then
+    fail "linuxdeploy was not found: ${LINUXDEPLOY_BIN}"
+fi
 
 if [[ -z "${VERSION}" ]]; then
     VERSION="$(git -C "${ROOT}" describe --tags --always --dirty 2>/dev/null || printf 'dev')"
@@ -82,6 +91,7 @@ BUILD_DIR="$(cd -- "${BUILD_DIR}" && pwd)"
 mkdir -p -- "${OUTPUT_DIR}"
 OUTPUT_DIR="$(cd -- "${OUTPUT_DIR}" && pwd)"
 APPDIR="$(mktemp -d "${BUILD_DIR}/linux-wallpaperengine-appimage.XXXXXXXX")"
+trap '[[ -z "${APPDIR}" ]] || rm -rf -- "${APPDIR}"' EXIT
 ENGINE_DIR="${APPDIR}/usr/lib/linux-wallpaperengine"
 FRONTEND_DIR="${APPDIR}/usr/lib/wallpaper_engine_app"
 DESKTOP_FILE="linux-wallpaperengine-app.desktop"
@@ -120,7 +130,14 @@ install -Dm644 "${ROOT}/app/linux-wallpaperengine-app.svg" "${APPDIR}/linux-wall
 [[ -f "${ENGINE_DIR}/libcef.so" ]] || fail "CEF runtime is missing from the install tree: ${ENGINE_DIR}/libcef.so"
 strip --strip-debug "${ENGINE_DIR}/libcef.so" || fail 'Could not strip CEF debug sections.'
 
-ENGINE_LIBRARY_PATH="${ENGINE_DIR}:${ENGINE_DIR}/lib:${ENGINE_DIR}/lib64"
+# Copy the renderer's non-system shared-library dependencies into AppDir. This
+# makes the bundle independent of the build host's GLEW/FFmpeg/KissFFT ABIs.
+APPIMAGE_EXTRACT_AND_RUN=1 "${LINUXDEPLOY_BIN}" \
+    --verbosity=2 \
+    --appdir="${APPDIR}" \
+    --deploy-deps-only="${ENGINE_DIR}"
+
+ENGINE_LIBRARY_PATH="${APPDIR}/usr/lib:${ENGINE_DIR}:${ENGINE_DIR}/lib:${ENGINE_DIR}/lib64"
 for candidate in "${ENGINE_DIR}"/lib/* "${ENGINE_DIR}"/lib64/*; do
     [[ -d "${candidate}" ]] && ENGINE_LIBRARY_PATH+=":${candidate}"
 done
@@ -129,7 +146,7 @@ RUNTIME_LDD="$(LD_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_L
 MISSING_LIBRARIES="$(printf '%s\n' "${RUNTIME_LDD}" | grep 'not found' || true)"
 if [[ -n "${MISSING_LIBRARIES}" ]]; then
     printf '%s\n' "${RUNTIME_LDD}" >&2
-    fail "The packaged engine has unresolved shared libraries: ${MISSING_LIBRARIES}"
+    fail "The packaged engine still has unresolved shared libraries: ${MISSING_LIBRARIES}"
 fi
 
 APPIMAGETOOL_APP_NAME='Linux Wallpaper Engine' \
@@ -139,5 +156,5 @@ VERSION="${VERSION}" \
     "${APPIMAGETOOL_BIN}" --no-appstream "${APPDIR}" "${OUTPUT_FILE}"
 
 chmod 755 "${OUTPUT_FILE}"
-sha256sum "${OUTPUT_FILE}" > "${OUTPUT_FILE}.sha256"
-printf 'AppImage: %s\nAppDir: %s\n' "${OUTPUT_FILE}" "${APPDIR}"
+(cd -- "${OUTPUT_DIR}" && sha256sum "$(basename -- "${OUTPUT_FILE}")" > "$(basename -- "${OUTPUT_FILE}").sha256")
+printf 'AppImage: %s\n' "${OUTPUT_FILE}"

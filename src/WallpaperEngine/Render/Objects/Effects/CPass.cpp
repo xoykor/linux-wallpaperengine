@@ -856,7 +856,6 @@ void CPass::setupAttributes () {
 }
 
 void CPass::setupTextureUniforms () {
-
     // Material usertextures name a wallpaper property, not necessarily an
     // asset path. SceneTexture properties resolve to the selected texture;
     // an empty selection leaves the shader's existing texture chain intact.

@@ -174,18 +174,22 @@ renderer’s per-screen surface and SceneScript coordinate spaces.
 ## AppImage, install and release flow
 
 `packaging/appimage/build-appimage.sh` stages the GTK Python package, C++
-renderer, CEF files, desktop entry and icon in one AppDir, validates required
-shared libraries, strips CEF debug sections, runs `appimagetool` and writes a
-SHA-256 sidecar. It does not call `cmake --install` into the host filesystem.
-`packaging/appimage/AppRun` selects the bundled renderer first, then starts the
-desktop frontend with the AppImage runtime environment. Steam and downloaded
-wallpaper content stay on the host.
+renderer, CEF files, desktop entry and icon in one AppDir. It strips CEF debug
+sections, runs pinned `linuxdeploy` to collect the renderer's shared-library
+dependencies, checks the resulting runtime search path, then runs
+`appimagetool` and writes a portable SHA-256 sidecar. Temporary AppDir files
+are removed when packaging ends. It does not install the engine into the host
+filesystem. `packaging/appimage/AppRun` selects the bundled renderer first,
+then starts the desktop frontend; bundled library paths are applied only to
+the renderer child so the host GTK Python bindings keep using their matching
+system libraries. Steam and downloaded wallpaper content stay on the host.
 
 `.github/workflows/appimage.yml` builds AppImages for `v*` tags and uploads
 the image and checksum to GitHub Releases. `workflow_dispatch` builds an
 artifact without publishing a release. The current release process is x86_64.
-The AppImage bundles the project executable and CEF runtime; GTK/Python,
-graphics drivers and several host libraries still need to be available on the
+The AppImage bundles the project executable, CEF runtime, and renderer shared
+libraries such as GLEW, FFmpeg, mpv, and KissFFT. GTK/Python introspection,
+graphics drivers, and platform libraries still need to be available on the
 system. The exact host requirements are listed in
 [`packaging/appimage/README.md`](../packaging/appimage/README.md).
 
@@ -221,10 +225,13 @@ rather than embedding rules for particular Workshop items:
   property when `update()` performs side effects but returns `undefined`.
   Explicit `null` remains a distinct value.
 - Puppet animation-layer lookup is a shared script API for image and model
-  layers. The earlier 0.0.15 AppImage predates this interface. The rebuilt
-  0.0.16 AppImage contains the updated engine library and frontend; the
-  bundled renderer's `--help` command runs, the library includes the new API,
-  and the published SHA-256 sidecar verifies.
+  layers. The earlier 0.0.15 AppImage predates this interface. The 0.0.16
+  release included the updated frontend and engine library, but its build did
+  not collect the engine's external shared libraries, so some hosts stopped at
+  loader error 127 before the renderer started. The release workflow now
+  gathers that dependency closure and checks the engine against the staged
+  libraries before creating the next AppImage. Checksums use a portable
+  filename rather than the CI runner's absolute path.
 
 The development build compiled successfully after these changes, and the
 desktop application regression suite passed. A complete visual pass across
@@ -235,8 +242,9 @@ replace visual validation on a working graphics session.
 
 ## Complete net file inventory
 
-The following list is the complete path inventory from the fork's net diff
-against upstream `main` before the pending renderer and scripting additions.
+The following list is the complete 95-path inventory from the current net diff
+against upstream `main`, including the desktop application, integrated
+packaging, renderer changes, this document, and the SceneScript API header.
 
 ### Build and automation
 
@@ -273,6 +281,10 @@ against upstream `main` before the pending renderer and scripting additions.
 - `packaging/appimage/AppRun` — AppImage runtime launcher.
 - `packaging/appimage/README.md` — AppImage build/runtime documentation.
 - `packaging/appimage/build-appimage.sh` — AppDir staging and packaging.
+
+### Fork documentation
+
+- `docs/FORK_CHANGES.md` — fork architecture, renderer changes, runtime behavior, packaging and upstream review context.
 
 ### Engine source: application, data and filesystem
 
@@ -332,6 +344,7 @@ against upstream `main` before the pending renderer and scripting additions.
 - `src/WallpaperEngine/VideoPlayback/MPV/GLPlayer.cpp` — MPV OpenGL integration.
 - `src/WallpaperEngine/VideoPlayback/MPV/GLPlayer.h` — MPV player state.
 - `src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.cpp` — SceneScript layer properties and animation-layer API.
+- `src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h` — animation-layer interface and state.
 - `src/WallpaperEngine/Scripting/Adapters/VectorAdapter.cpp` — vectors, angle units and vector methods.
 - `src/WallpaperEngine/Scripting/Adapters/VectorAdapter.h` — vector adapter declaration.
 - `src/WallpaperEngine/Scripting/EngineObject.cpp` — engine object bindings.
@@ -346,18 +359,13 @@ against upstream `main` before the pending renderer and scripting additions.
 - `src/WallpaperEngine/Scripting/ScriptableObject.cpp` — layer property registration.
 - `src/WallpaperEngine/Scripting/ScriptableObject.h` — scriptable layer interface.
 
-## Proposed upstream review scope
+## Upstream pull request
 
-This proposal adds `docs/FORK_CHANGES.md` and modifies
-`src/WallpaperEngine/Scripting/Adapters/ScriptableObjectAdapter.h` beyond the
-93-path fork baseline listed above. The pending renderer and scripting work
-touches ten source paths; the gallery/theme and AppImage documentation updates
-are in files already present in the baseline inventory. `README.md` now links
-to the full review document.
-
-The intended pull request targets `Almamu/linux-wallpaperengine:main` from the
-fork's feature branch. Its review description should call out that the branch
-contains the complete desktop-app and packaging fork as well as renderer
-changes, rather than presenting it as a small isolated engine patch. The
-renderer changes should be reviewable separately by file group, especially
-SceneScript semantics, parent transforms and MDLS0004 parsing. The PR description should keep generic runtime and visual-validation limits explicit; it should not imply that parser success proves every scene renders identically to its Workshop preview.
+Pull request [#683](https://github.com/Almamu/linux-wallpaperengine/pull/683)
+targets `Almamu/linux-wallpaperengine:main` from the fork's feature branch. It
+contains the full desktop application and packaging fork together with engine
+compatibility changes. Reviewers can inspect the work by file group, including
+the frontend and release workflow, SceneScript semantics, parent transforms,
+model parsing and shader compatibility. The visual-validation limits above
+remain explicit; parser success does not prove that every scene renders
+identically to its Workshop preview.

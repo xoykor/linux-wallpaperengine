@@ -40,6 +40,7 @@ class WallpaperDaemon:
         self.current_id: str | None = None
         self.screens: dict[str, str] = {}
         self.pending_id: str | None = None
+        self.skip_requested = False
         self.next_change_mono: float | None = None
         self.next_change_at: float | None = None
         self.retry_at = 0.0
@@ -183,6 +184,12 @@ class WallpaperDaemon:
             "--layer", "bottom", "--no-fullscreen-pause",
         ]
         environment = os.environ.copy()
+        bundled_libraries = environment.get("LINUX_WALLPAPERENGINE_LIBRARY_PATH")
+        if bundled_libraries:
+            existing_libraries = environment.get("LD_LIBRARY_PATH")
+            environment["LD_LIBRARY_PATH"] = (
+                f"{bundled_libraries}:{existing_libraries}" if existing_libraries else bundled_libraries
+            )
         if self.config["mute"]:
             command.extend(("--silent", "--noautomute", "--no-audio-processing"))
             environment.update(
@@ -289,6 +296,9 @@ class WallpaperDaemon:
         print(f"Wallpaper: {wallpaper_id} — {self.catalog[wallpaper_id]['title']}", flush=True)
 
     def _tick(self) -> None:
+        if self.skip_requested:
+            self.skip_requested = False
+            self._request_switch(self._next_id())
         self._reap_child()
         self._refresh()
         if not self.active:
@@ -590,7 +600,7 @@ class WallpaperDaemon:
         self.sock = self._open_socket()
         signal.signal(signal.SIGTERM, lambda _sig, _frame: setattr(self, "alive", False))
         signal.signal(signal.SIGINT, lambda _sig, _frame: setattr(self, "alive", False))
-        signal.signal(signal.SIGUSR1, lambda _sig, _frame: self._request_switch(self._next_id()))
+        signal.signal(signal.SIGUSR1, lambda _sig, _frame: setattr(self, "skip_requested", True))
         try:
             self._refresh(force=True)
             while self.alive:

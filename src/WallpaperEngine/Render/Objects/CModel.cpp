@@ -191,7 +191,7 @@ bool CModel::loadMesh () {
 	offset += indexBytes;
 	// MDLV0023 stores six reserved bytes after each index block. They are part
 	// of the submesh record and must be skipped before reading the next one.
-	if (mdlvVersion == 23) {
+	if (mdlvVersion >= 23) {
 	    constexpr size_t trailerSize = 6;
 	    if (offset + trailerSize > data.size ()) {
 		sLog.error ("Truncated MDLV0023 submesh trailer in ", m_model.modelFile);

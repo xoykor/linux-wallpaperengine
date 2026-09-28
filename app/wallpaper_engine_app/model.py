@@ -567,6 +567,8 @@ def detect_outputs() -> list[str]:
                 timeout=5, check=True,
             )
             data = json.loads(result.stdout)
+            if not isinstance(data, dict):
+                raise TypeError("kscreen-doctor JSON root must be an object")
             names = [
                 output["name"] for output in data.get("outputs", [])
                 if isinstance(output, dict) and output.get("enabled")

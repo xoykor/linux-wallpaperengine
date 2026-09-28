@@ -431,11 +431,22 @@ void WallpaperApplication::advancePlaylist (
 	}
 
 	auto project = this->loadBackground (nextPath.string ());
-
 	this->setupPropertiesForProject (*project, screen);
 	this->ensureBrowserForProject (*project);
 
-	this->m_backgrounds[screen] = std::move (project);
+	auto spanGroupIt = this->m_context.settings.general.spanGroups.end ();
+	if (screen.rfind ("span:", 0) == 0) {
+	    spanGroupIt = std::find_if (
+		this->m_context.settings.general.spanGroups.begin (),
+		this->m_context.settings.general.spanGroups.end (),
+		[&screen] (const ApplicationContext::SpanGroup& group) {
+		    return !group.screens.empty () && "span:" + group.screens.front () == screen;
+		}
+	    );
+	    if (spanGroupIt == this->m_context.settings.general.spanGroups.end ()) {
+		throw std::runtime_error ("Span playlist target no longer exists");
+	    }
+	}
 
 	const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
 	const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
@@ -454,28 +465,18 @@ void WallpaperApplication::advancePlaylist (
 	    ? postIt->second
 	    : this->m_context.settings.render.postProcess;
 
+	std::unique_ptr<WallpaperEngine::Render::CWallpaper> rendered;
+	WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo {};
 	if (this->m_renderContext) {
-	    auto rendered = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		*this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
-		this->m_browserContext.get (), scaling, clamp, offset, postProcess
+	    rendered = WallpaperEngine::Render::CWallpaper::fromWallpaper (
+		*project->wallpaper, *this->m_renderContext, *this->m_audioContext, this->m_browserContext.get (),
+		scaling, clamp, offset, postProcess
 	    );
-
-	    if (screen.rfind ("span:", 0) == 0) {
-		auto groupIt = std::find_if (
-		    this->m_context.settings.general.spanGroups.begin (),
-		    this->m_context.settings.general.spanGroups.end (),
-		    [&screen] (const ApplicationContext::SpanGroup& group) {
-			return !group.screens.empty () && "span:" + group.screens.front () == screen;
-		    }
-		);
-		if (groupIt == this->m_context.settings.general.spanGroups.end ()) {
-		    throw std::runtime_error ("Span playlist target no longer exists");
-		}
-
+	    if (spanGroupIt != this->m_context.settings.general.spanGroups.end ()) {
 		const auto& viewports = this->m_renderContext->getOutput ().getViewports ();
 		int minX = INT_MAX, minY = INT_MAX, maxX = INT_MIN, maxY = INT_MIN;
 		bool anyFound = false;
-		for (const auto& screenName : groupIt->screens) {
+		for (const auto& screenName : spanGroupIt->screens) {
 		    const auto viewport = viewports.find (screenName);
 		    if (viewport == viewports.end ()) {
 			continue;
@@ -483,28 +484,27 @@ void WallpaperApplication::advancePlaylist (
 		    anyFound = true;
 		    minX = std::min (minX, viewport->second->globalPosition.x);
 		    minY = std::min (minY, viewport->second->globalPosition.y);
-		    maxX = std::max (
-			maxX, viewport->second->globalPosition.x + viewport->second->logicalSize.x
-		    );
-		    maxY = std::max (
-			maxY, viewport->second->globalPosition.y + viewport->second->logicalSize.y
-		    );
+		    maxX = std::max (maxX, viewport->second->globalPosition.x + viewport->second->logicalSize.x);
+		    maxY = std::max (maxY, viewport->second->globalPosition.y + viewport->second->logicalSize.y);
 		}
 		if (!anyFound) {
 		    throw std::runtime_error ("No active viewport remains for span playlist");
 		}
-
-		WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo;
 		spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
-		std::shared_ptr<WallpaperEngine::Render::CWallpaper> shared (std::move (rendered));
-		shared->setSpanInfo (spanInfo);
-		for (const auto& screenName : groupIt->screens) {
-		    this->m_renderContext->setWallpaper (screenName, shared);
-		}
-		groupIt->background = nextPath;
-	    } else {
-		this->m_renderContext->setWallpaper (screen, std::move (rendered));
 	    }
+	}
+
+	this->m_backgrounds[screen] = std::move (project);
+	if (rendered && spanGroupIt != this->m_context.settings.general.spanGroups.end ()) {
+	    auto& group = *spanGroupIt;
+	    std::shared_ptr<WallpaperEngine::Render::CWallpaper> shared (std::move (rendered));
+	    shared->setSpanInfo (spanInfo);
+	    for (const auto& screenName : group.screens) {
+		this->m_renderContext->setWallpaper (screenName, shared);
+	    }
+	    group.background = nextPath;
+	} else if (rendered) {
+	    this->m_renderContext->setWallpaper (screen, std::move (rendered));
 	}
 
 	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;

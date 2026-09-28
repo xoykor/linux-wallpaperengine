@@ -11,5 +11,6 @@ install -Dm644 "${ROOT}/contrib/rotation/linux-wallpaperengine-rotation.service"
     "${SYSTEMD_DIR}/linux-wallpaperengine-rotation.service"
 
 systemctl --user daemon-reload
-systemctl --user enable --now linux-wallpaperengine-rotation.service
+systemctl --user enable linux-wallpaperengine-rotation.service
+systemctl --user restart linux-wallpaperengine-rotation.service
 echo "Wallpaper rotation enabled: one Workshop wallpaper every 10 minutes."
