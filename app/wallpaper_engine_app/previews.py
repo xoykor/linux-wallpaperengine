@@ -66,7 +66,7 @@ def _decode(path: str, width: int, height: int) -> GdkPixbuf.Pixbuf | None:
         if frame is None:
             return None
         return _fit_pixbuf(frame, width, height)
-    except Exception:
+    except (GLib.Error, OSError, TypeError, ValueError):
         # A missing or malformed Workshop preview should leave its placeholder.
         return None
 
@@ -255,7 +255,7 @@ def preview(
         def load_animation() -> None:
             try:
                 animation = GdkPixbuf.PixbufAnimation.new_from_file(gif_path)
-            except Exception:
+            except (GLib.Error, OSError, TypeError, ValueError):
                 animation = None
             GLib.idle_add(deliver_animation, animation)
 
