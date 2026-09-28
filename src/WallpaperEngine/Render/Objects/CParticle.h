@@ -136,12 +136,7 @@ protected:
     [[nodiscard]] int resolveEmitterControlPoint (const ParticleEmitter& emitter) const;
     [[nodiscard]] glm::vec3
     resolveEmitterSpawnOrigin (const glm::vec3& transformedEmitterOrigin, int controlPointIndex) const;
-    static uint32_t accumulateRateEmission (float dt, float rate, bool limitOnePerFrame, float& emissionTimer);
     void initializeEmittedParticle (ParticleInstance& particle, float lifetime);
-    [[nodiscard]] glm::vec3 sampleBoxEmitterOffset (const ParticleEmitter& emitter, const glm::vec3& directions);
-    [[nodiscard]] glm::vec3 sampleSphereEmitterOffset (const ParticleEmitter& emitter);
-    void
-    applyEmitterVelocity (ParticleInstance& particle, const ParticleEmitter& emitter, const glm::vec3& emitterOffset);
 
     // Initializer creators
     InitializerFunc createColorRandomInitializer (const ColorRandomInitializer& init);
