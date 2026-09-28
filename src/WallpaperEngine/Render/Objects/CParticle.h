@@ -141,9 +141,7 @@ protected:
     [[nodiscard]] glm::vec3 sampleBoxEmitterOffset (const ParticleEmitter& emitter, const glm::vec3& directions);
     [[nodiscard]] glm::vec3 sampleSphereEmitterOffset (const ParticleEmitter& emitter);
     void applyEmitterVelocity (
-	ParticleInstance& particle, const ParticleEmitter& emitter,
-	const glm::vec3& emitterOffset
-    );
+	ParticleInstance& particle, const ParticleEmitter& emitter, const glm::vec3& emitterOffset);
 
     // Initializer creators
     InitializerFunc createColorRandomInitializer (const ColorRandomInitializer& init);
