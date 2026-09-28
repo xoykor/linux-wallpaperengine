@@ -428,6 +428,76 @@ void CParticle::initializeEmittedParticle (ParticleInstance& p, float lifetime) 
     }
 }
 
+glm::vec3 CParticle::sampleBoxEmitterOffset (const ParticleEmitter& emitter, const glm::vec3& directions) {
+    glm::vec3 offset;
+    for (int axis = 0; axis < 3; axis++) {
+	float distance = WallpaperEngine::Maths::randomFloat (m_rng, emitter.distanceMin[axis], emitter.distanceMax[axis]);
+	if (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) < 0.5f) {
+	    distance = -distance;
+	}
+	offset[axis] = distance;
+    }
+    return offset * directions;
+}
+
+glm::vec3 CParticle::sampleSphereEmitterOffset (const ParticleEmitter& emitter) {
+    glm::vec3 offset;
+
+    if ((m_particle.flags & 4) == 0) {
+	const float angle = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, glm::two_pi<float> ());
+	const float minRadius = emitter.distanceMin.x;
+	const float maxRadius = emitter.distanceMax.x;
+	const float minRadiusSq = minRadius * minRadius;
+	const float maxRadiusSq = maxRadius * maxRadius;
+	const float radiusXY
+	    = std::sqrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusSq, maxRadiusSq));
+
+	offset = glm::vec3 (
+	    radiusXY * std::cos (angle), radiusXY * std::sin (angle),
+	    WallpaperEngine::Maths::randomFloat (m_rng, -maxRadius, maxRadius)
+	);
+	offset *= emitter.directions;
+    } else {
+	const float theta = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, glm::two_pi<float> ());
+	const float cosTheta = WallpaperEngine::Maths::randomFloat (m_rng, -1.0f, 1.0f);
+	const float sinTheta = std::sqrt (1.0f - cosTheta * cosTheta);
+	offset = glm::vec3 (sinTheta * std::cos (theta), sinTheta * std::sin (theta), cosTheta);
+
+	const float minRadius = emitter.distanceMin.x;
+	const float maxRadius = emitter.distanceMax.x;
+	const float minRadiusCubed = minRadius * minRadius * minRadius;
+	const float maxRadiusCubed = maxRadius * maxRadius * maxRadius;
+	const float radius
+	    = std::cbrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusCubed, maxRadiusCubed));
+	offset *= radius;
+	offset *= emitter.directions;
+    }
+
+    for (int axis = 0; axis < 3; axis++) {
+	if (emitter.sign[axis] == 1) {
+	    offset[axis] = std::abs (offset[axis]);
+	} else if (emitter.sign[axis] == -1) {
+	    offset[axis] = -std::abs (offset[axis]);
+	}
+    }
+
+    return offset;
+}
+
+void CParticle::applyEmitterVelocity (
+    ParticleInstance& particle, const ParticleEmitter& emitter, const glm::vec3& emitterOffset
+) {
+    if (emitter.speedMax > 0.0f || emitter.speedMin != 0.0f) {
+	const glm::vec3 direction
+	    = glm::length (emitterOffset) > 0.0f ? glm::normalize (emitterOffset) : glm::vec3 (0.0f, 1.0f, 0.0f);
+	const float speed = WallpaperEngine::Maths::randomFloat (m_rng, emitter.speedMin, emitter.speedMax);
+	particle.velocity = direction * speed;
+	return;
+    }
+
+    particle.velocity = glm::vec3 (0.0f);
+}
+
 EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
     float rate = emitter.rate * m_particle.instanceOverride.rate->value->getFloat ();
 
@@ -511,23 +581,8 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 		const glm::vec3 spawnOrigin = resolveEmitterSpawnOrigin (transformedEmitterOrigin, controlPointIndex);
 
-		// Generate random position within box volume centered on origin
-		// This creates a centered box (or hollow box if distanceMin > 0)
-		glm::vec3 randomPos;
-		for (int axis = 0; axis < 3; axis++) {
-		    float minDist = emitter.distanceMin[axis];
-		    float maxDist = emitter.distanceMax[axis];
-		    // Generate value in [minDist, maxDist]
-		    float dist = WallpaperEngine::Maths::randomFloat (m_rng, minDist, maxDist);
-		    // Randomly flip sign to center the distribution
-		    if (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) < 0.5f) {
-			dist = -dist;
-		    }
-		    randomPos[axis] = dist;
-		}
-		randomPos *= flippedDirections;
-
-		p.position = spawnOrigin + randomPos;
+		const glm::vec3 emitterOffset = sampleBoxEmitterOffset (emitter, flippedDirections);
+		p.position = spawnOrigin + emitterOffset;
 
 		// Emitter does not set velocity - initializers handle that
 		p.velocity = glm::vec3 (0.0f);
@@ -572,70 +627,9 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    // Determine spawn origin (control point or emitter origin)
 	    const glm::vec3 spawnOrigin = resolveEmitterSpawnOrigin (transformedEmitterOrigin, controlPointIndex);
 
-	    // Spawn at random position on ellipsoid surface
-	    glm::vec3 randomPos;
-
-	    // Orthographic particles (flags & 4 == 0): use 2D disk distribution in X/Y plane
-	    // Perspective particles (flags & 4 != 0): use 3D spherical shell distribution
-	    if ((m_particle.flags & 4) == 0) {
-		// 2D disk distribution with random Z offset
-		float angle = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, glm::two_pi<float> ());
-		float minRadius = emitter.distanceMin.x;
-		float maxRadius = emitter.distanceMax.x;
-
-		// Use sqrt for uniform area distribution in annulus
-		float minRadiusSq = minRadius * minRadius;
-		float maxRadiusSq = maxRadius * maxRadius;
-		float radiusXY = std::sqrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusSq, maxRadiusSq));
-
-		randomPos = glm::vec3 (
-		    radiusXY * std::cos (angle), radiusXY * std::sin (angle),
-		    WallpaperEngine::Maths::randomFloat (m_rng, -maxRadius, maxRadius)
-		);
-
-		randomPos *= emitter.directions;
-	    } else {
-		// 3D spherical shell distribution
-		float theta = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, glm::two_pi<float> ());
-		float cosTheta = WallpaperEngine::Maths::randomFloat (m_rng, -1.0f, 1.0f);
-		float sinTheta = std::sqrt (1.0f - cosTheta * cosTheta);
-
-		randomPos = glm::vec3 (sinTheta * std::cos (theta), sinTheta * std::sin (theta), cosTheta);
-
-		// Use cubic root for uniform volume distribution
-		float minRadius = emitter.distanceMin.x;
-		float maxRadius = emitter.distanceMax.x;
-		float minRadiusCubed = minRadius * minRadius * minRadius;
-		float maxRadiusCubed = maxRadius * maxRadius * maxRadius;
-		float radius = std::cbrt (WallpaperEngine::Maths::randomFloat (m_rng, minRadiusCubed, maxRadiusCubed));
-
-		randomPos *= radius;
-		randomPos *= emitter.directions;
-	    }
-
-	    // Apply sign property to force positive/negative values per axis
-	    // 0 = both, 1 = positive only, -1 = negative only
-	    for (int i = 0; i < 3; i++) {
-		if (emitter.sign[i] == 1) {
-		    randomPos[i] = std::abs (randomPos[i]); // Force positive
-		} else if (emitter.sign[i] == -1) {
-		    randomPos[i] = -std::abs (randomPos[i]); // Force negative
-		}
-		// If sign[i] == 0, leave as-is (both positive and negative possible)
-	    }
-	    p.position = spawnOrigin + randomPos;
-
-	    // Set velocity only if emitter specifies speed (otherwise use initializers)
-	    if (emitter.speedMax > 0.0f || emitter.speedMin != 0.0f) {
-		// Velocity pointing outward from ellipsoid (randomPos already includes directions scaling)
-		glm::vec3 direction
-		    = glm::length (randomPos) > 0.0f ? glm::normalize (randomPos) : glm::vec3 (0.0f, 1.0f, 0.0f);
-		float speed = WallpaperEngine::Maths::randomFloat (m_rng, emitter.speedMin, emitter.speedMax);
-		p.velocity = direction * speed;
-	    } else {
-		// No emitter speed specified, velocity will be set by initializers
-		p.velocity = glm::vec3 (0.0f);
-	    }
+	    const glm::vec3 emitterOffset = sampleSphereEmitterOffset (emitter);
+	    p.position = spawnOrigin + emitterOffset;
+	    applyEmitterVelocity (p, emitter, emitterOffset);
 
 	    initializeEmittedParticle (p, lifetime);
 	    count++;
