@@ -11,7 +11,7 @@ import shutil
 import signal
 import socket
 import stat
-import subprocess
+import subprocess  # nosec B404 - required to supervise the renderer process
 import time
 from typing import Any
 
@@ -274,7 +274,9 @@ class WallpaperDaemon:
     def _start_child(self, wallpaper_id: str) -> None:
         try:
             command, environment, screens = self._build_command(wallpaper_id)
-            child = subprocess.Popen(command, start_new_session=True, env=environment)
+            child = subprocess.Popen(  # nosec B603 - argv list; shell execution is never used
+                command, start_new_session=True, env=environment
+            )
         except (OSError, ValueError, RuntimeError) as exc:
             self.error = str(exc)
             self.retry_at = time.monotonic() + 10.0
