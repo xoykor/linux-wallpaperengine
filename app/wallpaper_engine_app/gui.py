@@ -1628,7 +1628,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             try:
                 value = job()
                 GLib.idle_add(done, value, None)
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError, TypeError, subprocess.SubprocessError) as exc:
                 GLib.idle_add(done, None, exc)
 
         threading.Thread(target=worker, daemon=True).start()
