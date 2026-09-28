@@ -2173,15 +2173,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         self._background(lambda: ipc.request("status"), done)
 
-    def _apply_status(self, status: dict, *, accept_config: bool = True) -> None:
-        old_current = self.status.get("current_id")
-        old_screens = self.status.get("screens")
-        old_assignments = self.config.get("screen_assignments")
-        old_favorites = self.config.get("favorites")
-        old_playlists = self.config.get("playlists")
-        old_active_playlist = self.config.get("active_playlist")
-        self.status = status
-        self.status_strip.remove_css_class("error")
+    def _apply_status_config(self, status: dict, accept_config: bool) -> bool:
         configuration_changed = False
         if accept_config:
             updated_config = dict(status.get("config") or self.config)
@@ -2191,9 +2183,12 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             if self.config.get("language", "auto") != self._ui_language:
                 set_language(self.config.get("language", "auto"))
                 self._rebuild_localized_ui()
-                return
+                return False
         if configuration_changed or self._last_applied_config != self.config:
             self._apply_config()
+        return True
+
+    def _update_runtime_status_controls(self, status: dict) -> None:
         running = bool(status.get("renderer_running"))
         self.status_dot.set_text("●" if running else "○")
         current_id = status.get("current_id")
@@ -2207,6 +2202,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.status_label.set_text(tr("Iniciando wallpaper…"))
         else:
             self.status_label.set_text(tr("Serviço ativo · wallpaper parado"))
+
         self.power_button.set_label(tr("Parar" if status.get("running") else "Iniciar"))
         screens = status.get("screens") or []
         assignments = self.config.get("screen_assignments", {})
@@ -2214,20 +2210,56 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.next_button.set_sensitive(bool(status.get("running")) and has_rotating_screen)
         self._update_countdown()
         self._refresh_hero()
-        if (
-            current_id != old_current
-            or status.get("screens") != old_screens
+
+    def _refresh_changed_status_views(
+        self,
+        old_current: object,
+        old_screens: object,
+        old_assignments: object,
+        old_favorites: object,
+        old_playlists: object,
+        old_active_playlist: object,
+    ) -> None:
+        card_state_changed = (
+            self.status.get("current_id") != old_current
+            or self.status.get("screens") != old_screens
             or self.config.get("screen_assignments") != old_assignments
             or self.config.get("favorites") != old_favorites
-        ):
+        )
+        if card_state_changed:
             self._refresh_card_indicators()
             self._show_details(self.selected_id)
-        if (
+
+        playlist_state_changed = (
             self.config.get("playlists") != old_playlists
             or self.config.get("active_playlist") != old_active_playlist
-        ):
+        )
+        if playlist_state_changed:
             self._refresh_playlists()
             self._show_details(self.selected_id)
+
+    def _apply_status(self, status: dict, *, accept_config: bool = True) -> None:
+        old_current = self.status.get("current_id")
+        old_screens = self.status.get("screens")
+        old_assignments = self.config.get("screen_assignments")
+        old_favorites = self.config.get("favorites")
+        old_playlists = self.config.get("playlists")
+        old_active_playlist = self.config.get("active_playlist")
+
+        self.status = status
+        self.status_strip.remove_css_class("error")
+        if not self._apply_status_config(status, accept_config):
+            return
+
+        self._update_runtime_status_controls(status)
+        self._refresh_changed_status_views(
+            old_current,
+            old_screens,
+            old_assignments,
+            old_favorites,
+            old_playlists,
+            old_active_playlist,
+        )
 
     def _update_countdown(self) -> None:
         deadline = self.status.get("next_change_at")
