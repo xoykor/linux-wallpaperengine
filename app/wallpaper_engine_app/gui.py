@@ -589,26 +589,16 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             return True
         return False
 
-    def _update_responsive(self) -> bool:
+    def _responsive_geometry(self) -> tuple[int, int, str, int, tuple[bool, bool]]:
         width, height = self.get_width(), self.get_height()
         if width <= 0:
             width = self._initial_size[0]
         if height <= 0:
             height = self._initial_size[1]
         mode = "small" if width < 1100 else "compact" if width < 1200 else "wide"
-        pane_width = self.library_panes.get_width()
-        height_band = (height < 700, height < 980)
-        size_changed = (
-            self._last_pane_width is None
-            or abs(pane_width - self._last_pane_width) >= 24
-        )
-        if mode == self._compact_mode and self._last_height_band == height_band and not size_changed:
-            return True
-        previous_mode = self._compact_mode
-        self._compact_mode = mode
-        self._last_height_band = height_band
-        self._last_pane_width = pane_width
-        low_height = height_band[0]
+        return width, height, mode, self.library_panes.get_width(), (height < 700, height < 980)
+
+    def _apply_height_layout(self, low_height: bool) -> None:
         if low_height:
             self.add_css_class("compact-height")
         else:
@@ -617,6 +607,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.library_page.set_margin_top(6 if low_height else 18)
         self.library_page.set_margin_bottom(6 if low_height else 18)
         self.selection_hint.set_visible(not low_height)
+
+    def _apply_sidebar_layout(self, mode: str) -> tuple[bool, int]:
         collapsed = mode != "wide"
         if collapsed:
             self.sidebar.add_css_class("app-sidebar-collapsed")
@@ -638,14 +630,16 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.hero_art.set_visible(mode == "wide")
         inspector_width = 275 if mode == "small" else 305 if collapsed else 350
         self.detail_shell.set_size_request(inspector_width, -1)
-        if pane_width > 0:
-            self.library_panes.set_position(max(220, pane_width - inspector_width - 12))
+        return collapsed, inspector_width
+
+    def _apply_selection_layout(self, mode: str, pane_width: int, inspector_width: int) -> None:
         selection_compact = mode != "wide" or pane_width - inspector_width < 780
         self._selection_compact = selection_compact
+        count = len(self._selected_ids)
         self.selection_count.set_text(
-            str(len(self._selected_ids)) if selection_compact else tr(
-                "{count} selecionado" if len(self._selected_ids) == 1 else "{count} selecionados",
-                count=len(self._selected_ids),
+            str(count) if selection_compact else tr(
+                "{count} selecionado" if count == 1 else "{count} selecionados",
+                count=count,
             )
         )
         self.bulk_playlist_label.set_visible(not selection_compact)
@@ -655,6 +649,25 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.selection_bar.add_css_class("selection-bar-compact")
         else:
             self.selection_bar.remove_css_class("selection-bar-compact")
+
+    def _update_responsive(self) -> bool:
+        _width, _height, mode, pane_width, height_band = self._responsive_geometry()
+        size_changed = (
+            self._last_pane_width is None
+            or abs(pane_width - self._last_pane_width) >= 24
+        )
+        if mode == self._compact_mode and self._last_height_band == height_band and not size_changed:
+            return True
+
+        previous_mode = self._compact_mode
+        self._compact_mode = mode
+        self._last_height_band = height_band
+        self._last_pane_width = pane_width
+        self._apply_height_layout(height_band[0])
+        _collapsed, inspector_width = self._apply_sidebar_layout(mode)
+        if pane_width > 0:
+            self.library_panes.set_position(max(220, pane_width - inspector_width - 12))
+        self._apply_selection_layout(mode, pane_width, inspector_width)
         if previous_mode != mode and self.selected_id:
             self._show_details(self.selected_id)
         return True
