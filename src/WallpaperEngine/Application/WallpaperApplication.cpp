@@ -438,7 +438,7 @@ ApplicationContext::SpanGroup* WallpaperApplication::findSpanGroup (const std::s
     return &*group;
 }
 
-WallpaperEngine::Render::CWallpaper::SpanInfo WallpaperApplication::calculateSpanInfo (
+WallpaperEngine::Render::SpanInfo WallpaperApplication::calculateSpanInfo (
     const ApplicationContext::SpanGroup& group
 ) const {
     const auto& viewports = this->m_renderContext->getOutput ().getViewports ();
@@ -463,7 +463,7 @@ WallpaperEngine::Render::CWallpaper::SpanInfo WallpaperApplication::calculateSpa
 	throw std::runtime_error ("No active viewport remains for span playlist");
     }
 
-    WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo {};
+    WallpaperEngine::Render::SpanInfo spanInfo {};
     spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
     return spanInfo;
 }
@@ -499,7 +499,7 @@ bool WallpaperApplication::loadPlaylistWallpaper (
 	    : this->m_context.settings.render.postProcess;
 
 	std::unique_ptr<WallpaperEngine::Render::CWallpaper> rendered;
-	WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo {};
+	WallpaperEngine::Render::SpanInfo spanInfo {};
 	if (this->m_renderContext) {
 	    rendered = WallpaperEngine::Render::CWallpaper::fromWallpaper (
 		*project->wallpaper, *this->m_renderContext, *this->m_audioContext, this->m_browserContext.get (),
@@ -888,7 +888,7 @@ void WallpaperApplication::prepareOutputs () {
 	    "SPAN DEBUG prepareOutputs: bounding box=(", minX, ",", minY, ",", maxX - minX, ",", maxY - minY, ")"
 	);
 
-	WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo;
+	WallpaperEngine::Render::SpanInfo spanInfo;
 	spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
 
 	// Create one shared wallpaper with the span group's scaling mode
