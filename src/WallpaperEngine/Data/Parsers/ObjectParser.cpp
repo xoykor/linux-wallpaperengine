@@ -46,8 +46,7 @@ std::unique_ptr<PropertyAnimation> parsePropertyAnimation (const JSON& property)
 }
 } // namespace
 
-ObjectData
-ObjectParser::buildBaseData (const JSON& it, const Project& project, int id, std::string name) {
+ObjectData ObjectParser::buildBaseData (const JSON& it, const Project& project, int id, std::string name) {
     return ObjectData {
 	.id = id,
 	.name = std::move (name),
@@ -100,9 +99,8 @@ ObjectUniquePtr ObjectParser::parseModelWithFallback (
     return std::make_unique<Object> (buildBaseData (it, project, id, "model-parse-failed"));
 }
 
-ObjectUniquePtr ObjectParser::parseCameraObject (
-    const JSON& it, const Project& project, ObjectData base, const std::string& camera
-) {
+ObjectUniquePtr
+ObjectParser::parseCameraObject (const JSON& it, const Project& project, ObjectData base, const std::string& camera) {
     const auto& properties = project.properties;
     return std::make_unique<CameraObject> (
 	std::move (base),
