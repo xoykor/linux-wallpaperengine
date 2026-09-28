@@ -370,12 +370,7 @@ void CParticle::setupEmitters () {
     }
 }
 
-EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
-    float rate = emitter.rate * m_particle.instanceOverride.rate->value->getFloat ();
-
-    glm::vec3 transformedEmitterOrigin = emitter.origin;
-    transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
-
+int CParticle::resolveEmitterControlPoint (const ParticleEmitter& emitter) const {
     int controlPointIndex = emitter.controlPoint;
     if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
 	const auto& cp0 = m_particle.controlPoints[0];
@@ -383,6 +378,64 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 	    controlPointIndex = 0;
 	}
     }
+    return controlPointIndex;
+}
+
+glm::vec3
+CParticle::resolveEmitterSpawnOrigin (const glm::vec3& transformedEmitterOrigin, int controlPointIndex) const {
+    glm::vec3 spawnOrigin = transformedEmitterOrigin;
+    if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
+	spawnOrigin += m_controlPoints[controlPointIndex].position;
+    }
+    return spawnOrigin;
+}
+
+uint32_t
+CParticle::accumulateRateEmission (float dt, float rate, bool limitOnePerFrame, float& emissionTimer) {
+    emissionTimer += dt * rate;
+    uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
+    emissionTimer -= static_cast<float> (toEmit);
+    if (limitOnePerFrame && toEmit > 1) {
+	toEmit = 1;
+    }
+    return toEmit;
+}
+
+void CParticle::initializeEmittedParticle (ParticleInstance& p, float lifetime) {
+    p.acceleration = glm::vec3 (0.0f);
+    p.rotation = glm::vec3 (0.0f);
+    p.angularVelocity = glm::vec3 (0.0f);
+    p.angularAcceleration = glm::vec3 (0.0f);
+
+    p.color = glm::vec3 (1.0f) * m_particle.instanceOverride.colorn->value->getVec3 ();
+    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
+    p.size = 20.0f * m_particle.instanceOverride.size->value->getFloat ();
+    p.lifetime = lifetime;
+    p.age = 0.0f;
+    p.alive = true;
+    p.frame = -1.0f;
+
+    p.initial.color = p.color;
+    p.initial.alpha = p.alpha;
+    p.initial.size = p.size;
+    p.initial.lifetime = p.lifetime;
+
+    p.oscillateAlpha = {};
+    p.oscillateSize = {};
+    p.oscillatePosition = {};
+
+    for (auto& init : m_initializers) {
+	init (p);
+    }
+}
+
+EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
+    float rate = emitter.rate * m_particle.instanceOverride.rate->value->getFloat ();
+
+    glm::vec3 transformedEmitterOrigin = emitter.origin;
+    transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
+
+    int controlPointIndex = resolveEmitterControlPoint (emitter);
 
     glm::vec3 flippedDirections = emitter.directions;
     flippedDirections.y = -flippedDirections.y;
@@ -450,24 +503,14 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 	    // Rate-based emission with optional cap at 1 per frame
 	    if (emitter.rate > 0.0f) {
-		emissionTimer += dt * rate;
-		uint32_t rateEmit = static_cast<uint32_t> (emissionTimer);
-		emissionTimer -= static_cast<float> (rateEmit);
-		// limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
-		if (limitOnePerFrame && rateEmit > 1) {
-		    rateEmit = 1;
-		}
-		toEmit += rateEmit;
+		toEmit += accumulateRateEmission (dt, rate, limitOnePerFrame, emissionTimer);
 	    }
 
 	    // Emit particles
 	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
 		auto& p = particles[count];
 
-		glm::vec3 spawnOrigin = transformedEmitterOrigin;
-		if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
-		    spawnOrigin += m_controlPoints[controlPointIndex].position;
-		}
+		const glm::vec3 spawnOrigin = resolveEmitterSpawnOrigin (transformedEmitterOrigin, controlPointIndex);
 
 		// Generate random position within box volume centered on origin
 		// This creates a centered box (or hollow box if distanceMin > 0)
@@ -489,33 +532,9 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 		// Emitter does not set velocity - initializers handle that
 		p.velocity = glm::vec3 (0.0f);
-		p.acceleration = glm::vec3 (0.0f);
-		p.rotation = glm::vec3 (0.0f);
-		p.angularVelocity = glm::vec3 (0.0f);
-		p.angularAcceleration = glm::vec3 (0.0f);
-
-		p.color = glm::vec3 (1.0f) * m_particle.instanceOverride.colorn->value->getVec3 ();
-		p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-		p.size = 20.0f * m_particle.instanceOverride.size->value->getFloat ();
-		p.lifetime = 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ();
-		p.age = 0.0f;
-		p.alive = true;
-		p.frame = -1.0f;
-
-		p.initial.color = p.color;
-		p.initial.alpha = p.alpha;
-		p.initial.size = p.size;
-		p.initial.lifetime = p.lifetime;
-
-		// Reset oscillator state for reused particles
-		p.oscillateAlpha = {};
-		p.oscillateSize = {};
-		p.oscillatePosition = {};
-
-		// Apply initializers
-		for (auto& init : m_initializers) {
-		    init (p);
-		}
+		initializeEmittedParticle (
+		    p, 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ()
+		);
 
 		count++;
 	    }
@@ -530,15 +549,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     glm::vec3 transformedEmitterOrigin = emitter.origin;
     transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
 
-    int controlPointIndex = emitter.controlPoint;
-
-    // Auto-detect control point 0 usage if controlPoint field not specified and CP0 has linkMouse
-    if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
-	const auto& cp0 = m_particle.controlPoints[0];
-	if ((cp0.flags & 1) != 0) { // Bit 0: linkMouse flag
-	    controlPointIndex = 0;
-	}
-    }
+    int controlPointIndex = resolveEmitterControlPoint (emitter);
 
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
 
@@ -551,13 +562,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	}
 
 	// Rate-based emission with optional cap at 1 per frame
-	emissionTimer += dt * rate;
-	uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
-	emissionTimer -= static_cast<float> (toEmit);
-	// limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
-	if (limitOnePerFrame && toEmit > 1) {
-	    toEmit = 1;
-	}
+	uint32_t toEmit = accumulateRateEmission (dt, rate, limitOnePerFrame, emissionTimer);
 
 	if (remaining > 0) {
 	    toEmit = remaining;
@@ -568,10 +573,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    auto& p = particles[count];
 
 	    // Determine spawn origin (control point or emitter origin)
-	    glm::vec3 spawnOrigin = transformedEmitterOrigin;
-	    if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
-		spawnOrigin += m_controlPoints[controlPointIndex].position;
-	    }
+	    const glm::vec3 spawnOrigin = resolveEmitterSpawnOrigin (transformedEmitterOrigin, controlPointIndex);
 
 	    // Spawn at random position on ellipsoid surface
 	    glm::vec3 randomPos;
@@ -638,33 +640,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		p.velocity = glm::vec3 (0.0f);
 	    }
 
-	    p.acceleration = glm::vec3 (0.0f);
-	    p.rotation = glm::vec3 (0.0f);
-	    p.angularVelocity = glm::vec3 (0.0f);
-	    p.angularAcceleration = glm::vec3 (0.0f);
-
-	    p.color = glm::vec3 (1.0f) * m_particle.instanceOverride.colorn->value->getVec3 ();
-	    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-	    p.size = 20.0f * m_particle.instanceOverride.size->value->getFloat ();
-	    p.lifetime = lifetime;
-	    p.age = 0.0f;
-	    p.alive = true;
-	    p.frame = -1.0f;
-
-	    p.initial.color = p.color;
-	    p.initial.alpha = p.alpha;
-	    p.initial.size = p.size;
-	    p.initial.lifetime = p.lifetime;
-
-	    // Reset oscillator state for reused particles
-	    p.oscillateAlpha = {};
-	    p.oscillateSize = {};
-	    p.oscillatePosition = {};
-
-	    for (auto& init : m_initializers) {
-		init (p);
-	    }
-
+	    initializeEmittedParticle (p, lifetime);
 	    count++;
 	}
     };
