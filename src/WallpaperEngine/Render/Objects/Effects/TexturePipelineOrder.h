@@ -9,8 +9,8 @@ template <
     typename OverrideTextures, typename OverrideUserTextures, typename Binds>
 void apply (
     VertexDefaults&& vertexDefaults, FragmentDefaults&& fragmentDefaults, PassTextures&& passTextures,
-    PassUserTextures&& passUserTextures, OverrideTextures&& overrideTextures, OverrideUserTextures&& overrideUserTextures,
-    Binds&& binds
+    PassUserTextures&& passUserTextures, OverrideTextures&& overrideTextures,
+    OverrideUserTextures&& overrideUserTextures, Binds&& binds
 ) {
     std::forward<VertexDefaults> (vertexDefaults) ();
     std::forward<FragmentDefaults> (fragmentDefaults) ();
