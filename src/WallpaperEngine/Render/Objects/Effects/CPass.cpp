@@ -1,4 +1,5 @@
 #include "CPass.h"
+#include "TexturePipelineOrder.h"
 #include <algorithm>
 #include <array>
 #include <sstream>
@@ -959,15 +960,15 @@ void CPass::setupTextureResolutionUniforms () {
 }
 
 void CPass::setupTextureUniforms () {
-    // Build the chain in the same precedence order as the material format:
-    // vertex defaults -> fragment defaults -> pass -> overrides -> binds.
-    this->setInitialShaderTextures (this->m_shader->getVertex ().getTextures ());
-    this->prependTextureLayer (this->m_shader->getFragment ().getTextures (), "fragment shader");
-    this->prependTextureLayer (this->m_pass.textures, "pass");
-    this->prependUserTextureLayer (this->m_pass.usertextures, "pass");
-    this->prependTextureLayer (this->m_override.textures, "override");
-    this->prependUserTextureLayer (this->m_override.usertextures, "override");
-    this->setupBoundTextureLayer ();
+    TexturePipelineOrder::apply (
+	[this] { this->setInitialShaderTextures (this->m_shader->getVertex ().getTextures ()); },
+	[this] { this->prependTextureLayer (this->m_shader->getFragment ().getTextures (), "fragment shader"); },
+	[this] { this->prependTextureLayer (this->m_pass.textures, "pass"); },
+	[this] { this->prependUserTextureLayer (this->m_pass.usertextures, "pass"); },
+	[this] { this->prependTextureLayer (this->m_override.textures, "override"); },
+	[this] { this->prependUserTextureLayer (this->m_override.usertextures, "override"); },
+	[this] { this->setupBoundTextureLayer (); }
+    );
     this->setupTextureResolutionUniforms ();
 }
 
