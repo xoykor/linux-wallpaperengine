@@ -132,6 +132,7 @@ strip --strip-debug "${ENGINE_DIR}/libcef.so" || fail 'Could not strip CEF debug
 
 # Copy the renderer's non-system shared-library dependencies into AppDir. This
 # makes the bundle independent of the build host's GLEW/FFmpeg/KissFFT ABIs.
+LD_LIBRARY_PATH="${BUILD_DIR}/lib:${ENGINE_DIR}/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
 APPIMAGE_EXTRACT_AND_RUN=1 "${LINUXDEPLOY_BIN}" \
     --verbosity=2 \
     --appdir="${APPDIR}" \

@@ -66,13 +66,15 @@ std::optional<int> eyeLayerRole (const std::vector<std::string>& tokens) {
 	= [&tokens] (const std::string& expected) { return std::ranges::find (tokens, expected) != tokens.end (); };
     const bool hasEye = has ("eye") || has ("eyeball");
     const bool hasSide = has ("left") || has ("right");
+    const bool numericSuffix = tokens.size () == 2
+	&& std::ranges::all_of (tokens.back (), [] (unsigned char value) { return std::isdigit (value); });
     if (has ("sclera") || has ("eyewhite") || has ("eyeballwhite") || (hasEye && has ("white"))) {
 	return 0;
     }
-    if (has ("iris") && (hasEye || hasSide || tokens.size () <= 2)) {
+    if (has ("iris") && (hasEye || hasSide || tokens.size () == 1 || numericSuffix)) {
 	return 1;
     }
-    if (has ("pupil") && (hasEye || hasSide || tokens.size () <= 2)) {
+    if (has ("pupil") && (hasEye || hasSide || tokens.size () == 1 || numericSuffix)) {
 	return 2;
     }
     return std::nullopt;
