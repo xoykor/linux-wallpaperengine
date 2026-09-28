@@ -27,11 +27,17 @@ using WallpaperEngine::Data::JSON::JSON;
 
 namespace {
 float parseFiniteFloat (const std::string& value, const char* option) {
-    const float parsed = std::stof (value);
-    if (!std::isfinite (parsed)) {
-	sLog.exception ("Non-finite value for ", option, ": ", value);
+    try {
+	const float parsed = std::stof (value);
+	if (!std::isfinite (parsed)) {
+	    sLog.exception ("Non-finite value for ", option, ": ", value);
+	}
+	return parsed;
+    } catch (const std::invalid_argument&) {
+	sLog.exception ("Invalid numeric value for ", option, ": ", value);
+    } catch (const std::out_of_range&) {
+	sLog.exception ("Numeric value out of range for ", option, ": ", value);
     }
-    return parsed;
 }
 }
 
@@ -766,11 +772,10 @@ void ApplicationContext::loadSettingsFromArgv () {
 		|| value.find (',', second + 1) != std::string::npos) {
 		sLog.exception ("--border-colour expects exactly three comma-separated values");
 	    }
-	    glm::vec3 colour { std::stof (value.substr (0, first)),
-			       std::stof (value.substr (first + 1, second - first - 1)),
-			       std::stof (value.substr (second + 1)) };
-	    if (!std::isfinite (colour.x) || !std::isfinite (colour.y) || !std::isfinite (colour.z)) {
-		sLog.exception ("--border-colour requires finite values");
+	    glm::vec3 colour {
+		parseFiniteFloat (value.substr (0, first), "--border-colour"),
+		parseFiniteFloat (value.substr (first + 1, second - first - 1), "--border-colour"),
+		parseFiniteFloat (value.substr (second + 1), "--border-colour"),
 	    }
 	    colour = glm::clamp (colour, glm::vec3 (0.0f), glm::vec3 (1.0f));
 	    if (this->settings.render.mode == DESKTOP_BACKGROUND && !lastScreen.empty ())
