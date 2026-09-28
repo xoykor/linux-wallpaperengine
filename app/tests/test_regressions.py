@@ -38,6 +38,59 @@ class SteamLibraryTests(unittest.TestCase):
 
 
 class DaemonRegressionTests(unittest.TestCase):
+    def test_output_refresh_preserves_pending_wallpaper_during_shutdown(self) -> None:
+        class RunningChild:
+            def poll(self) -> int | None:
+                return None
+
+        service = daemon.WallpaperDaemon()
+        service.catalog = {"1": {"title": "Current"}, "2": {"title": "Requested"}}
+        service.outputs = ["DP-1"]
+        service.current_id = "1"
+        service.pending_id = "2"
+        service.child = RunningChild()
+        service.terminating = True
+
+        with (
+            mock.patch.object(
+                model, "scan_catalog", side_effect=[service.catalog, {"2": {"title": "Requested"}}]
+            ),
+            mock.patch.object(
+                model, "detect_outputs", side_effect=[["DP-1", "HDMI-A-1"], ["DP-1", "HDMI-A-1"]]
+            ),
+        ):
+            service._refresh(force=True)
+            service._refresh(force=True)
+
+        self.assertEqual(service.pending_id, "2")
+
+    def test_fixed_assignment_is_restored_after_crash_cooldown(self) -> None:
+        class RunningChild:
+            def poll(self) -> int | None:
+                return None
+
+        service = daemon.WallpaperDaemon()
+        service.config = model.validate_config({"screen_assignments": {"DP-1": "1"}})
+        service.catalog = {
+            "1": {"title": "Fixed", "path": "/wallpapers/1", "assets": "/missing"},
+            "2": {"title": "Fallback", "path": "/wallpapers/2", "assets": "/missing"},
+        }
+        service.outputs = ["DP-1"]
+        service.screens = {"DP-1": "2"}
+        service.current_id = "2"
+        service.child = RunningChild()
+        service.failed["1"] = time.time() - daemon._CRASH_COOLDOWN - 1
+
+        with (
+            mock.patch.object(service, "_reap_child"),
+            mock.patch.object(service, "_refresh"),
+            mock.patch.object(service, "_publish"),
+        ):
+            service._tick()
+
+        self.assertTrue(service.terminating)
+        self.assertEqual(service.pending_id, "2")
+
     def test_disabling_rotation_persists_current_wallpaper(self) -> None:
         service = daemon.WallpaperDaemon()
         service.config = model.validate_config({})

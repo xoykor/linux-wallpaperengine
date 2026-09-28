@@ -96,10 +96,11 @@ class WallpaperDaemon:
         old_outputs = self.outputs
         self.catalog = new_catalog
         self.outputs = new_outputs
-        if self.child is not None and old_outputs != new_outputs:
-            self._request_switch(self.current_id)
-        if self.current_id and self.current_id not in new_catalog:
-            self._request_switch(None)
+        if self.child is not None and not self.terminating:
+            if self.current_id and self.current_id not in new_catalog:
+                self._request_switch(None)
+            elif old_outputs != new_outputs:
+                self._request_switch(self.current_id)
 
     def _available(self, wallpaper_id: str | None, *, now: float | None = None) -> bool:
         if wallpaper_id is None or wallpaper_id not in self.catalog:
@@ -314,6 +315,19 @@ class WallpaperDaemon:
                     interval = self.config["interval_minutes"] * 60
                     self.next_change_mono = now + interval
                     self.next_change_at = time.time() + interval
+        if self.child is not None and not self.terminating:
+            for screen in self.outputs:
+                assigned = self.config["screen_assignments"].get(screen)
+                if (
+                    assigned in self.catalog
+                    and self.screens.get(screen) != assigned
+                    and self._available(assigned)
+                ):
+                    # A fixed wallpaper that crashed is temporarily replaced
+                    # while it is cooling down. Rebuild the renderer once the
+                    # cooldown expires so the fixed assignment is restored.
+                    self._request_switch(self.current_id)
+                    break
         if self.child is None and now >= self.retry_at:
             pending_allowed = self._available(self.pending_id)
             if self.config["rotation_enabled"]:
