@@ -128,6 +128,14 @@ private:
     void setupShaderVariables ();
     void setupUniforms ();
     void setupTextureUniforms ();
+    [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTextureReference (const std::string& textureName);
+    [[nodiscard]] std::optional<std::string> resolveUserTextureSelection (const std::string& propertyOrTexture) const;
+    void prependTextureChainEntry (int index, std::shared_ptr<const TextureProvider> texture);
+    void setInitialShaderTextures (const TextureMap& textures);
+    void prependTextureLayer (const TextureMap& textures, const char* context);
+    void prependUserTextureLayer (const TextureMap& textures, const char* context);
+    void setupBoundTextureLayer ();
+    void setupTextureResolutionUniforms ();
     void setupAttributes ();
     void addAttribute (const std::string& name, GLint type, GLint elements, const GLuint* value);
     void addUniform (ShaderVariable* value);
