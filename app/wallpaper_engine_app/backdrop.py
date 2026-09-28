@@ -49,6 +49,6 @@ def enable_backdrop_blur(window: object) -> bool:
         )
         xlib.XFlush(xdisplay)
         return result != 0
-    except (ImportError, AttributeError, OSError, TypeError, ValueError):
+    except Exception:
         # GTK remains usable without the optional KWin X11 blur hint.
         return False
