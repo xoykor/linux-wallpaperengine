@@ -502,7 +502,8 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 		const glm::vec3 spawnOrigin = resolveEmitterSpawnOrigin (transformedEmitterOrigin, controlPointIndex);
 
-		const glm::vec3 emitterOffset = ParticleEmitterAlgorithms::sampleBoxOffset (emitter, flippedDirections, m_rng);
+		const glm::vec3 emitterOffset
+		    = ParticleEmitterAlgorithms::sampleBoxOffset (emitter, flippedDirections, m_rng);
 		p.position = spawnOrigin + emitterOffset;
 
 		// Emitter does not set velocity - initializers handle that
@@ -548,7 +549,8 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    // Determine spawn origin (control point or emitter origin)
 	    const glm::vec3 spawnOrigin = resolveEmitterSpawnOrigin (transformedEmitterOrigin, controlPointIndex);
 
-	    const glm::vec3 emitterOffset = ParticleEmitterAlgorithms::sampleSphereOffset (emitter, m_particle.flags, m_rng);
+	    const glm::vec3 emitterOffset
+		= ParticleEmitterAlgorithms::sampleSphereOffset (emitter, m_particle.flags, m_rng);
 	    p.position = spawnOrigin + emitterOffset;
 	    p.velocity = ParticleEmitterAlgorithms::resolveVelocity (emitter, emitterOffset, m_rng);
 
