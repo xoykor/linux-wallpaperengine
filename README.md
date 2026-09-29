@@ -1,224 +1,85 @@
-<p align="center">
-	<a href="https://github.com/Almamu/linux-wallpaperengine/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Almamu/linux-wallpaperengine" /></a>
-    <a href="https://github.com/Almamu/linux-wallpaperengine/actions?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/Almamu/linux-wallpaperengine/cmake.yml?branch=main" /></a>
-    <img src="https://img.shields.io/coderabbit/prs/github/Almamu/linux-wallpaperengine?utm_source=oss&utm_medium=github&utm_campaign=Almamu%2Flinux-wallpaperengine&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews" />
-    <a href="https://github.com/Almamu/linux-wallpaperengine/pulse"><img src="https://img.shields.io/endpoint?url=https://ghloc.vercel.app/api/Almamu/linux-wallpaperengine/badge?filter=.cpp$,.h$&style=flat&logoColor=white&label=Lines of Code" /></a>
-	<a href="https://www.codefactor.io/repository/github/almamu/linux-wallpaperengine"><img src="https://img.shields.io/codefactor/grade/github/Almamu/linux-wallpaperengine" /></a>
-	<a href="https://github.com/Almamu/linux-wallpaperengine/graphs/commit-activity"><img src="https://img.shields.io/github/commit-activity/m/Almamu/linux-wallpaperengine" /></a>
-	<a href="https://github.com/Almamu/linux-wallpaperengine/graphs/contributors"><img src="https://img.shields.io/github/contributors/Almamu/linux-wallpaperengine" /></a>
-	<a href="https://github.com/Almamu/linux-wallpaperengine/issues"><img src="https://img.shields.io/github/issues-raw/Almamu/linux-wallpaperengine" /></a>
-	<a href="https://github.com/Almamu/linux-wallpaperengine/issues?q=is%3Aissue+is%3Aopen+label%3A%22help%20wanted%22"><img src="https://img.shields.io/github/issues/Almamu/linux-wallpaperengine/help%20wanted?color=green" alt="help wanted"></a>
-    <a href="https://wpengine.alma.mu/"><img src="https://img.shields.io/badge/showcase_gallery-blue" alt="Showcase gallery" /></a>
-    <a href="https://deepwiki.com/Almamu/linux-wallpaperengine"><img src="https://img.shields.io/badge/Deepwiki-Almamu%2Flinux--wallpaperengine-blue?logo=data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK%2FAIi%2BQuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06%2Fuv1saEDv4O3n3dV60RfP947Mm9%2FSQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH%2F%2FPB8mnKqScAhsD0kYP3j%2FYt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY%2F56ebRWeraTjMt%2F00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ%2BfXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB%2FimwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE%2BgO0SsWmPiXB%2Bjikdf6SizrT5qKasx5j8ABbHpFTx%2BvFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa%2BAx283gghmj%2Bvj7feE2KBBRMW3FzOpLOADl0Isb5587h%2FU4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5%2FXFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb%2FvA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU%2B3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26%2FHfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr%2FFGaKiG%2BT%2Bv%2BTQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r%2FcKaoqr%2B27%2FXcrS5UwSMbQAAAABJRU5ErkJggg%3D%3D" alt="DeepWiki documentation" /></a>
-</p>
+# Linux Wallpaper Engine
 
-# 🖼️ Linux Wallpaper Engine
+Run animated Wallpaper Engine wallpapers on Linux with the upstream OpenGL
+renderer and this fork's optional GTK 4 desktop controller.
 
-> **Fork notice:** this repository is a fork of [Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine). The project, documentation and original implementation come from upstream unless a change is explicitly identified as fork-specific.
+This repository is a fork of
+[Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine).
+The renderer is the original project's work; the GTK desktop app, its user
+service, playlists, and related controls are additions maintained here. See
+the [upstream README](https://github.com/Almamu/linux-wallpaperengine#readme)
+for renderer-specific build prerequisites and the full command-line reference.
 
-## About this fork
+## Screenshots
 
-This fork is maintained under the GitHub fork relationship so upstream history and attribution remain visible. For upstream issues, releases, documentation changes and broad compatibility questions, check the original project first. Fork-specific changes should be evaluated against this repository's commit history before being proposed upstream.
+The populated-library image was captured while the renderer was stopped; the
+other app images show the running state indicated in the app.
 
-The code is distributed under **GNU General Public License v3.0**; see [LICENSE](LICENSE).
+### Wallpaper on the desktop
 
+![Wallpaper rendered on a KDE Plasma desktop](docs/screenshots/desktop-wallpaper-running.png)
 
+### GTK desktop controller
 
-Bring **Wallpaper Engine**-style live wallpapers to Linux! This project allows you to run animated wallpapers from Steam’s Wallpaper Engine right on your desktop.
+![Settings page while the wallpaper engine is running](docs/screenshots/settings-engine-running.png)
 
-> ⚠️ This is an educational project that evolved into a functional OpenGL-based wallpaper engine for Linux. Expect some limitations and quirks!
+![Empty library while the engine service is running](docs/screenshots/library-empty-engine-running.png)
 
----
+![Populated library with 136 wallpapers; the engine was stopped for this capture](docs/screenshots/library-populated-engine-stopped.png)
 
-## 📦 System Requirements
+## What this fork adds
 
-To compile and run this, you'll need:
+The GTK 4 app provides:
 
-- OpenGL 3.3 support
-- CMake
-- LZ4, Zlib
-- SDL2
-- FFmpeg
-- X11 or Wayland
-- Xrandr (for X11)
-- GLFW3, GLEW, GLUT, GLM
-- MPV
-- PulseAudio
-- FFTW3
+- A searchable library of locally downloaded Workshop projects, with previews,
+  favorites, and scene/video filters.
+- Playlists that can be created, renamed, reordered, and used for automatic
+  wallpaper rotation. Wallpapers can be pinned to individual displays.
+- Start, stop, and next controls, plus settings for rotation, shuffle, interval,
+  frame rate, scaling, and audio mute.
+- A user-level `systemd` service that keeps wallpapers running when the app
+  window closes.
+- English, Portuguese, German, Russian, Japanese, Chinese, Spanish, and Hindi
+  interface translations, along with accent-color controls.
 
-Install the required dependencies on Ubuntu/Debian-based systems:
+Subscribe to wallpapers in the original Wallpaper Engine app on Steam. Steam
+downloads the subscribed projects; this app reads those local files and refreshes
+its library. It does not download Workshop content itself or replace Steam.
 
-### Ubuntu 22.04
-```bash
-sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev
-```
+## Compatibility
 
-### Ubuntu 24.04
-```bash
-sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev
-```
+- KDE Plasma is the desktop environment tested with this controller and
+  renderer.
+- On Wayland, wallpaper rendering requires compositor support for
+  `wlr-layer-shell`; monitor discovery on KDE Plasma Wayland uses
+  `kscreen-doctor`.
+- GNOME/Mutter on Wayland does not provide the renderer's required
+  `wlr-layer-shell` protocol, so wallpaper rendering there is not supported.
+- On X11, monitor discovery uses `xrandr`. A compositor or desktop that paints
+  over the root background can hide the rendered wallpaper.
+- The renderer requires a working OpenGL setup. The specific dependencies and
+  supported options are documented by the
+  [upstream project](https://github.com/Almamu/linux-wallpaperengine#readme).
 
-### Alt linux
-```bash
-sudo epm update
-sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libGL-devel libGLEW-devel freeglut-devel libSDL2-devel liblz4-devel libavcodec-devel libavformat-devel libavutil-devel libswscale-devel libXxf86vm-devel libglm-devel libglfw3-devel libmpv-devel mpv libpulseaudio-devel libpulseaudio libfftw3-devel libpng-devel libffi-devel libswresample-devel libgmpxx-devel
-```
+## Install
 
-Install the required dependencies on RHEL/Fedora-based systems:
+Install or build the `linux-wallpaperengine` renderer first. The desktop app
+looks for it in `PATH` or `~/.local/bin`. Follow the upstream instructions for
+renderer dependencies and Steam asset discovery.
 
-### Fedora 42
-```bash
-sudo dnf update
-sudo dnf install gcc g++ cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel gmp-devel
-```
+### Build the renderer from this checkout
 
----
-
-## 🐧 Arch Linux Users
-
-You can install this directly from the AUR using your favorite AUR helper:
-
-```bash
-yay -S linux-wallpaperengine-git
-```
-
-> This installs the latest development version.
-
-**Note:** You’ll still need assets from the official Wallpaper Engine (via Steam). See below for details.
-
----
-
-## 🚀 Getting Started
-
-### 1. Get Wallpaper Engine Assets
-
-You **must own and install Wallpaper Engine** via Steam. This provides the required assets used by many backgrounds.
-
-The application checks the standard Steam, Flatpak Steam and Snap Steam locations:
-
-```
-~/.steam/steam/steamapps/common
-~/.local/share/Steam/steamapps/common
-~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common
-~/snap/steam/common/.local/share/Steam/steamapps/common
-```
-
-It also reads each installation's `steamapps/libraryfolders.vdf`, so additional Steam
-libraries on other mounted disks are discovered automatically. A custom
-`XDG_DATA_HOME/Steam` location is supported as well.
-
-> ✅ Wallpaper Engine assets and Workshop content can live in a secondary Steam library; they no longer need to be under the default home-directory library.
-
----
-
-#### ❗ If Assets Aren’t Found Automatically
-
-If the assets are not detected automatically, you'll see a message like this:
-```
-Cannot find a valid assets folder, resolved to 'assets'
-```
-
-You can copy the `assets` folder manually:
-
-1. In Steam, right-click **Wallpaper Engine** → **Manage** → **Browse local files**
-2. Copy the `assets` folder
-3. Paste it into the same folder where the `linux-wallpaperengine` binary is located (build/output if you followed the build instructions)
-
-Another option is to specify the path manually with the `--assets-dir` option, like this:
-```bash
-linux-wallpaperengine --assets-dir /path/to/assets
-```
----
-
-### 2. Build from Source
-
-> ⚠️ If you installed the AUR package mentioned before, you can skip this step.
-
-Clone the repo:
+Clone with submodules, configure, and build:
 
 ```bash
 git clone --recurse-submodules https://github.com/xoykor/linux-wallpaperengine.git
 cd linux-wallpaperengine
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
-Build it:
-
-```bash
-mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE='Release' ..
-make
-```
-
-Once the build process is finished, this should create a new `output` folder containing the app and all the required
-support files to run.
-
----
-
-## 🧪 Usage
-
-Basic syntax:
-
-```bash
-linux-wallpaperengine [options] <background_id or path>
-```
-
-You can use either:
-- A Steam Workshop ID (e.g. `1845706469`)
-- A path to a background folder
-
-### Desktop app (this fork)
-
-The optional GTK 4 app provides a responsive library of installed Workshop
-items with cached previews, search and scene/video/favorites filters. A plain
-click starts the selected wallpaper immediately on every display, stopping an
-active playlist and clearing per-display pins. Use Ctrl+click to select several
-wallpapers or Shift+click to select a range without changing playback; the
-floating selection bar adds them to an existing or new playlist. You can also
-pin a wallpaper to a specific display, mark favorites, and control rotation,
-shuffle, the interval, FPS, scaling and audio mute. The app has start/stop/next
-controls and a setting for a custom renderer path. A user
-systemd service keeps the wallpaper running when the window is closed. The
-default renderer setup runs continuously at 30 FPS with audio isolated; it
-does not suspend the renderer when another window covers the wallpaper.
-
-Discover and subscribe to wallpapers in the **original Wallpaper Engine app**.
-Steam downloads subscribed items. This Linux app reads the local Workshop
-library and automatically shows new wallpapers after Steam finishes downloading
-them, including while its window is open. Discovery and subscriptions use the
-existing Steam session in Wallpaper Engine, so this app does not ask you to
-sign in again.
-
-The **Playlists** page creates, renames, deletes, activates and reorders
-playlists. Its searchable picker can add multiple installed wallpapers at once.
-With shuffle off, rotation follows the order shown in the playlist. The active
-playlist determines the rotation pool; wallpapers pinned to a display stay
-fixed until you choose a wallpaper for all displays.
-
-The interface adapts to narrower windows. The **Languages** page offers an
-automatic system-language option plus English, Portuguese, German, Russian,
-Japanese, Mandarin Chinese, Spanish and Hindi; the choice is saved per user.
-New installations follow the system language, with English as the fallback.
-An existing language choice is preserved.
-The palette button in the title bar adjusts the interface accent color and
-intensity, with presets; the choice is saved per user.
-Keyboard shortcuts include Ctrl+F for library search, Ctrl+R to refresh,
-Ctrl+N for a new playlist and Ctrl+1/2/3/4 to switch pages.
-
-The GTK 4 control app is intended to stay distribution-neutral across
-systemd-based Fedora and Debian/Ubuntu families. Display discovery prefers
-`kscreen-doctor` when KScreen is installed and falls back to `xrandr` on
-X11. Renderer/compositor support is a separate constraint: KDE Plasma is the
-tested desktop target; GNOME/Mutter Wayland does not implement the
-`wlr-layer-shell` protocol required by the renderer, so GNOME Wayland desktop
-rendering is not currently claimed as supported. On X11, the renderer also
-retains the upstream limitation that a desktop/compositor drawing over the
-root background can hide the wallpaper.
-
-Install the renderer first and make `linux-wallpaperengine` available in
-`PATH` or `~/.local/bin`. If you built the renderer from this checkout, one
-way to keep its binary and support files together is:
+Install it under your home directory and make the executable discoverable by
+the app:
 
 ```bash
 cmake --install build --prefix "$HOME/.local/opt/linux-wallpaperengine"
@@ -227,43 +88,44 @@ ln -s "$HOME/.local/opt/linux-wallpaperengine/linux-wallpaperengine" \
   "$HOME/.local/bin/linux-wallpaperengine"
 ```
 
-Skip those commands if your package manager already installed the renderer.
-The desktop app also needs Python 3 with `gi`/GTK 4 introspection and a
-working user systemd manager. For monitor discovery, install `kscreen` on KDE
-Plasma or the XRandR command-line utility for an X11 session.
+The CMake configure step downloads the matching Chromium Embedded Framework
+distribution. It needs network access. If a package manager already installed
+the renderer, skip the build and install steps.
 
-Typical packages:
+### Install the desktop app
+
+The app requires Python 3, PyGObject with GTK 4 introspection, and a working
+user `systemd` manager. Install monitor discovery for your session as well:
+`kscreen-doctor` on KDE Plasma Wayland or `xrandr` on X11.
+
+For example, on Debian or Ubuntu:
 
 ```bash
-# Debian / Ubuntu
-sudo apt install python3-gi gir1.2-gtk-4.0
-# Optional, for minimizing the control app to the tray:
-sudo apt install gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1
-# KDE Plasma display discovery:
+sudo apt install python3 python3-gi gir1.2-gtk-4.0
+# KDE Plasma monitor discovery:
 sudo apt install kscreen
-# X11 fallback (provides xrandr):
+# X11 monitor discovery instead:
 sudo apt install x11-xserver-utils
-
-# Fedora
-sudo dnf install python3-gobject gtk4
-# Install GTK 3 and Ayatana AppIndicator introspection packages for tray support.
-# KDE Plasma display discovery:
-sudo dnf install kscreen
-# X11 fallback:
-sudo dnf install xrandr
 ```
 
-Run the installer as your normal user, without `sudo`, from the repository
-root:
+On Fedora, the corresponding packages are typically `python3-gobject`,
+`gtk4`, `kscreen`, and `xrandr`.
+
+From the repository root, install as your normal desktop user, without `sudo`:
 
 ```bash
 ./app/install.sh
 ```
 
-On the first install, the script adds **Linux Wallpaper Engine** to the app
-menu and enables and starts `linux-wallpaperengine-app.service`. Open it from
-the menu or run
-`~/.local/bin/linux-wallpaperengine-app`. The service can be managed with:
+On a first install, this adds the app to your desktop menu and enables and
+starts `linux-wallpaperengine-app.service`. Launch **Linux Wallpaper Engine**
+from the application menu or run:
+
+```bash
+~/.local/bin/linux-wallpaperengine-app
+```
+
+Useful service commands:
 
 ```bash
 systemctl --user status linux-wallpaperengine-app.service
@@ -271,219 +133,28 @@ systemctl --user restart linux-wallpaperengine-app.service
 journalctl --user -u linux-wallpaperengine-app.service -e
 ```
 
-Re-running the installer updates the app while preserving whether its service
-was enabled and running. A stopped service stays stopped, and an active one
-restarts with the updated code. When the new service is enabled or running,
-the installer disables the older `linux-wallpaperengine-rotation.service`
-before starting the new one so two renderers do not compete. It keeps the old
-service file and scripts and restores its previous service state if the
-installation fails. The new app has separate settings in
-`~/.config/linux-wallpaperengine/app.json`; it does not import the old
-rotation queue.
-
-To remove the app, its menu shortcut and its service while keeping your
-settings and renderer:
+To remove the app, its menu entry, and its service while keeping your settings
+and renderer:
 
 ```bash
 ./app/install.sh --uninstall
 ```
 
-Uninstall does not change the older rotation service. An already installed
-copy of that helper may still contain the former SIGSTOP-based pause logic,
-which could freeze PipeWire/Firefox or hide the wallpaper after login. If you
-want to return to the legacy helper, install its corrected version from this
-checkout with `./contrib/rotation/install.sh`.
+## Use the renderer directly
 
-The catalog reads downloaded Steam Workshop projects from the standard Steam,
-Flatpak and Snap locations listed above and from additional libraries declared
-in `libraryfolders.vdf`. Discover and subscribe in the original Wallpaper Engine
-app; Steam handles downloads and this app updates its library when the files
-become available. It currently shows `scene` and `video` projects.
-Wallpaper Engine's Steam assets are still needed for some projects. Display
-discovery uses KScreen when available and XRandR on X11; wallpaper layering
-still depends on the renderer and compositor support described below.
+The GTK app is optional. The renderer can also be run from a terminal with a
+Workshop ID or a path to a wallpaper directory:
 
----
-
-### Other GUIs
-
-The community also maintains these alternative interfaces:
-
-- [simple-linux-wallpaperengine-gui](https://github.com/Maxnights/simple-linux-wallpaperengine-gui) by @Maxnights
-- [linux-wallpaper-engine](https://github.com/jagrat7/linux-wallpaper-engine) by @jagrat7
-- [wallpaperengine-gui](https://github.com/MikiDevLog/wallpaperengine-gui) by @MikiDevLog
-- [linux-wallpaperengine-controllfer for Noctalia Shell](https://noctalia.dev/plugins/linux-wallpaperengine-controller/) by @PaloMiku
-- [waypaper](https://github.com/anufrievroman/waypaper) by @anufrievroman
-
-### 🔧 Common Options
-
-| Option | Description |
-|--------|-------------|
-| `--silent` | Mute background audio |
-| `--volume <val>` | Set audio volume |
-| `--noautomute` | Don't mute when other apps play audio |
-| `--no-audio-processing` | Disable audio reactive features |
-| `--fps <val>` | Limit frame rate |
-| `--window <XxYxWxH>` | Run in windowed mode with custom size/position |
-| `--screen-root <screen>` | Set as background for specific screen |
-| `--screen-span <screen-1>,<screen-2>,...` | Stretch a single wallpaper across multiple screens |
-| `--bg <id/path>` | Assign a background to a specific screen (use after `--screen-root`/`--screen-span`) |
-| `--scaling <mode>` | Wallpaper scaling: `stretch`, `fit`, `fill`, or `default` |
-| `--clamping <mode>` | Set texture clamping: `clamp`, `border`, `repeat` |
-| `--assets-dir <path>` | Set custom path for assets |
-| `--screenshot <file>` | Save screenshot (PNG, JPEG, BMP) |
-| `--list-properties` | Show customizable properties of a wallpaper |
-| `--set-property name=value` | Override a specific property |
-| `--disable-mouse` | Disable mouse interaction |
-| `--disable-parallax` | Disable parallax effect on backgrounds that support it |
-| `--no-fullscreen-pause` | Prevent pausing while fullscreen apps are running |
-| `--fullscreen-pause-only-active` | Wayland only: pause only when a fullscreen window is active |
-| `--fullscreen-pause-ignore-appid <val>` | Wayland only: ignore fullscreen windows whose app_id contains `<val>` (repeatable) |
-
----
-
-### 💡 Examples
-
-#### Run a background by ID
 ```bash
 linux-wallpaperengine 1845706469
+linux-wallpaperengine ~/path/to/wallpaper
 ```
 
-#### Run a background from a folder
-```bash
-linux-wallpaperengine ~/backgrounds/1845706469/
-```
+For renderer options, wallpaper properties, display selection, troubleshooting,
+and additional examples, see the
+[upstream command-line documentation](https://github.com/Almamu/linux-wallpaperengine#usage).
 
-#### Assign backgrounds to screens with scaling
-```bash
-linux-wallpaperengine \
-  --scaling stretch --screen-root eDP-1 --bg 2667198601 \
-  --scaling fill --screen-root HDMI-1 --bg 2667198602
-```
+## License
 
-#### Stretch one wallpaper across multiple monitors
-```bash
-linux-wallpaperengine \
-  --scaling fill --screen-span HDMI-A-1,DP-2,DP-3 --bg 1845706469
-```
-
-#### Run in a window
-```bash
-linux-wallpaperengine --window 0x0x1280x720 1845706469
-```
-
-#### Limit FPS to save power
-```bash
-linux-wallpaperengine --fps 30 1845706469
-```
-
-#### Take a screenshot
-```bash
-linux-wallpaperengine --screenshot ~/wallpaper.png 1845706469
-```
-
-This can be useful as output for pywal or other color systems that use images as basis to generate a set of colors
-to apply to your system.
-
-#### View and change properties
-```bash
-linux-wallpaperengine --list-properties 2370927443
-```
-
-The output includes all the relevant information for each of the different properties:
-```
-barcount - slider
-	Description: Bar Count
-	Value: 64
-	Minimum value: 16
-	Maximum value: 64
-	Step: 1
-
-bloom - boolean
-	Description: Bloom
-	Value: 0
-frequency - combolist
-	Description: Frequency
-	Value: 2
-		Posible values:
-		16 -> 1
-		32 -> 2
-		64 -> 3
-
-owl - boolean
-	Description: Owl
-	Value: 0
-rain - boolean
-	Description: Rain
-	Value: 1
-schemecolor - color
-	Description: ui_browse_properties_scheme_color
-	R: 0.14902 G: 0.23137 B: 0.4 A: 1
-visualizer - boolean
-	Description: <hr>Add Visualizer<hr>
-	Value: 1
-visualizercolor - color
-	Description: Bar Color
-	R: 0.12549 G: 0.215686 B: 0.352941 A: 1
-visualizeropacity - slider
-	Description: Bar Opacity
-	Value: 1
-	Minimum value: 0
-	Maximum value: 1
-	Step: 0.1
-
-visualizerwidth - slider
-	Description: Bar Spacing
-	Value: 0.25
-	Minimum value: 0
-	Maximum value: 0.5
-	Step: 0.01
-```
-
-Any of these values can be modified with the --set-property switch. Say you want to enable the bloom in this background, you would do so like this:
-```
-linux-wallpaperengine --set-property bloom=1 2370927443
-```
-
----
-
-## 🧪 Wayland & X11 Support
-
-- **Wayland**: Works with compositors that support `wlr-layer-shell-unstable`. Uses `xdg-output-unstable-v1` for accurate monitor positioning (required for `--screen-span`).
-- **X11**: Requires XRandr. Use `--screen-root <screen_name>` (as shown in `xrandr`).
-
-> ⚠ For X11 users: Currently doesn't work if a compositor or desktop environment (e.g. GNOME, KDE, Nautilus) is drawing the background.
-
----
-
-## 🌈 Example Backgrounds
-
-![example1](docs/images/example.gif)
-![example2](docs/images/example2.gif)
-
-Want to see more examples of backgrounds that work? Head over to the [project's website](https://wpengine.alma.mu/#showcase)
-
-## 🪲 Common issues
-### Black screen when setting as screen's background
-This can be caused by a few different things depending on your environment and setup.
-
-### X11
-Common symptom of a compositor drawing to the background which prevents Wallpaper Engine from being properly visible.
-The only solution currently is disabling the compositor so Wallpaper Engine can properly draw on the screen
-
-### NVIDIA
-Some users have had issues with GLFW initialization and other OpenGL errors. These are generally something that's
-worth reporting in the issues. Sometimes adding this variable when running Wallpaper Engine helps and/or solves
-the issue:
-```bash
-__GL_THREADED_OPTIMIZATIONS=0 linux-wallpaperengine
-```
-
-We'll be looking at improving this in the future, but for now it can be a useful workaround.
-
----
-
-## 🙏 Special Thanks
-
-- [RePKG](https://github.com/notscuffed/repkg) – for texture flag insights
-- [RenderDoc](https://github.com/baldurk/renderdoc) – the best OpenGL debugger out there!
+This project is distributed under the GNU General Public License v3.0. See
+[LICENSE](LICENSE).
