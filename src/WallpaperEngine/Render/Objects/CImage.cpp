@@ -41,7 +41,22 @@ glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
 bool isMagentaNeonTint (const glm::vec3& color) { return color.r > 0.55f && color.g < 0.25f && color.b > 0.45f; }
 
 bool usesSourceUvMask (const std::string& shader, const int textureIndex) {
-	return shader.rfind ("effects/", 0) == 0 && shader != "effects/opacity" && textureIndex > 0;
+	const auto separator = shader.find_last_of ('/');
+	const std::string effect = separator == std::string::npos ? shader : shader.substr (separator + 1);
+	if (effect == "shake") {
+	    // Texture 1 is a vector field; only texture 3 is an opacity mask.
+	    return textureIndex == 3;
+	}
+	if (effect == "waterwaves") {
+	    return textureIndex == 1 || textureIndex == 2;
+	}
+	if (effect == "pulse") {
+	    return textureIndex == 2;
+	}
+	// Waterflow's texture 1 stores displacement vectors. Reprojecting the pixels
+	// without transforming those vectors changes their direction on puppet meshes.
+	return textureIndex == 1
+	    && (effect == "tint" || effect == "iris" || effect == "foliagesway" || effect == "caustics");
 }
 
 float normalizeImageAlpha (const float alpha) {
