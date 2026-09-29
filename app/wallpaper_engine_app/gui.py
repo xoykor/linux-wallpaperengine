@@ -123,6 +123,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._gallery_click_on_button = False
         self._gallery_scroll_timer = 0
         self._gallery_is_scrolling = False
+        self._gallery_wheel_idle_id = 0
+        self._gallery_wheel_pending_start: float | None = None
         self._gallery_wheel_tick_id = 0
         self._gallery_wheel_target = 0.0
         self._gallery_wheel_last_frame_time = 0.0
@@ -706,9 +708,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         if self._gallery_scroll_timer:
             GLib.source_remove(self._gallery_scroll_timer)
             self._gallery_scroll_timer = 0
-        if self._gallery_wheel_tick_id and hasattr(self, "_gallery_scroll"):
-            self._gallery_scroll.remove_tick_callback(self._gallery_wheel_tick_id)
-            self._gallery_wheel_tick_id = 0
+        self._cancel_gallery_wheel_animation()
         self._gallery_is_scrolling = False
         self._gallery_all_ids = []
         self._gallery_search = {}
@@ -913,26 +913,58 @@ class WallpaperWindow(Gtk.ApplicationWindow):
     ) -> bool:
         # Ease mouse-wheel detents, while leaving touchpad scrolling to GTK.
         get_unit = getattr(controller, "get_unit", None)
-        if get_unit is None or get_unit() != Gdk.ScrollUnit.WHEEL or dy == 0:
+        if get_unit is None:
+            return False
+        if get_unit() != Gdk.ScrollUnit.WHEEL:
+            self._cancel_gallery_wheel_animation()
+            return False
+        if dy == 0:
             return False
 
+        # Observe the native adjustment after GTK processes the wheel event.
+        if not self._gallery_wheel_idle_id:
+            adjustment = self._gallery_scroll.get_vadjustment()
+            self._gallery_wheel_pending_start = adjustment.get_value()
+            self._gallery_wheel_idle_id = GLib.idle_add(
+                self._ease_native_gallery_wheel
+            )
+        return False
+
+    def _ease_native_gallery_wheel(self) -> bool:
+        self._gallery_wheel_idle_id = 0
         adjustment = self._gallery_scroll.get_vadjustment()
+        start = self._gallery_wheel_pending_start
+        self._gallery_wheel_pending_start = None
+        if start is None:
+            return False
+
+        native_target = adjustment.get_value()
+        delta = native_target - start
+        if abs(delta) < 0.5:
+            return False
+
+        active = bool(self._gallery_wheel_tick_id)
+        target = self._gallery_wheel_target + delta if active else native_target
         lower = adjustment.get_lower()
         upper = max(lower, adjustment.get_upper() - adjustment.get_page_size())
-        active = bool(self._gallery_wheel_tick_id)
-        start = self._gallery_wheel_target if active else adjustment.get_value()
-        step = min(160.0, max(72.0, adjustment.get_page_size() * 0.16))
-        target = min(upper, max(lower, start + dy * step))
-        if target == start:
-            return active
-
-        self._gallery_wheel_target = target
+        self._gallery_wheel_target = min(upper, max(lower, target))
+        adjustment.set_value(start)
         if not active:
             self._gallery_wheel_last_frame_time = 0.0
             self._gallery_wheel_tick_id = self._gallery_scroll.add_tick_callback(
                 self._animate_gallery_wheel
             )
-        return True
+        return False
+
+    def _cancel_gallery_wheel_animation(self) -> None:
+        if self._gallery_wheel_idle_id:
+            GLib.source_remove(self._gallery_wheel_idle_id)
+            self._gallery_wheel_idle_id = 0
+            self._gallery_wheel_pending_start = None
+        if self._gallery_wheel_tick_id and hasattr(self, "_gallery_scroll"):
+            self._gallery_scroll.remove_tick_callback(self._gallery_wheel_tick_id)
+            self._gallery_wheel_tick_id = 0
+        self._gallery_wheel_last_frame_time = 0.0
 
     def _animate_gallery_wheel(
         self, _widget: Gtk.Widget, frame_clock: Gdk.FrameClock, _data: object
