@@ -19,8 +19,9 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 from . import ipc, model
 from .backdrop import enable_backdrop_blur
 from .i18n import current_language, language_options, set_language, system_language, tr
-from .previews import preview as _preview
+from .previews import preview as _preview, release as _release_preview
 from .theme import install_theme
+from .tray import TrayBridge
 
 
 SERVICE = "linux-wallpaperengine-app.service"
@@ -102,7 +103,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.catalog: dict[str, dict] = {}
         self.config: dict = model.load_config()
         self._ui_preferences = model.load_ui_preferences(self.config)
-        self.config.update(self._ui_preferences)
+        self.config.update({key: self._ui_preferences[key] for key in ("ui_hue", "ui_intensity")})
         set_language(self.config.get("language", "auto"))
         self.status: dict = {}
         self.selected_id: str | None = None
@@ -110,8 +111,12 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._updating_controls = False
         self._pending_status = False
         self._catalog_generation = 0
-        self._cards: dict[str, Gtk.FlowBoxChild] = {}
+        self._cards: dict[str, Gtk.Widget] = {}
         self._card_badges: dict[str, Gtk.Box] = {}
+        self._gallery_all_ids: list[str] = []
+        self._gallery_search: dict[str, str] = {}
+        self._gallery_visible_ids: list[str] = []
+        self._gallery_visible_set: set[str] = set()
         self._selected_ids: set[str] = set()
         self._selection_anchor_id: str | None = None
         self._gallery_click_modifiers: Gdk.ModifierType | None = None
@@ -137,8 +142,22 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._theme_updating = False
         self._ui_language = self.config.get("language", "auto")
         self._last_applied_config: dict | None = None
+        self._tray_bridge: TrayBridge | None = None
+        self._allow_close = False
 
         self._build()
+        self.connect("close-request", self._close_requested)
+        if self._ui_preferences.get("minimize_to_tray"):
+            try:
+                self._start_tray_bridge()
+            except (OSError, RuntimeError) as exc:
+                self._ui_preferences["minimize_to_tray"] = False
+                self._set_switch_value(self.minimize_to_tray_switch, False)
+                try:
+                    self._ui_preferences = model.save_ui_preferences({"minimize_to_tray": False})
+                except OSError:
+                    pass
+                self._notice(tr("Não foi possível iniciar a bandeja: {error}", error=exc), error=True)
         self._load_catalog()
         self._refresh_status()
         self._refresh_autostart()
@@ -152,6 +171,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._filter_buttons.clear()
         self._cards.clear()
         self._card_badges.clear()
+        self._gallery_filter = None
         self._language_buttons: dict[str, tuple[Gtk.Button, Gtk.Image]] = {}
         if not hasattr(self, "_theme_provider"):
             self._theme_provider = install_theme(self.get_display())
@@ -502,7 +522,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         }
         try:
             self._ui_preferences = model.save_ui_preferences(settings)
-            self.config.update(self._ui_preferences)
+            self.config.update(settings)
             self._apply_config()
         except (OSError, ValueError) as exc:
             self._notice(tr("Não foi possível salvar o tema: {error}", error=exc), error=True)
@@ -534,9 +554,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
           border-color: {accent};
           box-shadow: 0 4px 18px alpha({glow}, 0.22);
         }}
-        flowboxchild.wallpaper-card:selected,
-        flowboxchild.wallpaper-card-selected,
-        flowboxchild.wallpaper-card-selected:hover {{
+        .wallpaper-card.wallpaper-card-selected,
+        .wallpaper-card.wallpaper-card-selected:hover {{
           border: 2px solid {accent};
           box-shadow: 0 0 0 1px alpha({accent2}, 0.32), 0 7px 24px alpha({glow}, 0.22);
         }}
@@ -679,6 +698,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         return False
 
     def _build_library(self) -> Gtk.Widget:
+        self._gallery_all_ids = []
+        self._gallery_search = {}
+        self._gallery_visible_ids = []
+        self._gallery_visible_set = set()
         page = _box(vertical=True, spacing=16)
         page.add_css_class("library-page")
         self.library_page = page
@@ -744,30 +767,33 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         gallery_scroll = Gtk.ScrolledWindow()
         gallery_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.gallery = Gtk.FlowBox()
-        self.gallery.set_halign(Gtk.Align.START)
+        self._gallery_model = Gtk.StringList.new([])
+        self._gallery_filter = Gtk.CustomFilter.new(self._gallery_filter_item)
+        self._gallery_filtered_model = Gtk.FilterListModel.new(
+            self._gallery_model, self._gallery_filter
+        )
+        self._gallery_selection = Gtk.MultiSelection.new(self._gallery_filtered_model)
+        self._gallery_selection.connect("selection-changed", self._selection_changed)
+        factory = Gtk.SignalListItemFactory.new()
+        factory.connect("setup", self._gallery_item_setup)
+        factory.connect("bind", self._gallery_item_bind)
+        factory.connect("unbind", self._gallery_item_unbind)
+        self.gallery = Gtk.GridView.new(self._gallery_selection, factory)
+        self.gallery.add_css_class("wallpaper-gallery")
+        self.gallery.set_halign(Gtk.Align.FILL)
         self.gallery.set_valign(Gtk.Align.START)
-        # Each card has a fixed request below; let FlowBox keep that compact
-        # size instead of stretching cells to the available row width.
-        self.gallery.set_homogeneous(False)
-        self.gallery.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
-        # GTK's single-click activation bypasses its Ctrl/Shift selection handling.
-        # Let the FlowBox select first, then apply a plain click below.
-        self.gallery.set_activate_on_single_click(False)
-        self.gallery.connect("selected-children-changed", self._selection_changed)
-        self.gallery.connect("child-activated", self._card_activated)
+        self.gallery.set_hexpand(True)
+        self.gallery.set_min_columns(1)
+        self.gallery.set_max_columns(6)
+        # Keep click-to-apply separate from the view's built-in multi-selection.
+        self.gallery.set_single_click_activate(False)
+        self.gallery.connect("activate", self._card_activated)
         gallery_click = Gtk.GestureClick()
         gallery_click.set_button(1)
         gallery_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         gallery_click.connect("pressed", self._gallery_pressed)
         gallery_click.connect("released", self._gallery_released)
         self.gallery.add_controller(gallery_click)
-        self.gallery.set_column_spacing(8)
-        self.gallery.set_row_spacing(8)
-        self.gallery.set_min_children_per_line(1)
-        # Keep enough columns available for compact cards on maximized displays;
-        # FlowBox may otherwise allocate overly wide cells across each row.
-        self.gallery.set_max_children_per_line(8)
         gallery_scroll.set_child(self.gallery)
         self.gallery_state = Gtk.Stack()
         self.gallery_state.set_hhomogeneous(False)
@@ -834,7 +860,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.selection_create_button = create_playlist
         clear_selection = Gtk.Button(label=tr("Limpar seleção"))
         clear_selection.add_css_class("ghost-action")
-        clear_selection.connect("clicked", lambda *_: self.gallery.unselect_all())
+        clear_selection.connect("clicked", lambda *_: self._clear_gallery_selection())
         selection_bar.append(clear_selection)
         self.selection_clear_button = clear_selection
         self.selection_revealer.set_child(selection_bar)
@@ -852,11 +878,15 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 button.add_css_class("filter-chip-active")
             else:
                 button.remove_css_class("filter-chip-active")
-        if hasattr(self, "gallery"):
+        if self._gallery_filter is not None:
             self._filter_cards()
 
-    def _card_activated(self, _gallery: Gtk.FlowBox, child: Gtk.FlowBoxChild) -> None:
-        # A pointer double-click reaches FlowBox activation too; the first click
+    def _gallery_item_id_at(self, position: int) -> str | None:
+        item = self._gallery_filtered_model.get_item(position)
+        return item.get_string() if isinstance(item, Gtk.StringObject) else None
+
+    def _card_activated(self, _gallery: Gtk.GridView, position: int) -> None:
+        # A pointer double-click reaches GridView activation too; the first click
         # has already queued playback. Keep this signal for keyboard activation.
         if self._gallery_click_modifiers is not None:
             return
@@ -865,7 +895,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         modifiers = keyboard.get_modifier_state() if keyboard else Gdk.ModifierType(0)
         if modifiers & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK):
             return
-        self._play_gallery_card(child.wallpaper_id)
+        wallpaper_id = self._gallery_item_id_at(position)
+        if wallpaper_id is not None:
+            self._play_gallery_card(wallpaper_id)
 
     def _play_gallery_card(self, wallpaper_id: str) -> bool:
         if wallpaper_id in self.catalog:
@@ -879,10 +911,14 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._gallery_click_modifiers = gesture.get_current_event_state()
         target = self.gallery.pick(x, y, Gtk.PickFlags.DEFAULT)
         self._gallery_click_on_button = False
+        self._gallery_clicked_id: str | None = None
         while target is not None and target is not self.gallery:
             if isinstance(target, Gtk.Button):
                 self._gallery_click_on_button = True
                 break
+            wallpaper_id = getattr(target, "wallpaper_id", None)
+            if isinstance(wallpaper_id, str):
+                self._gallery_clicked_id = wallpaper_id
             target = target.get_parent()
 
     def _gallery_released(self, gesture: Gtk.GestureClick, count: int,
@@ -890,27 +926,28 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         if self._gallery_click_on_button:
             GLib.idle_add(self._clear_gallery_click_modifiers)
             return
-        child = self.gallery.get_child_at_pos(int(x), int(y))
         modifiers = self._gallery_click_modifiers or gesture.get_current_event_state()
-        if child is not None:
+        wallpaper_id = self._gallery_clicked_id
+        if wallpaper_id is not None:
             if modifiers & Gdk.ModifierType.SHIFT_MASK:
                 GLib.idle_add(
                     self._select_gallery_range, self._selection_anchor_id,
-                    child.wallpaper_id, bool(modifiers & Gdk.ModifierType.CONTROL_MASK),
+                    wallpaper_id, bool(modifiers & Gdk.ModifierType.CONTROL_MASK),
                 )
             else:
-                self._selection_anchor_id = child.wallpaper_id
+                self._selection_anchor_id = wallpaper_id
                 if not modifiers & Gdk.ModifierType.CONTROL_MASK and count == 1:
-                    GLib.idle_add(self._play_gallery_card, child.wallpaper_id)
+                    GLib.idle_add(self._play_gallery_card, wallpaper_id)
         GLib.idle_add(self._clear_gallery_click_modifiers)
 
     def _clear_gallery_click_modifiers(self) -> bool:
         self._gallery_click_modifiers = None
         self._gallery_click_on_button = False
+        self._gallery_clicked_id = None
         return False
 
     def _select_gallery_range(self, anchor: str | None, end: str, extend: bool) -> bool:
-        visible = [item_id for item_id, card in self._cards.items() if card.get_visible()]
+        visible = self._gallery_visible_ids
         if end not in visible:
             return False
         if anchor not in visible:
@@ -919,36 +956,215 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._selection_rebuilding = True
         try:
             if not extend:
-                self.gallery.unselect_all()
-            for item_id in visible[first:last + 1]:
-                self.gallery.select_child(self._cards[item_id])
+                self._selected_ids.clear()
+            self._gallery_selection.select_range(first, last - first + 1, not extend)
         finally:
             self._selection_rebuilding = False
-        self._selection_changed(self.gallery)
+        self._selection_changed(self._gallery_selection, first, last - first + 1)
         return False
 
-    def _selection_changed(self, gallery: Gtk.FlowBox) -> None:
+    def _gallery_filter_item(self, item: Gtk.StringObject, _data: object = None) -> bool:
+        return item.get_string() in self._gallery_visible_set
+
+    def _create_gallery_card(self) -> Gtk.Box:
+        card = _box(vertical=True, spacing=5)
+        card.add_css_class("wallpaper-card")
+        card.set_size_request(CARD_WIDTH, CARD_HEIGHT)
+        card.set_halign(Gtk.Align.START)
+        card.set_valign(Gtk.Align.START)
+        card.set_hexpand(False)
+
+        content = _box(vertical=True, spacing=5)
+        content.set_size_request(CARD_WIDTH, CARD_HEIGHT - 2)
+        content.set_halign(Gtk.Align.START)
+        content.set_valign(Gtk.Align.START)
+        content.set_hexpand(False)
+        artwork = Gtk.Overlay()
+        artwork.add_css_class("artwork")
+        artwork.set_size_request(CARD_WIDTH, CARD_PREVIEW_HEIGHT)
+        artwork.set_halign(Gtk.Align.START)
+        artwork.set_hexpand(False)
+
+        type_badge = _badge("")
+        type_badge.add_css_class("type-badge")
+        type_badge.set_halign(Gtk.Align.START)
+        type_badge.set_valign(Gtk.Align.START)
+        type_badge.set_margin_top(9)
+        type_badge.set_margin_start(9)
+        artwork.add_overlay(type_badge)
+
+        badges = _box(spacing=4)
+        badges.set_halign(Gtk.Align.END)
+        badges.set_valign(Gtk.Align.START)
+        badges.set_margin_top(8)
+        badges.set_margin_end(8)
+        live_badge = _badge(tr("● AO VIVO"), "pill-accent")
+        live_badge.set_visible(False)
+        badges.append(live_badge)
+        heart = Gtk.Button(label="♡")
+        heart.add_css_class("favorite-heart")
+        heart.add_css_class("favorite-heart-button")
+        heart.connect(
+            "clicked",
+            lambda _button, target=card: self._toggle_favorite(
+                getattr(target, "wallpaper_id", None)
+            ),
+        )
+        badges.append(heart)
+        artwork.add_overlay(badges)
+        content.append(artwork)
+
+        title = _label("", css="card-title")
+        title.set_ellipsize(Pango.EllipsizeMode.END)
+        title.set_single_line_mode(True)
+        title.set_size_request(CARD_WIDTH - 20, -1)
+        title.set_max_width_chars(24)
+        title.set_hexpand(False)
+        title.set_halign(Gtk.Align.START)
+        title.set_margin_start(10)
+        title.set_margin_end(10)
+        content.append(title)
+
+        subtitle = _label("", css="card-meta")
+        subtitle.set_ellipsize(Pango.EllipsizeMode.END)
+        subtitle.set_single_line_mode(True)
+        subtitle.set_size_request(CARD_WIDTH - 20, -1)
+        subtitle.set_max_width_chars(24)
+        subtitle.set_hexpand(False)
+        subtitle.set_halign(Gtk.Align.START)
+        subtitle.set_margin_start(10)
+        subtitle.set_margin_end(10)
+        subtitle.set_margin_bottom(8)
+        content.append(subtitle)
+        card.append(content)
+
+        card.wallpaper_id = None
+        card._gallery_artwork = artwork
+        card._gallery_type_badge = type_badge
+        card._gallery_badges = badges
+        card._gallery_title = title
+        card._gallery_subtitle = subtitle
+        card._gallery_preview = None
+        return card
+
+    def _gallery_item_setup(
+        self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem
+    ) -> None:
+        list_item.set_child(self._create_gallery_card())
+
+    def _gallery_item_bind(
+        self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem
+    ) -> None:
+        item = list_item.get_item()
+        card = list_item.get_child()
+        if not isinstance(item, Gtk.StringObject) or not isinstance(card, Gtk.Box):
+            return
+        wallpaper_id = item.get_string()
+        details = self.catalog.get(wallpaper_id)
+        if details is None:
+            return
+
+        card.wallpaper_id = wallpaper_id
+        if wallpaper_id in self._selected_ids:
+            card.add_css_class("wallpaper-card-selected")
+        else:
+            card.remove_css_class("wallpaper-card-selected")
+        card._gallery_type_badge.set_text(
+            tr("CENA" if details.get("type") == "scene" else "VÍDEO")
+        )
+        card._gallery_title.set_text(str(details.get("title") or wallpaper_id))
+        tags = details.get("tags") or []
+        kind = tr("Cena" if details.get("type") == "scene" else "Vídeo")
+        card._gallery_subtitle.set_text(
+            " · ".join(str(tag) for tag in tags[:2]) if tags else kind
+        )
+        preview_widget = _preview(
+            details.get("preview"), CARD_WIDTH, CARD_PREVIEW_HEIGHT,
+            animation_path=details.get("preview_animation"),
+            hover_target=card._gallery_artwork,
+        )
+        card._gallery_artwork.set_child(preview_widget)
+        card._gallery_preview = preview_widget
+        self._cards[wallpaper_id] = card
+        self._card_badges[wallpaper_id] = card._gallery_badges
+        self._refresh_card_indicator(wallpaper_id)
+
+    def _gallery_item_unbind(
+        self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem
+    ) -> None:
+        card = list_item.get_child()
+        if not isinstance(card, Gtk.Box):
+            return
+        wallpaper_id = getattr(card, "wallpaper_id", None)
+        if isinstance(wallpaper_id, str):
+            if self._cards.get(wallpaper_id) is card:
+                self._cards.pop(wallpaper_id, None)
+                self._card_badges.pop(wallpaper_id, None)
+        preview_widget = card._gallery_preview
+        if isinstance(preview_widget, Gtk.Stack):
+            _release_preview(preview_widget)
+        card._gallery_artwork.set_child(None)
+        card._gallery_preview = None
+        card.wallpaper_id = None
+
+    def _refresh_card_indicator(self, wallpaper_id: str) -> None:
+        container = self._card_badges.get(wallpaper_id)
+        if container is None:
+            return
+        live_badge = container.get_first_child()
+        heart = live_badge.get_next_sibling() if live_badge else None
+        if not isinstance(live_badge, Gtk.Label) or not isinstance(heart, Gtk.Button):
+            return
+        favorites = set(self.config.get("favorites", []))
+        current = self.status.get("current_id") if self.status.get("renderer_running") else None
+        favorite = wallpaper_id in favorites
+        live_badge.set_visible(wallpaper_id == current)
+        heart.set_label("♥" if favorite else "♡")
+        heart.set_tooltip_text(
+            tr("Remover dos favoritos" if favorite else "Adicionar aos favoritos")
+        )
+
+    def _selection_changed(
+        self, _selection: Gtk.MultiSelection, _position: int = 0, _n_items: int = 0
+    ) -> None:
         if self._selection_rebuilding:
             return
-        chosen = [child.wallpaper_id for child in gallery.get_selected_children()]
-        self._selected_ids = set(chosen)
+        selection = self._gallery_selection.get_selection()
+        visible_selected = {
+            self._gallery_visible_ids[selection.get_nth(index)]
+            for index in range(selection.get_size())
+            if selection.get_nth(index) < len(self._gallery_visible_ids)
+        }
+        hidden_selected = self._selected_ids - self._gallery_visible_set
+        self._selected_ids = hidden_selected | visible_selected
         for item_id, child in self._cards.items():
             if item_id in self._selected_ids:
                 child.add_css_class("wallpaper-card-selected")
             else:
                 child.remove_css_class("wallpaper-card-selected")
-        self.selection_revealer.set_reveal_child(len(chosen) > 1)
+        self.selection_revealer.set_reveal_child(len(self._selected_ids) > 1)
         count_text = tr(
-            "{count} selecionado" if len(chosen) == 1 else "{count} selecionados",
-            count=len(chosen),
+            "{count} selecionado" if len(self._selected_ids) == 1 else "{count} selecionados",
+            count=len(self._selected_ids),
         )
         self.selection_count.set_tooltip_text(count_text)
-        self.selection_count.set_text(str(len(chosen)) if self._selection_compact else count_text)
-        if len(chosen) == 1:
-            self._show_details(chosen[0])
+        self.selection_count.set_text(
+            str(len(self._selected_ids)) if self._selection_compact else count_text
+        )
+        if len(self._selected_ids) == 1:
+            self._show_details(next(iter(self._selected_ids)))
+
+    def _clear_gallery_selection(self) -> None:
+        self._selected_ids.clear()
+        self._selection_rebuilding = True
+        try:
+            self._gallery_selection.unselect_all()
+        finally:
+            self._selection_rebuilding = False
+        self._selection_changed(self._gallery_selection)
 
     def _selected_in_order(self) -> list[str]:
-        return [child.wallpaper_id for child in self.gallery.get_selected_children()]
+        return [item_id for item_id in self._gallery_all_ids if item_id in self._selected_ids]
 
     def _refresh_bulk_actions(self) -> None:
         popover = Gtk.Popover()
@@ -973,14 +1189,14 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         choices.append(create)
         clear = Gtk.Button(label=tr("Limpar seleção"))
         clear.add_css_class("ghost-action")
-        clear.connect("clicked", lambda *_: self.gallery.unselect_all())
+        clear.connect("clicked", lambda *_: self._clear_gallery_selection())
         choices.append(clear)
         popover.set_child(choices)
         self.bulk_playlist_button.set_popover(popover)
 
     def _bulk_add_to_playlist(self, name: str) -> None:
         self._playlist_add_many(name, self._selected_in_order())
-        self.gallery.unselect_all()
+        self._clear_gallery_selection()
 
     def _build_playlists(self) -> Gtk.Widget:
         page = _box(vertical=True, spacing=16)
@@ -1238,7 +1454,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.playlist_name = name
         self._set_settings(**settings)
         if initial_ids:
-            self.gallery.unselect_all()
+            self._clear_gallery_selection()
         return True
 
     def _playlist_name_dialog(self, title: str, previous: str | None,
@@ -1553,9 +1769,33 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.autostart_switch.set_sensitive(False)
         self._widget_row(
             application,
-            tr("Iniciar com a sessão"),
+            tr("Ativar o serviço com a sessão"),
             tr("Ativa o serviço do usuário quando a sessão gráfica é iniciada."),
             self.autostart_switch,
+        )
+        self.minimize_to_tray_switch = Gtk.Switch()
+        self.minimize_to_tray_switch.set_active(
+            bool(self._ui_preferences.get("minimize_to_tray", False))
+        )
+        self.minimize_to_tray_switch.connect(
+            "notify::active", self._minimize_to_tray_changed
+        )
+        self._widget_row(
+            application,
+            tr("Minimizar para a bandeja ao fechar"),
+            tr("Mantém o aplicativo aberto na bandeja; use o menu do ícone para reabrir ou sair."),
+            self.minimize_to_tray_switch,
+        )
+        self.start_app_switch = Gtk.Switch()
+        self.start_app_switch.set_active(
+            bool(self._ui_preferences.get("start_app_with_session", False))
+        )
+        self.start_app_switch.connect("notify::active", self._start_app_changed)
+        self._widget_row(
+            application,
+            tr("Iniciar o aplicativo com o sistema"),
+            tr("Abre o painel quando você entra na sessão gráfica."),
+            self.start_app_switch,
         )
         self.renderer_entry = Gtk.Entry()
         self.renderer_entry.set_placeholder_text(tr("Detectar linux-wallpaperengine no PATH"))
@@ -1649,15 +1889,26 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.library_count.set_text(tr("{count} wallpapers", count=len(self.catalog)))
             self.sidebar_library_count.set_text(tr("{count} wallpapers instalados", count=len(self.catalog)))
             selected_ids = self._selected_ids & self.catalog.keys()
-            self._selection_rebuilding = True
-            _clear(self.gallery)
-            self._cards.clear()
-            self._card_badges.clear()
             self._selected_ids = set(selected_ids)
             identifiers = sorted(
                 self.catalog, key=lambda item: str(self.catalog[item].get("title", item)).casefold()
             )
-            self._append_card_batch(identifiers, 0, generation)
+            self._gallery_all_ids = identifiers
+            self._gallery_search = {
+                wallpaper_id: " ".join(
+                    [str(self.catalog[wallpaper_id].get("title", "")), wallpaper_id]
+                    + [str(tag) for tag in self.catalog[wallpaper_id].get("tags", [])]
+                ).casefold()
+                for wallpaper_id in identifiers
+            }
+            self._selection_rebuilding = True
+            try:
+                self._gallery_model.splice(
+                    0, self._gallery_model.get_n_items(), identifiers
+                )
+            finally:
+                self._selection_rebuilding = False
+            self._filter_cards()
             selected = self.selected_id if self.selected_id in self.catalog else None
             self._show_details(selected)
             self._refresh_playlists()
@@ -1665,98 +1916,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         self._background(model.scan_catalog, done)
 
-    def _append_card_batch(self, ids: list[str], offset: int, generation: int) -> bool:
-        if generation != self._catalog_generation:
-            return False
-        for wallpaper_id in ids[offset:offset + 12]:
-            item = self.catalog[wallpaper_id]
-            content = _box(vertical=True, spacing=5)
-            content.set_size_request(CARD_WIDTH, CARD_HEIGHT - 2)
-            content.set_halign(Gtk.Align.START)
-            content.set_valign(Gtk.Align.START)
-            content.set_hexpand(False)
-            artwork = Gtk.Overlay()
-            artwork.add_css_class("artwork")
-            artwork.set_size_request(CARD_WIDTH, CARD_PREVIEW_HEIGHT)
-            artwork.set_halign(Gtk.Align.START)
-            artwork.set_hexpand(False)
-            artwork.set_child(_preview(
-                item.get("preview"), CARD_WIDTH, CARD_PREVIEW_HEIGHT,
-                animation_path=item.get("preview_animation"),
-                hover_target=artwork,
-            ))
-            type_badge = _badge(tr("CENA" if item.get("type") == "scene" else "VÍDEO"))
-            type_badge.add_css_class("type-badge")
-            type_badge.set_halign(Gtk.Align.START)
-            type_badge.set_valign(Gtk.Align.START)
-            type_badge.set_margin_top(9)
-            type_badge.set_margin_start(9)
-            artwork.add_overlay(type_badge)
-            badges = _box(spacing=4)
-            badges.set_halign(Gtk.Align.END)
-            badges.set_valign(Gtk.Align.START)
-            badges.set_margin_top(8)
-            badges.set_margin_end(8)
-            artwork.add_overlay(badges)
-            content.append(artwork)
-            title = _label(str(item.get("title") or wallpaper_id), css="card-title")
-            title.set_ellipsize(Pango.EllipsizeMode.END)
-            title.set_single_line_mode(True)
-            title.set_size_request(CARD_WIDTH - 20, -1)
-            title.set_max_width_chars(24)
-            title.set_hexpand(False)
-            title.set_halign(Gtk.Align.START)
-            title.set_margin_start(10)
-            title.set_margin_end(10)
-            content.append(title)
-            kind = tr("Cena" if item.get("type") == "scene" else "Vídeo")
-            tags = item.get("tags") or []
-            subtitle = _label(" · ".join(str(tag) for tag in tags[:2]) if tags else kind,
-                              css="card-meta")
-            subtitle.set_ellipsize(Pango.EllipsizeMode.END)
-            subtitle.set_single_line_mode(True)
-            subtitle.set_size_request(CARD_WIDTH - 20, -1)
-            subtitle.set_max_width_chars(24)
-            subtitle.set_hexpand(False)
-            subtitle.set_halign(Gtk.Align.START)
-            subtitle.set_margin_start(10)
-            subtitle.set_margin_end(10)
-            subtitle.set_margin_bottom(8)
-            content.append(subtitle)
-            child = Gtk.FlowBoxChild()
-            child.wallpaper_id = wallpaper_id
-            child.add_css_class("wallpaper-card")
-            child.set_size_request(CARD_WIDTH, CARD_HEIGHT)
-            child.set_halign(Gtk.Align.START)
-            child.set_hexpand(False)
-            child.set_child(content)
-            self.gallery.insert(child, -1)
-            self._cards[wallpaper_id] = child
-            self._card_badges[wallpaper_id] = badges
-            if wallpaper_id in self._selected_ids:
-                self.gallery.select_child(child)
-        self._refresh_card_indicators()
-        self._filter_cards()
-        if offset + 12 < len(ids):
-            GLib.idle_add(self._append_card_batch, ids, offset + 12, generation)
-        else:
-            self._selection_rebuilding = False
-            self._selection_changed(self.gallery)
-        return False
-
     def _refresh_card_indicators(self) -> None:
-        favorites = set(self.config.get("favorites", []))
-        current = self.status.get("current_id") if self.status.get("renderer_running") else None
-        for wallpaper_id, container in self._card_badges.items():
-            _clear(container)
-            if wallpaper_id == current:
-                container.append(_badge(tr("● AO VIVO"), "pill-accent"))
-            heart = Gtk.Button(label="♥" if wallpaper_id in favorites else "♡")
-            heart.add_css_class("favorite-heart")
-            heart.add_css_class("favorite-heart-button")
-            heart.set_tooltip_text(tr("Remover dos favoritos" if wallpaper_id in favorites else "Adicionar aos favoritos"))
-            heart.connect("clicked", lambda *_args, item_id=wallpaper_id: self._toggle_favorite(item_id))
-            container.append(heart)
+        for wallpaper_id in tuple(self._card_badges):
+            self._refresh_card_indicator(wallpaper_id)
 
     def _refresh_card_indicators_once(self) -> bool:
         self._refresh_card_indicators()
@@ -1766,26 +1928,40 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         query = self.search.get_text().strip().casefold()
         mode = self.filter_index
         favorites = set(self.config.get("favorites", []))
-        visible = 0
-        for wallpaper_id, card in self._cards.items():
+        selected_ids = self._selected_ids & self.catalog.keys()
+        visible_ids: list[str] = []
+        for wallpaper_id in self._gallery_all_ids:
             item = self.catalog[wallpaper_id]
-            haystack = " ".join(
-                [str(item.get("title", "")), wallpaper_id]
-                + [str(tag) for tag in item.get("tags", [])]
-            ).casefold()
-            matches = query in haystack
+            matches = query in self._gallery_search.get(wallpaper_id, "")
             if mode == 1:
                 matches &= item.get("type") == "scene"
             elif mode == 2:
                 matches &= item.get("type") == "video"
             elif mode == 3:
                 matches &= wallpaper_id in favorites
-            card.set_visible(matches)
-            visible += bool(matches)
-        self.library_count.set_text(tr("{visible} de {total}", visible=visible, total=len(self.catalog)))
-        if self.catalog and not visible and len(self._cards) < len(self.catalog):
-            return
-        if visible:
+            if matches:
+                visible_ids.append(wallpaper_id)
+
+        self._gallery_visible_ids = visible_ids
+        self._gallery_visible_set = set(visible_ids)
+        self._selected_ids = set(selected_ids)
+        was_rebuilding = self._selection_rebuilding
+        self._selection_rebuilding = True
+        try:
+            self._gallery_selection.unselect_all()
+            self._gallery_filter.changed(Gtk.FilterChange.DIFFERENT)
+            for position, wallpaper_id in enumerate(visible_ids):
+                if wallpaper_id in selected_ids:
+                    self._gallery_selection.select_item(position, False)
+        finally:
+            self._selection_rebuilding = was_rebuilding
+        if not was_rebuilding:
+            self._selection_changed(self._gallery_selection)
+
+        self.library_count.set_text(
+            tr("{visible} de {total}", visible=len(visible_ids), total=len(self.catalog))
+        )
+        if visible_ids:
             self.gallery_state.set_visible_child_name("gallery")
         else:
             if self.catalog:
@@ -2070,12 +2246,24 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._apply_config()
         self._refresh_playlists()
         self._show_details(selected)
-        self._selection_rebuilding = True
         identifiers = sorted(
             self.catalog,
             key=lambda item: str(self.catalog[item].get("title", item)).casefold(),
         )
-        self._append_card_batch(identifiers, 0, self._catalog_generation)
+        self._gallery_all_ids = identifiers
+        self._gallery_search = {
+            wallpaper_id: " ".join(
+                [str(self.catalog[wallpaper_id].get("title", "")), wallpaper_id]
+                + [str(tag) for tag in self.catalog[wallpaper_id].get("tags", [])]
+            ).casefold()
+            for wallpaper_id in identifiers
+        }
+        self._selection_rebuilding = True
+        try:
+            self._gallery_model.splice(0, self._gallery_model.get_n_items(), identifiers)
+        finally:
+            self._selection_rebuilding = False
+        self._filter_cards()
         self.tabs.set_visible_child_name(page)
         if self.status:
             self._apply_status(self.status, accept_config=False)
@@ -2178,7 +2366,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         if not accept_config:
             return False
         updated_config = dict(status.get("config") or self.config)
-        updated_config.update(self._ui_preferences)
+        updated_config.update({
+            key: self._ui_preferences[key] for key in ("ui_hue", "ui_intensity")
+        })
         configuration_changed = updated_config != self.config
         self.config = updated_config
         if self.config.get("language", "auto") != self._ui_language:
@@ -2305,6 +2495,108 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                 self._refresh_autostart()
 
         self._background(run, done)
+
+    def _tray_icon_file(self) -> str | None:
+        configured = os.environ.get("LINUX_WALLPAPERENGINE_ICON_FILE")
+        candidates = [
+            configured,
+            os.path.expanduser(
+                "~/.local/share/icons/hicolor/scalable/apps/linux-wallpaperengine-app.svg"
+            ),
+            os.path.join(
+                os.path.dirname(os.path.dirname(__file__)), "linux-wallpaperengine-app.svg"
+            ),
+        ]
+        return next((path for path in candidates if path and os.path.isfile(path)), None)
+
+    def _start_tray_bridge(self) -> None:
+        if self._tray_bridge is not None and self._tray_bridge.running:
+            return
+        self._stop_tray_bridge()
+        bridge = TrayBridge(self.present, self._quit_from_tray)
+        bridge.start(
+            open_label=tr("Restaurar a janela"),
+            quit_label=tr("Sair do aplicativo"),
+            icon_file=self._tray_icon_file(),
+        )
+        self._tray_bridge = bridge
+
+    def _stop_tray_bridge(self) -> None:
+        bridge, self._tray_bridge = self._tray_bridge, None
+        if bridge is not None:
+            bridge.stop()
+
+    def _close_requested(self, _window: Gtk.Window) -> bool:
+        if self._allow_close:
+            self._stop_tray_bridge()
+            return False
+        if self._ui_preferences.get("minimize_to_tray"):
+            try:
+                self._start_tray_bridge()
+            except (OSError, RuntimeError) as exc:
+                self._notice(tr("Não foi possível iniciar a bandeja: {error}", error=exc), error=True)
+                self._set_switch_value(self.minimize_to_tray_switch, False)
+                self._ui_preferences["minimize_to_tray"] = False
+                try:
+                    self._ui_preferences = model.save_ui_preferences({"minimize_to_tray": False})
+                except OSError as save_error:
+                    self._notice(tr("Não foi possível salvar a preferência: {error}", error=save_error), error=True)
+                return False
+            self.hide()
+            return True
+        self._stop_tray_bridge()
+        return False
+
+    def _quit_from_tray(self) -> None:
+        self._allow_close = True
+        self._stop_tray_bridge()
+        self.close()
+
+    def _set_switch_value(self, switch: Gtk.Switch, value: bool) -> None:
+        self._updating_controls = True
+        switch.set_active(value)
+        self._updating_controls = False
+
+    def _minimize_to_tray_changed(self, widget: Gtk.Switch, _property: object) -> None:
+        if self._updating_controls:
+            return
+        enabled = widget.get_active()
+        bridge: TrayBridge | None = None
+        try:
+            if enabled:
+                bridge = TrayBridge(self.present, self._quit_from_tray)
+                bridge.start(
+                    open_label=tr("Restaurar a janela"),
+                    quit_label=tr("Sair do aplicativo"),
+                    icon_file=self._tray_icon_file(),
+                )
+            self._ui_preferences = model.save_ui_preferences({"minimize_to_tray": enabled})
+        except (OSError, RuntimeError, ValueError) as exc:
+            if bridge is not None:
+                bridge.stop()
+            self._set_switch_value(widget, not enabled)
+            self._notice(tr("Não foi possível alterar a preferência: {error}", error=exc), error=True)
+            return
+        if enabled:
+            self._tray_bridge = bridge
+        else:
+            self._stop_tray_bridge()
+
+    def _start_app_changed(self, widget: Gtk.Switch, _property: object) -> None:
+        if self._updating_controls:
+            return
+        enabled = widget.get_active()
+        previous = bool(self._ui_preferences.get("start_app_with_session", False))
+        try:
+            model.set_app_autostart(enabled)
+            self._ui_preferences = model.save_ui_preferences({"start_app_with_session": enabled})
+        except (OSError, RuntimeError, ValueError) as exc:
+            try:
+                model.set_app_autostart(previous)
+            except (OSError, RuntimeError, ValueError):
+                pass
+            self._set_switch_value(widget, previous)
+            self._notice(tr("Não foi possível alterar a preferência: {error}", error=exc), error=True)
 
     def _refresh_autostart(self) -> None:
         def run() -> bool:

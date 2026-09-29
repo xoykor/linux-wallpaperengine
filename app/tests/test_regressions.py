@@ -37,6 +37,53 @@ class SteamLibraryTests(unittest.TestCase):
             )
 
 
+class UiPreferenceTests(unittest.TestCase):
+    def test_ui_preferences_keep_legacy_theme_values_and_store_switches(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_file = root / "config.json"
+            ui_file = root / "ui.json"
+            config_file.write_text('{"ui_hue": 123, "ui_intensity": 73}', encoding="utf-8")
+
+            with (
+                mock.patch.object(model, "CONFIG_FILE", config_file),
+                mock.patch.object(model, "UI_PREFERENCES_FILE", ui_file),
+            ):
+                preferences = model.save_ui_preferences(
+                    {"minimize_to_tray": True, "start_app_with_session": True}
+                )
+
+                self.assertEqual(preferences["ui_hue"], 123)
+                self.assertEqual(preferences["ui_intensity"], 73)
+                self.assertTrue(preferences["minimize_to_tray"])
+                self.assertTrue(preferences["start_app_with_session"])
+                self.assertEqual(model.load_ui_preferences(), preferences)
+
+    def test_app_autostart_writes_a_quoted_entry_and_removes_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home with spaces"
+            launcher = home / ".local/bin/linux-wallpaperengine-app"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            launcher.chmod(0o700)
+            config_dir = root / "config/linux-wallpaperengine-app"
+            autostart_file = root / "config/autostart/linux-wallpaperengine-app.desktop"
+
+            with (
+                mock.patch.object(model, "CONFIG_DIR", config_dir),
+                mock.patch.object(model, "_appimage_mode", False),
+                mock.patch.object(Path, "home", return_value=home),
+            ):
+                model.set_app_autostart(True)
+                entry = autostart_file.read_text(encoding="utf-8")
+                self.assertIn(f'Exec="{launcher}"', entry)
+                self.assertTrue(autostart_file.exists())
+
+                model.set_app_autostart(False)
+                self.assertFalse(autostart_file.exists())
+
+
 class DaemonRegressionTests(unittest.TestCase):
     def test_output_refresh_preserves_pending_wallpaper_during_shutdown(self) -> None:
         class RunningChild:

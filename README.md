@@ -240,6 +240,8 @@ Typical packages:
 ```bash
 # Debian / Ubuntu
 sudo apt install python3-gi gir1.2-gtk-4.0
+# Optional, for minimizing the control app to the tray:
+sudo apt install gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1
 # KDE Plasma display discovery:
 sudo apt install kscreen
 # X11 fallback (provides xrandr):
@@ -247,6 +249,7 @@ sudo apt install x11-xserver-utils
 
 # Fedora
 sudo dnf install python3-gobject gtk4
+# Install GTK 3 and Ayatana AppIndicator introspection packages for tray support.
 # KDE Plasma display discovery:
 sudo dnf install kscreen
 # X11 fallback:

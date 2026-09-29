@@ -12,7 +12,7 @@ from itertools import count
 from pathlib import Path
 from queue import PriorityQueue
 import stat
-from threading import Thread
+from threading import Lock, Thread
 
 import gi
 
@@ -29,11 +29,14 @@ _WORKERS = 3
 _CACHE_ITEMS = 192
 _CACHE_BYTES = 32 * 1024 * 1024
 
-# The cache and pending widget lists are accessed only on GTK's main thread.
+# The cache is GTK-thread-only; pending jobs are shared with workers and locked.
 _cache: OrderedDict[_PreviewKey, tuple[_Signature, GdkPixbuf.Pixbuf | None, int]] = OrderedDict()
 _cache_bytes = 0
 _pending: dict[_JobKey, list[Gtk.Stack]] = {}
+_pending_lock = Lock()
 _tasks: PriorityQueue[tuple[int, int, _JobKey]] = PriorityQueue()
+_queued_jobs: set[_JobKey] = set()
+_inflight_jobs: set[_JobKey] = set()
 _sequence = count()
 _workers_started = False
 
@@ -108,7 +111,10 @@ def _install(stack: Gtk.Stack, pixbuf: GdkPixbuf.Pixbuf | None) -> None:
 
 def _deliver(job: _JobKey, pixbuf: GdkPixbuf.Pixbuf | None) -> bool:
     key, signature = job
-    waiting = _pending.pop(job, [])
+    with _pending_lock:
+        waiting = _pending.pop(job, [])
+    for stack in waiting:
+        stack._preview_job = None
     # A Workshop update can replace a preview while a decode is in flight.
     if _signature(key[0]) != signature:
         return False
@@ -122,10 +128,21 @@ def _worker() -> None:
     while True:
         _priority, _order, job = _tasks.get()
         try:
+            # Grid views release previews as cells are recycled. Avoid decoding
+            # jobs that have not started yet and no longer have a live widget.
+            with _pending_lock:
+                _queued_jobs.discard(job)
+                active = job in _pending
+                if active:
+                    _inflight_jobs.add(job)
+            if not active:
+                continue
             key, _signature_value = job
             pixbuf = _decode(*key)
             GLib.idle_add(_deliver, job, pixbuf)
         finally:
+            with _pending_lock:
+                _inflight_jobs.discard(job)
             _tasks.task_done()
 
 
@@ -190,6 +207,7 @@ def preview(
             "last_frame": None,
             "loading": False,
             "hovering": False,
+            "released": False,
         }
 
         def start_animation(animation: GdkPixbuf.PixbufAnimation) -> None:
@@ -246,7 +264,12 @@ def preview(
 
         def deliver_animation(animation: GdkPixbuf.PixbufAnimation | None) -> bool:
             state["loading"] = False
-            if not state["hovering"] or animation is None or animation.is_static_image():
+            if (
+                state["released"]
+                or not state["hovering"]
+                or animation is None
+                or animation.is_static_image()
+            ):
                 return False
             state["animation"] = animation
             start_animation(animation)
@@ -286,7 +309,11 @@ def preview(
 
         controller.connect("enter", enter)
         controller.connect("leave", leave)
-        (hover_target if hover_target is not None else stack).add_controller(controller)
+        target = hover_target if hover_target is not None else stack
+        target.add_controller(controller)
+        stack._preview_controller = controller
+        stack._preview_hover_target = target
+        stack._preview_animation_state = state
 
     # Attach hover handling before cache/pending early returns, so duplicate
     # requests for the same preview behave exactly like the first one.
@@ -300,12 +327,59 @@ def preview(
         return stack
 
     job = (key, signature)
-    if job in _pending:
-        _pending[job].append(stack)
-        return stack
-    _pending[job] = [stack]
-    _start_workers()
-    # Detail previews jump ahead of a large gallery's remaining thumbnails.
-    priority = 0 if width >= 250 else 1
-    _tasks.put((priority, next(_sequence), job))
+    enqueue = False
+    with _pending_lock:
+        waiting = _pending.get(job)
+        if waiting is not None:
+            waiting.append(stack)
+            stack._preview_job = job
+            return stack
+        _pending[job] = [stack]
+        stack._preview_job = job
+        if job not in _queued_jobs and job not in _inflight_jobs:
+            _queued_jobs.add(job)
+            enqueue = True
+    if enqueue:
+        _start_workers()
+        # Detail previews jump ahead of a large gallery's remaining thumbnails.
+        priority = 0 if width >= 250 else 1
+        _tasks.put((priority, next(_sequence), job))
     return stack
+
+
+def release(stack: Gtk.Stack) -> None:
+    """Detach a recycled preview widget and release its pending work."""
+    job = getattr(stack, "_preview_job", None)
+    if job is not None:
+        with _pending_lock:
+            waiting = _pending.get(job)
+            if waiting is not None:
+                waiting[:] = [candidate for candidate in waiting if candidate is not stack]
+                if not waiting:
+                    _pending.pop(job, None)
+        stack._preview_job = None
+
+    state = getattr(stack, "_preview_animation_state", None)
+    if isinstance(state, dict):
+        state["released"] = True
+        state["hovering"] = False
+        ticker = state.get("ticker")
+        if isinstance(ticker, int) and ticker:
+            GLib.source_remove(ticker)
+        state["ticker"] = 0
+        state["iterator"] = None
+        state["animation"] = None
+
+    controller = getattr(stack, "_preview_controller", None)
+    target = getattr(stack, "_preview_hover_target", None)
+    if controller is not None and target is not None:
+        target.remove_controller(controller)
+    stack._preview_controller = None
+    stack._preview_hover_target = None
+    stack._preview_animation_state = None
+
+    child = stack.get_first_child()
+    while child is not None:
+        following = child.get_next_sibling()
+        stack.remove(child)
+        child = following

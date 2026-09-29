@@ -255,8 +255,10 @@ def save_config(config: dict[str, Any]) -> dict[str, Any]:
     return validated
 
 
-def load_ui_preferences(legacy_config: dict[str, Any] | None = None) -> dict[str, int]:
-    """Load appearance preferences separately from the renderer daemon schema."""
+def load_ui_preferences(
+    legacy_config: dict[str, Any] | None = None,
+) -> dict[str, int | bool]:
+    """Load frontend-only appearance and session preferences."""
     try:
         values = json.loads(UI_PREFERENCES_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -266,28 +268,94 @@ def load_ui_preferences(legacy_config: dict[str, Any] | None = None) -> dict[str
     if not isinstance(values, dict):
         values = {}
 
-    result: dict[str, int] = {}
+    result: dict[str, int | bool] = {}
     for key, default, low, high in (
         ("ui_hue", 24, 0, 360),
         ("ui_intensity", 88, 35, 100),
     ):
         value = values.get(key, default)
         result[key] = value if type(value) is int and low <= value <= high else default
+    for key in ("minimize_to_tray", "start_app_with_session"):
+        value = values.get(key, False)
+        result[key] = value if type(value) is bool else False
     return result
 
 
-def save_ui_preferences(preferences: dict[str, Any]) -> dict[str, int]:
-    """Persist GUI-only appearance settings without sending them to the daemon."""
+def save_ui_preferences(preferences: dict[str, Any]) -> dict[str, int | bool]:
+    """Persist GUI-only preferences without sending them to the daemon."""
     if not isinstance(preferences, dict):
-        raise ValueError(tr("As preferências de aparência devem ser um objeto."))
-    result: dict[str, int] = {}
+        raise ValueError(tr("As preferências da interface devem ser um objeto."))
+    result = load_ui_preferences(load_config())
     for key, low, high in (("ui_hue", 0, 360), ("ui_intensity", 35, 100)):
-        value = preferences.get(key)
+        value = preferences.get(key, result[key])
         if type(value) is not int or not low <= value <= high:
             raise ValueError(tr("Preferência de aparência inválida: {key}.", key=key))
         result[key] = value
+    for key in ("minimize_to_tray", "start_app_with_session"):
+        value = preferences.get(key, result[key])
+        if type(value) is not bool:
+            raise ValueError(tr("Preferência da interface inválida: {key}.", key=key))
+        result[key] = value
     _write_json(UI_PREFERENCES_FILE, result)
     return result
+
+
+def set_app_autostart(enabled: bool) -> None:
+    """Create or remove this user's graphical-session autostart entry."""
+    if type(enabled) is not bool:
+        raise ValueError(tr("A opção de inicialização deve ser verdadeira ou falsa."))
+    autostart_file = CONFIG_DIR.parent / "autostart" / "linux-wallpaperengine-app.desktop"
+    if not enabled:
+        try:
+            autostart_file.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+    launcher: Path | None = None
+    if _appimage_mode:
+        raw_launcher = (
+            os.environ.get("LINUX_WALLPAPERENGINE_APPIMAGE_PATH")
+            or os.environ.get("APPIMAGE")
+        )
+        if raw_launcher:
+            launcher = Path(raw_launcher).expanduser().resolve()
+    else:
+        candidate = Path.home() / ".local/bin/linux-wallpaperengine-app"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            launcher = candidate
+        else:
+            located = shutil.which("linux-wallpaperengine-app")
+            if located:
+                launcher = Path(located).resolve()
+    if launcher is None or not launcher.is_file() or not os.access(launcher, os.X_OK):
+        raise RuntimeError(tr("Não foi possível localizar o inicializador do aplicativo."))
+    if any(ord(character) < 32 for character in str(launcher)):
+        raise ValueError(tr("O caminho do inicializador contém caracteres inválidos."))
+
+    desktop_exec = str(launcher).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    desktop_entry = (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Linux Wallpaper Engine\n"
+        "Comment=Open Linux Wallpaper Engine after login\n"
+        f'Exec="{desktop_exec}"\n'
+        "Icon=linux-wallpaperengine-app\n"
+        "Terminal=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+    )
+    autostart_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary = tempfile.mkstemp(prefix=f".{autostart_file.name}.", dir=autostart_file.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(desktop_entry)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, autostart_file)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def save_status(status: dict[str, Any]) -> None:

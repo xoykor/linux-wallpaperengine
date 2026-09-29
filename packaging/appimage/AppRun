@@ -15,6 +15,8 @@ export LINUX_WALLPAPERENGINE_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}"
 export PYTHONDONTWRITEBYTECODE=1
 export LINUX_WALLPAPERENGINE_APPIMAGE=1
 export LINUX_WALLPAPERENGINE_APPIMAGE_VERSION="@APPIMAGE_VERSION@"
+export LINUX_WALLPAPERENGINE_APPIMAGE_PATH="${APPIMAGE:-}"
+export LINUX_WALLPAPERENGINE_ICON_FILE="${APPDIR}/usr/share/icons/hicolor/scalable/apps/linux-wallpaperengine-app.svg"
 export LINUX_WALLPAPERENGINE_RENDERER_PATH="${ENGINE_DIR}/linux-wallpaperengine"
 # Some Mesa/KWin combinations crash GTK's GL scene renderer while repainting
 # the large preview gallery. Cairo keeps the frontend stable; honor an explicit
