@@ -64,6 +64,33 @@ socket_ready() {
         >/dev/null 2>&1
 }
 
+wait_for_daemon() {
+    python3 - <<'PY'
+import json
+import socket
+import sys
+import time
+
+from wallpaper_engine_app.model import SOCKET_FILE
+
+deadline = time.monotonic() + 45
+while time.monotonic() < deadline:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1.0)
+            client.connect(str(SOCKET_FILE))
+            client.sendall(b'{"command":"status"}\n')
+            with client.makefile("rb") as reader:
+                response = json.loads(reader.readline(1024 * 1024 + 1))
+        if response.get("ok") is True and isinstance(response.get("status"), dict):
+            sys.exit(0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    time.sleep(0.1)
+sys.exit(1)
+PY
+}
+
 # Reuse an existing user daemon. A new daemon must own a separate AppImage
 # runtime: this window's runtime unmounts its AppDir when the GUI exits.
 if ! socket_ready; then
@@ -90,14 +117,13 @@ subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL,
                  start_new_session=True, close_fds=True)
 PY
 
-    for _ in {1..300}; do
-        socket_ready && break
-        sleep 0.1
-    done
-    if ! socket_ready; then
+    if ! wait_for_daemon; then
         printf 'The Wallpaper Engine daemon could not start.\n' >&2
         exit 1
     fi
+elif ! wait_for_daemon; then
+    printf 'The Wallpaper Engine daemon did not become ready.\n' >&2
+    exit 1
 fi
 
 exec python3 -m wallpaper_engine_app

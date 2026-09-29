@@ -2565,7 +2565,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
     def _toggle_power(self, _button: Gtk.Button) -> None:
         if not self.service_available:
-            self._systemctl("start")
+            if self._appimage_renderer_path:
+                self._command("start")
+            else:
+                self._systemctl("start")
         elif self.status.get("running"):
             self._command("stop")
         else:
