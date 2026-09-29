@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from itertools import count
+import os
 from pathlib import Path
 from queue import PriorityQueue
 import stat
@@ -25,15 +26,27 @@ _PreviewKey = tuple[str, int, int]
 _Signature = tuple[int, int]
 _JobKey = tuple[_PreviewKey, _Signature]
 
-_WORKERS = 3
-_CACHE_ITEMS = 192
-_CACHE_BYTES = 32 * 1024 * 1024
+def _worker_count() -> int:
+    """Use available CPUs for independent image decodes, leaving UI headroom."""
+    try:
+        available_cpus = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        available_cpus = os.cpu_count() or 2
+    return max(1, min(10, available_cpus - 2))
+
+
+_WORKERS = _worker_count()
+_CACHE_ITEMS = 512
+# Keep several hundred 240 px thumbnails decoded so revisiting cards avoids I/O.
+_CACHE_BYTES = 96 * 1024 * 1024
+_GIF_HOVER_DELAY_MS = 120
 
 # The cache is GTK-thread-only; pending jobs are shared with workers and locked.
 _cache: OrderedDict[_PreviewKey, tuple[_Signature, GdkPixbuf.Pixbuf | None, int]] = OrderedDict()
 _cache_bytes = 0
 _pending: dict[_JobKey, list[Gtk.Stack]] = {}
 _pending_lock = Lock()
+_gif_decode_lock = Lock()
 _tasks: PriorityQueue[tuple[int, int, _JobKey]] = PriorityQueue()
 _queued_jobs: set[_JobKey] = set()
 _inflight_jobs: set[_JobKey] = set()
@@ -63,13 +76,12 @@ def _fit_pixbuf(frame: GdkPixbuf.Pixbuf, width: int, height: int) -> GdkPixbuf.P
 
 
 def _decode(path: str, width: int, height: int) -> GdkPixbuf.Pixbuf | None:
-    """Read the first frame and fit it inside the preview area."""
+    """Decode a preview at display size to limit CPU and memory use."""
     try:
-        frame = GdkPixbuf.PixbufAnimation.new_from_file(path).get_static_image()
-        if frame is None:
-            return None
-        return _fit_pixbuf(frame, width, height)
-    except (GLib.Error, OSError, TypeError, ValueError):
+        # Load only the still preview frame here. Animated GIFs use the separate
+        # hover path, so their full animation is not parsed while filling rows.
+        return GdkPixbuf.Pixbuf.new_from_file_at_scale(path, width, height, True)
+    except (GLib.Error, OSError, TypeError, ValueError, MemoryError):
         # A missing or malformed Workshop preview should leave its placeholder.
         return None
 
@@ -204,14 +216,18 @@ def preview(
             "iterator": None,
             "animated_picture": None,
             "ticker": 0,
+            "hover_timer": 0,
             "last_frame": None,
             "loading": False,
             "hovering": False,
+            "scrolling": False,
             "released": False,
         }
 
-        def start_animation(animation: GdkPixbuf.PixbufAnimation) -> None:
-            if not state["hovering"]:
+        def start_animation(
+            animation: GdkPixbuf.PixbufAnimation, *, reset: bool = True
+        ) -> None:
+            if not state["hovering"] or state["scrolling"]:
                 return
             ticker = state.get("ticker")
             if isinstance(ticker, int) and ticker:
@@ -230,14 +246,16 @@ def preview(
                     picture.set_keep_aspect_ratio(True)
                 state["animated_picture"] = picture
                 stack.add_named(picture, "animated-preview")
-            iterator = animation.get_iter(None)
-            state["iterator"] = iterator
-            state["last_frame"] = None
+            iterator = state["iterator"]
+            if reset or iterator is None:
+                iterator = animation.get_iter(None)
+                state["iterator"] = iterator
+                state["last_frame"] = None
             stack.set_visible_child(picture)
 
             def advance_frame() -> bool:
                 state["ticker"] = 0
-                if not state["hovering"]:
+                if not state["hovering"] or state["scrolling"]:
                     return False
                 current = state["iterator"]
                 target = state["animated_picture"]
@@ -276,11 +294,63 @@ def preview(
             return False
 
         def load_animation() -> None:
+            animation: GdkPixbuf.PixbufAnimation | None = None
             try:
                 animation = GdkPixbuf.PixbufAnimation.new_from_file(gif_path)
-            except (GLib.Error, OSError, TypeError, ValueError):
-                animation = None
+            except (GLib.Error, OSError, TypeError, ValueError, MemoryError):
+                pass
+            finally:
+                _gif_decode_lock.release()
             GLib.idle_add(deliver_animation, animation)
+
+        def begin_animation_load() -> bool:
+            state["hover_timer"] = 0
+            if (
+                not state["hovering"] or state["scrolling"]
+                or state["released"] or state["loading"]
+            ):
+                return False
+            if not _gif_decode_lock.acquire(blocking=False):
+                # Keep only the currently hovered preview waiting for the
+                # decoder, instead of starting one thread per card.
+                state["hover_timer"] = GLib.timeout_add(
+                    _GIF_HOVER_DELAY_MS, begin_animation_load
+                )
+                return False
+            state["loading"] = True
+            try:
+                Thread(target=load_animation, name="wallpaper-gif-preview", daemon=True).start()
+            except RuntimeError:
+                state["loading"] = False
+                _gif_decode_lock.release()
+            return False
+
+        def schedule_animation_load() -> None:
+            if (
+                state["hovering"] and not state["scrolling"]
+                and not state["loading"] and not state["hover_timer"]
+            ):
+                state["hover_timer"] = GLib.timeout_add(
+                    _GIF_HOVER_DELAY_MS, begin_animation_load
+                )
+
+        def set_scrolling(scrolling: bool) -> None:
+            if state["scrolling"] == scrolling:
+                return
+            state["scrolling"] = scrolling
+            if scrolling:
+                ticker = state.get("ticker")
+                if isinstance(ticker, int) and ticker:
+                    GLib.source_remove(ticker)
+                state["ticker"] = 0
+                if stack.get_child_by_name("preview") is not None:
+                    stack.set_visible_child_name("preview")
+                return
+            animation = state["animation"]
+            if isinstance(animation, GdkPixbuf.PixbufAnimation):
+                start_animation(animation, reset=False)
+            else:
+                schedule_animation_load()
 
         def enter(_controller: Gtk.EventControllerMotion, _x: float, _y: float) -> None:
             state["hovering"] = True
@@ -288,13 +358,16 @@ def preview(
             if isinstance(animation, GdkPixbuf.PixbufAnimation):
                 start_animation(animation)
                 return
-            if state["loading"]:
-                return
-            state["loading"] = True
-            Thread(target=load_animation, name="wallpaper-gif-preview", daemon=True).start()
+            # Ignore brief pointer crossings during fast scrolling; load only
+            # when the pointer settles over this preview.
+            schedule_animation_load()
 
         def leave(_controller: Gtk.EventControllerMotion) -> None:
             state["hovering"] = False
+            hover_timer = state.get("hover_timer")
+            if isinstance(hover_timer, int) and hover_timer:
+                GLib.source_remove(hover_timer)
+                state["hover_timer"] = 0
             ticker = state.get("ticker")
             if isinstance(ticker, int) and ticker:
                 GLib.source_remove(ticker)
@@ -314,6 +387,7 @@ def preview(
         stack._preview_controller = controller
         stack._preview_hover_target = target
         stack._preview_animation_state = state
+        stack._preview_set_scrolling = set_scrolling
 
     # Attach hover handling before cache/pending early returns, so duplicate
     # requests for the same preview behave exactly like the first one.
@@ -363,12 +437,17 @@ def release(stack: Gtk.Stack) -> None:
     if isinstance(state, dict):
         state["released"] = True
         state["hovering"] = False
+        hover_timer = state.get("hover_timer")
+        if isinstance(hover_timer, int) and hover_timer:
+            GLib.source_remove(hover_timer)
         ticker = state.get("ticker")
         if isinstance(ticker, int) and ticker:
             GLib.source_remove(ticker)
         state["ticker"] = 0
+        state["hover_timer"] = 0
         state["iterator"] = None
         state["animation"] = None
+    stack._preview_set_scrolling = None
 
     controller = getattr(stack, "_preview_controller", None)
     target = getattr(stack, "_preview_hover_target", None)

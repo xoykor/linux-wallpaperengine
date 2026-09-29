@@ -121,6 +121,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._selection_anchor_id: str | None = None
         self._gallery_click_modifiers: Gdk.ModifierType | None = None
         self._gallery_click_on_button = False
+        self._gallery_scroll_timer = 0
+        self._gallery_is_scrolling = False
         self._selection_rebuilding = False
         self._toast_timer = 0
         self.filter_index = 0
@@ -698,6 +700,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         return False
 
     def _build_library(self) -> Gtk.Widget:
+        if self._gallery_scroll_timer:
+            GLib.source_remove(self._gallery_scroll_timer)
+            self._gallery_scroll_timer = 0
+        self._gallery_is_scrolling = False
         self._gallery_all_ids = []
         self._gallery_search = {}
         self._gallery_visible_ids = []
@@ -767,6 +773,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         gallery_scroll = Gtk.ScrolledWindow()
         gallery_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        gallery_scroll.get_vadjustment().connect(
+            "value-changed", self._gallery_scrolled
+        )
         self._gallery_model = Gtk.StringList.new([])
         self._gallery_filter = Gtk.CustomFilter.new(self._gallery_filter_item)
         self._gallery_filtered_model = Gtk.FilterListModel.new(
@@ -884,6 +893,28 @@ class WallpaperWindow(Gtk.ApplicationWindow):
     def _gallery_item_id_at(self, position: int) -> str | None:
         item = self._gallery_filtered_model.get_item(position)
         return item.get_string() if isinstance(item, Gtk.StringObject) else None
+
+    def _gallery_scrolled(self, _adjustment: Gtk.Adjustment) -> None:
+        if not self._gallery_is_scrolling:
+            self._gallery_is_scrolling = True
+            for card in tuple(self._cards.values()):
+                set_scrolling = getattr(
+                    card._gallery_preview, "_preview_set_scrolling", None
+                )
+                if set_scrolling is not None:
+                    set_scrolling(True)
+        if self._gallery_scroll_timer:
+            GLib.source_remove(self._gallery_scroll_timer)
+        self._gallery_scroll_timer = GLib.timeout_add(180, self._gallery_scroll_stopped)
+
+    def _gallery_scroll_stopped(self) -> bool:
+        self._gallery_scroll_timer = 0
+        self._gallery_is_scrolling = False
+        for card in tuple(self._cards.values()):
+            set_scrolling = getattr(card._gallery_preview, "_preview_set_scrolling", None)
+            if set_scrolling is not None:
+                set_scrolling(False)
+        return False
 
     def _card_activated(self, _gallery: Gtk.GridView, position: int) -> None:
         # A pointer double-click reaches GridView activation too; the first click
@@ -1085,6 +1116,10 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         )
         card._gallery_artwork.set_child(preview_widget)
         card._gallery_preview = preview_widget
+        if self._gallery_is_scrolling:
+            set_scrolling = getattr(preview_widget, "_preview_set_scrolling", None)
+            if set_scrolling is not None:
+                set_scrolling(True)
         self._cards[wallpaper_id] = card
         self._card_badges[wallpaper_id] = card._gallery_badges
         self._refresh_card_indicator(wallpaper_id)
