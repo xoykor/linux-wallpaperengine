@@ -1,18 +1,16 @@
-# Fork changes and upstream proposal
+# Fork changes versus upstream
 
 This document records the complete net change in `xoykor/linux-wallpaperengine`
 relative to `Almamu/linux-wallpaperengine` at upstream `main` commit
-`b016d7d` (2026-09-27), plus the renderer fixes being prepared on the proposed
-upstream branch. It is intended to let upstream reviewers assess the fork as a
-whole without relying on screenshots or commit history alone.
+`b016d7d` (2026-09-27). It describes the state consolidated on the fork's
+`main`, including the renderer, desktop application, packaging, and project
+automation.
 
-The comparison is a three-dot diff from the common upstream ancestor. Fork
-`main` has 357 commits beyond that ancestor; the proposed branch adds one
-commit, for 358 commits total and a 95-path net diff. The existing fork delta
-covers 93 paths. This proposal adds this document and the SceneScript adapter
-header, modifies ten renderer and scripting paths, and updates frontend layout
-and appearance. The fork history includes imported and merged upstream work,
-so the net file diff is the more useful measure of its scope.
+The comparison is a three-dot diff from upstream `main`. It currently contains
+104 changed paths overall. The engine source accounts for 69 paths, with about
+6,649 lines added and 857 removed. Across the complete fork diff, 14,432 lines
+are added and 1,133 removed. These counts describe net file changes, not commit
+totals; the history includes imported and merged upstream work.
 
 ## Overview
 
@@ -120,10 +118,10 @@ paths, camera script transforms and mouse-coordinate conversion for X11 and
 Wayland. Scene composition layers are rendered through their own framebuffer
 paths, with parent/child ordering, visibility, fill/fit/stretch handling,
 post-processing and output viewport mapping accounted for in scene rendering.
-The pending CModel change composes a model's current local transform with its
-complete authored parent chain, from the root to the rendered model, and uses
-script-updated values each frame. This is intended to fix nested models and
-other parented assets generically instead of adjusting individual wallpapers.
+`CModel` composes a model's current local transform with its complete authored
+parent chain, from the root to the rendered model, and uses script-updated
+values each frame. This fixes nested models and other parented assets
+generically instead of adjusting individual wallpapers.
 
 The camera code uses internal radians for GLM transforms and bridges
 SceneScript layer angles through degrees at the JS API boundary. The script API
@@ -141,8 +139,8 @@ Invalid or absent skeleton data degrades to bind-pose rendering instead of
 preventing unrelated scene assets from loading.
 
 The parser accepts valid helper bones and animation records without rejecting
-an otherwise usable rig. The pending model changes also expose named puppet
-animation layers to SceneScript through a common `ScriptableObject` contract
+an otherwise usable rig. Named puppet animation layers are exposed to
+SceneScript through a common `ScriptableObject` contract
 (`getAnimationLayer(name)`, `rate`, `play()` and `stop()`). Both image and model
 objects provide the lookup, so scripts can control puppet animation without
 wallpaper-specific branches.
@@ -151,12 +149,11 @@ wallpaper-specific branches.
 
 The scripting changes expand SceneScript built-ins, vector/math/color adapters,
 layer property access, input values, camera transforms, script property parsing
-and per-frame updates. The pending ScriptEngine change treats an absent
-`update()` function as an init-only script and leaves a property's current
-value intact when an existing `update()` has side effects and returns
-`undefined`. Explicit `null` remains distinct. This is needed for scripts that
-write another layer's property from a hook without returning a replacement for
-the property to which the hook is attached.
+and per-frame updates. A script without `update()` runs as an init-only script;
+when `update()` has side effects and returns `undefined`, the property's
+current value remains intact. Explicit `null` remains distinct. This supports
+scripts that write another layer's property from a hook without replacing the
+property to which the hook is attached.
 
 ### Video, texture, shader and output support
 
@@ -188,7 +185,8 @@ system libraries. Steam and downloaded wallpaper content stay on the host.
 
 `.github/workflows/appimage.yml` builds AppImages for `v*` tags and uploads
 the image and checksum to GitHub Releases. `workflow_dispatch` builds an
-artifact without publishing a release. The current release process is x86_64.
+artifact without publishing a release. The current release is `v0.0.26`; the
+release process targets x86_64.
 The AppImage bundles the project executable, CEF runtime, and renderer shared
 libraries such as GLEW, FFmpeg, mpv, and KissFFT. GTK/Python introspection,
 graphics drivers, and platform libraries still need to be available on the
@@ -214,8 +212,8 @@ changes because they affect different deployment paths.
 
 ## Generic renderer corrections and validation
 
-The active renderer changes address classes of scene data and script behavior
-rather than embedding rules for particular Workshop items:
+The renderer corrections address general scene data and render-pipeline
+behavior rather than embedding rules for particular Workshop items:
 
 - Model transforms are composed through the authored parent chain using the
   current per-frame property values, so animation and script changes on an
@@ -227,34 +225,36 @@ rather than embedding rules for particular Workshop items:
   property when `update()` performs side effects but returns `undefined`.
   Explicit `null` remains a distinct value.
 - Puppet animation-layer lookup is a shared script API for image and model
-  layers. The earlier 0.0.15 AppImage predates this interface. The 0.0.16
-  release included the updated frontend and engine library, but its build did
-  not collect the engine's external shared libraries, so some hosts stopped at
-  loader error 127 before the renderer started. The release workflow now
-  gathers that dependency closure and checks the engine against the staged
-  libraries before creating the next AppImage. Checksums use a portable
-  filename rather than the CI runner's absolute path.
+  layers.
+- Waterwaves UV displacement on puppet images runs in source space before
+  skeletal skinning when the effect has no explicit render target. The effect
+  stays enabled, while displaced facial and body regions follow the puppet's
+  bones. Source-space opacity and mask data are mapped onto the skinned mesh;
+  flow maps are kept out of the mask-warp path.
+- Puppet image effect ordering preserves the authored eye-layer order and
+  applies source-UV masks consistently with the image geometry.
 
-The development build compiled successfully after these changes, and the
-desktop application regression suite passed. A complete visual pass across
-Workshop scenes is not claimed: in this environment, direct screenshot runs of
-the extracted AppImage did not get a usable GLX display. Packaging checks
-confirm that both the frontend and current engine are bundled, but do not
-replace visual validation on a working graphics session.
+The renderer and AppImage were built successfully for `v0.0.26`, and the
+release workflow completed. Targeted visual checks of animated puppet scenes
+were successful, but they are not an exhaustive pass over all Workshop
+content. Parser and packaging success alone do not prove that every scene
+matches its preview on every graphics driver.
 
 ## Complete net file inventory
 
-The following list is the complete 95-path inventory from the current net diff
+The following list is the complete 104-path inventory from the current net diff
 against upstream `main`, including the desktop application, integrated
 packaging, renderer changes, this document, and the SceneScript API header.
 
 ### Build and automation
 
 - `.github/workflows/appimage.yml` — AppImage build and tag-release workflow.
+- `.github/workflows/codefactor-diagnostics.yml` — informational static-analysis diagnostics on branch pushes and pull requests.
 - `.github/workflows/cmake.yml` — desktop app checks, C++ build, formatting and CI.
 - `.github/workflows/tests.yml` — engine unit-test workflow.
 - `.gitignore` — ignores for the fork's app and packaging outputs.
 - `CMakeLists.txt` — frontend/build integration and related target changes.
+- `setup.cfg` — Python analyzer configuration.
 
 ### Desktop application and user installation
 
@@ -274,6 +274,7 @@ packaging, renderer changes, this document, and the SceneScript API header.
 - `app/wallpaper_engine_app/model.py` — Steam catalog and user configuration.
 - `app/wallpaper_engine_app/previews.py` — preview loading, caching and GIF hover playback.
 - `app/wallpaper_engine_app/theme.py` — GTK theme and accent preferences.
+- `app/wallpaper_engine_app/tray.py` — tray icon, menu and window visibility controls.
 
 ### Optional playlist rotation and AppImage
 
@@ -287,6 +288,10 @@ packaging, renderer changes, this document, and the SceneScript API header.
 ### Fork documentation
 
 - `docs/FORK_CHANGES.md` — fork architecture, renderer changes, runtime behavior, packaging and upstream review context.
+- `docs/screenshots/desktop-wallpaper-running.png` — desktop rendering screenshot.
+- `docs/screenshots/library-empty-engine-running.png` — empty-library screenshot with engine running.
+- `docs/screenshots/library-populated-engine-stopped.png` — populated-library screenshot with engine stopped.
+- `docs/screenshots/settings-engine-running.png` — settings screenshot with engine running.
 
 ### Engine source: application, data and filesystem
 
@@ -313,6 +318,7 @@ packaging, renderer changes, this document, and the SceneScript API header.
 - `src/WallpaperEngine/Input/Drivers/GLFWMouseInput.cpp` — GLFW pointer state.
 - `src/WallpaperEngine/Input/Drivers/WaylandMouseInput.cpp` — Wayland pointer/output state.
 - `src/WallpaperEngine/Render/CTexture.cpp` — texture upload and resource handling.
+- `src/WallpaperEngine/Render/CFBO.cpp` — framebuffer diagnostics and transparent layer initialization.
 - `src/WallpaperEngine/Render/CWallpaper.cpp` — wallpaper output/lifecycle.
 - `src/WallpaperEngine/Render/CWallpaper.h` — wallpaper renderer interface.
 - `src/WallpaperEngine/Render/Camera.cpp` — scene projection and scripted camera.
@@ -332,6 +338,7 @@ packaging, renderer changes, this document, and the SceneScript API header.
 - `src/WallpaperEngine/Render/Objects/PuppetModel.cpp` — skinned MDLV parsing and animation evaluation.
 - `src/WallpaperEngine/Render/Objects/PuppetModel.h` — puppet model data structures.
 - `src/WallpaperEngine/Render/PostProcessSettings.h` — post-process values.
+- `src/WallpaperEngine/Render/SpanInfo.h` — bounds used to map a wallpaper spanning multiple outputs.
 - `src/WallpaperEngine/Render/Shaders/GLSLContext.cpp` — Workshop GLSL conversion.
 - `src/WallpaperEngine/Render/Shaders/ShaderUnit.cpp` — shader compile/link handling.
 - `src/WallpaperEngine/Render/Shaders/ShaderUnit.h` — shader unit declarations.
@@ -361,13 +368,10 @@ packaging, renderer changes, this document, and the SceneScript API header.
 - `src/WallpaperEngine/Scripting/ScriptableObject.cpp` — layer property registration.
 - `src/WallpaperEngine/Scripting/ScriptableObject.h` — scriptable layer interface.
 
-## Upstream pull request
+## Current state
 
-Pull request [#683](https://github.com/Almamu/linux-wallpaperengine/pull/683)
-targets `Almamu/linux-wallpaperengine:main` from the fork's feature branch. It
-contains the full desktop application and packaging fork together with engine
-compatibility changes. Reviewers can inspect the work by file group, including
-the frontend and release workflow, SceneScript semantics, parent transforms,
-model parsing and shader compatibility. The visual-validation limits above
-remain explicit; parser success does not prove that every scene renders
-identically to its Workshop preview.
+The renderer, desktop application, and packaging changes described here are
+consolidated on the fork's `main`. Release `v0.0.26` contains the integrated
+engine and frontend AppImage. This document describes the fork's current net
+changes against upstream; it does not claim that every Workshop scene has
+received an exhaustive visual audit.
