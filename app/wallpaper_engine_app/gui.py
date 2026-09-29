@@ -967,7 +967,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._gallery_wheel_last_frame_time = 0.0
 
     def _animate_gallery_wheel(
-        self, _widget: Gtk.Widget, frame_clock: Gdk.FrameClock, _data: object
+        self, _widget: Gtk.Widget, frame_clock: Gdk.FrameClock
     ) -> bool:
         adjustment = self._gallery_scroll.get_vadjustment()
         current = adjustment.get_value()
