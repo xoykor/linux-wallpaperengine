@@ -913,9 +913,14 @@ class WallpaperWindow(Gtk.ApplicationWindow):
     ) -> bool:
         # Ease mouse-wheel detents, while leaving touchpad scrolling to GTK.
         get_unit = getattr(controller, "get_unit", None)
-        if get_unit is None:
-            return False
-        if get_unit() != Gdk.ScrollUnit.WHEEL:
+        unit = get_unit() if get_unit is not None else None
+        get_device = getattr(controller, "get_current_event_device", None)
+        device = get_device() if get_device is not None else None
+        is_mouse = (
+            device is not None and device.get_source() == Gdk.InputSource.MOUSE
+        )
+        # Some high-resolution mouse wheels report continuous surface deltas.
+        if unit != Gdk.ScrollUnit.WHEEL and not is_mouse:
             self._cancel_gallery_wheel_animation()
             return False
         if dy == 0:
