@@ -523,12 +523,12 @@ CImage::~CImage () {
 	maskPass.source->decrementUsageCount ();
     }
     this->m_puppetMaskPasses.clear ();
-    for (const auto& opacityPass : this->m_puppetOpacityPasses) {
-	if (opacityPass.mask != nullptr) {
-	    opacityPass.mask->decrementUsageCount ();
+    for (const auto& prePass : this->m_puppetPrePasses) {
+	if (prePass.retainedTexture != nullptr) {
+	    prePass.retainedTexture->decrementUsageCount ();
 	}
     }
-    this->m_puppetOpacityPasses.clear ();
+    this->m_puppetPrePasses.clear ();
 
     // delete passes first as they depend on the image's data
     for (auto* pass : this->m_passes) {
@@ -885,8 +885,8 @@ bool CImage::setupPuppetOpacityPass (Effects::CPass* pass) {
     const uint32_t width = std::max (1u, input->getRealWidth ());
     const uint32_t height = std::max (1u, input->getRealHeight ());
     auto target = std::make_shared<CFBO> (
-	"_rt_puppetOpacity_" + std::to_string (this->getImage ().id) + "_"
-	    + std::to_string (this->m_puppetOpacityPasses.size ()),
+	    "_rt_puppetOpacity_" + std::to_string (this->getImage ().id) + "_"
+		+ std::to_string (this->m_puppetPrePasses.size ()),
 	TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, width, height, width, height
     );
 
@@ -902,8 +902,42 @@ bool CImage::setupPuppetOpacityPass (Effects::CPass* pass) {
     pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
 
     mask->incrementUsageCount ();
-    this->m_puppetOpacityPasses.push_back (
-	PuppetOpacityPass { .mask = std::move (mask), .pass = std::unique_ptr<Effects::CPass> (pass) }
+    this->m_puppetPrePasses.push_back (
+	PuppetPrePass { .retainedTexture = std::move (mask), .pass = std::unique_ptr<Effects::CPass> (pass) }
+    );
+    this->m_prePuppetTexture = std::move (target);
+    return true;
+}
+
+bool CImage::setupPuppetSourceEffectPass (Effects::CPass* pass) {
+    if (this->m_prePuppetTexture == nullptr) {
+	return false;
+    }
+
+    const auto input = this->m_prePuppetTexture;
+    const uint32_t width = std::max (1u, input->getRealWidth ());
+    const uint32_t height = std::max (1u, input->getRealHeight ());
+    auto target = std::make_shared<CFBO> (
+	"_rt_puppetPreEffect_" + std::to_string (this->getImage ().id) + "_"
+	    + std::to_string (this->m_puppetPrePasses.size ()),
+	TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, width, height, width, height
+    );
+
+    // UV-space displacement must happen before skinning so it follows the puppet's bones.
+    pass->setInput (input);
+    pass->setPreviousInput (input);
+    pass->setDestination (target);
+    pass->setBlendingMode (BlendingMode_Normal);
+    pass->setPosition (this->getPassSpacePosition ());
+    pass->setTexCoord (input.get () == this->getTexture ().get () ? this->getTexCoordCopy ()
+									 : this->getTexCoordPass ());
+    pass->setModelViewProjectionMatrix (&this->m_modelViewProjectionPass);
+    pass->setModelViewProjectionMatrixInverse (&this->m_modelViewProjectionPassInverse);
+    pass->setModelMatrix (&this->m_modelMatrix);
+    pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+
+    this->m_puppetPrePasses.push_back (
+	PuppetPrePass { .retainedTexture = nullptr, .pass = std::unique_ptr<Effects::CPass> (pass) }
     );
     this->m_prePuppetTexture = std::move (target);
     return true;
@@ -1030,6 +1064,10 @@ void CImage::setup () {
 			    = override.has_value () && override->get ().shaderOverride.has_value ()
 			    ? *override->get ().shaderOverride
 			    : pass->shader;
+			if (this->m_hasPuppetMesh && shader == "effects/waterwaves"
+			    && !(*curEffect)->target.has_value () && this->setupPuppetSourceEffectPass (effectPass)) {
+			    continue;
+			}
 			if (this->m_hasPuppetMesh && shader == "effects/opacity"
 			    && this->setupPuppetOpacityPass (effectPass)) {
 			    continue;
@@ -1281,10 +1319,10 @@ void CImage::render () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif /* DEBUG */
 
-    // Apply source-UV opacity before deforming the image, then update auxiliary maps
-    // from the same skinned positions as the image pass.
-    for (const auto& opacityPass : this->m_puppetOpacityPasses) {
-	opacityPass.pass->render ();
+    // Apply source-space effects before skinning, then update auxiliary maps with
+    // the same skinned positions as the image pass.
+    for (const auto& prePass : this->m_puppetPrePasses) {
+	prePass.pass->render ();
     }
     for (const auto& maskPass : this->m_puppetMaskPasses) {
 	maskPass.pass->render ();

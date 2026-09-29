@@ -92,6 +92,7 @@ private:
     [[nodiscard]] glm::vec2 computePuppetCanvasSize (const glm::vec2& size) const;
     void updatePuppetPositionBuffer (const glm::vec2& size);
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
+    bool setupPuppetSourceEffectPass (Effects::CPass* pass);
     bool setupPuppetOpacityPass (Effects::CPass* pass);
     void setupPuppetMaskPass (Effects::CPass* effectPass, int textureIndex);
     void uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::vec2& size);
@@ -141,13 +142,13 @@ private:
 	std::shared_ptr<CFBO> target;
 	std::unique_ptr<Effects::CPass> pass;
     };
-    struct PuppetOpacityPass {
-	std::shared_ptr<const TextureProvider> mask;
+    struct PuppetPrePass {
+        std::shared_ptr<const TextureProvider> retainedTexture;
 	std::unique_ptr<Effects::CPass> pass;
     };
     std::map<const TextureProvider*, size_t> m_puppetMaskPassBySource = {};
     std::vector<PuppetMaskPass> m_puppetMaskPasses = {};
-    std::vector<PuppetOpacityPass> m_puppetOpacityPasses = {};
+    std::vector<PuppetPrePass> m_puppetPrePasses = {};
     std::shared_ptr<const TextureProvider> m_prePuppetTexture = nullptr;
     glm::vec4 m_whiteMaskColor = glm::vec4 (1.0f);
 
