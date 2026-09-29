@@ -25,6 +25,9 @@ public:
     void setup () override;
     void render () override;
 
+    [[nodiscard]] std::optional<ScriptableObject::AnimationLayerProperties>
+    findAnimationLayer (const std::string& name) const override;
+
     [[nodiscard]] const float& getBrightness () const override;
     [[nodiscard]] const float& getUserAlpha () const override;
     [[nodiscard]] const float& getAlpha () const override;

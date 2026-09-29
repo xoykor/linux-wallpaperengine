@@ -14,6 +14,98 @@ using namespace WallpaperEngine::Data::Utils;
 using namespace WallpaperEngine::Scripting::Adapters;
 
 #define SCRIPTABLE_OPAQUE_MAGIC 0xdeadbeef
+#define ANIMATION_LAYER_OPAQUE_MAGIC 0x51a9e11
+
+struct OpaqueScriptableObjectAdapter {
+    unsigned int magic;
+    ScriptableObjectAdapter& adapter;
+    WallpaperEngine::Scripting::ScriptableObject& object;
+};
+
+namespace {
+struct OpaqueAnimationLayer {
+    unsigned int magic;
+    WallpaperEngine::Scripting::ScriptEngine& engine;
+    WallpaperEngine::Data::Model::DynamicValue& rate;
+    WallpaperEngine::Data::Model::DynamicValue& visible;
+};
+
+OpaqueAnimationLayer* getAnimationLayer (JSContext* ctx, JSValueConst value) {
+    JSClassID classId = 0;
+    auto* handle = static_cast<OpaqueAnimationLayer*> (JS_GetAnyOpaque (value, &classId));
+    if (handle == nullptr || handle->magic != ANIMATION_LAYER_OPAQUE_MAGIC) {
+	JS_ThrowTypeError (ctx, "Invalid animation layer receiver");
+	return nullptr;
+    }
+    return handle;
+}
+
+JSValue animation_layer_get_rate (JSContext* ctx, JSValueConst this_val) {
+    auto* handle = getAnimationLayer (ctx, this_val);
+    return handle == nullptr ? JS_EXCEPTION : handle->engine.dynamicToJs (handle->rate);
+}
+
+JSValue animation_layer_set_rate (JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    auto* handle = getAnimationLayer (ctx, this_val);
+    if (handle == nullptr) {
+	return JS_EXCEPTION;
+    }
+    double rate = 0.0;
+    if (JS_ToFloat64 (ctx, &rate, value) < 0) {
+	return JS_EXCEPTION;
+    }
+    handle->rate.update (static_cast<float> (rate), WallpaperEngine::Data::Model::DynamicValue::UpdateSource::Script);
+    return JS_UNDEFINED;
+}
+
+JSValue animation_layer_play (JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* handle = getAnimationLayer (ctx, this_val);
+    if (handle == nullptr) {
+	return JS_EXCEPTION;
+    }
+    handle->visible.update (true, WallpaperEngine::Data::Model::DynamicValue::UpdateSource::Script);
+    return JS_UNDEFINED;
+}
+
+JSValue animation_layer_stop (JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* handle = getAnimationLayer (ctx, this_val);
+    if (handle == nullptr) {
+	return JS_EXCEPTION;
+    }
+    handle->visible.update (false, WallpaperEngine::Data::Model::DynamicValue::UpdateSource::Script);
+    return JS_UNDEFINED;
+}
+
+void animation_layer_finalizer (JSRuntime*, JSValueConst value) {
+    JSClassID classId = 0;
+    auto* handle = static_cast<OpaqueAnimationLayer*> (JS_GetAnyOpaque (value, &classId));
+    if (handle != nullptr && handle->magic == ANIMATION_LAYER_OPAQUE_MAGIC) {
+	handle->magic = 0;
+	delete handle;
+    }
+}
+
+JSValue scriptableobject_get_animation_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    JSClassID classId = 0;
+    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (this_val, &classId));
+    if (container == nullptr || container->magic != SCRIPTABLE_OPAQUE_MAGIC || argc < 1 || !JS_IsString (argv[0])) {
+	return JS_ThrowTypeError (ctx, "getAnimationLayer requires an animation name");
+    }
+
+    const char* name = JS_ToCString (ctx, argv[0]);
+    if (name == nullptr) {
+	return JS_EXCEPTION;
+    }
+    ScopeGuard nameGuard ([ctx, name] () { JS_FreeCString (ctx, name); });
+
+    const auto properties = container->object.findAnimationLayer (name);
+    if (!properties.has_value () || properties->rate == nullptr || properties->visible == nullptr) {
+	return JS_UNDEFINED;
+    }
+
+    return container->adapter.instantiateAnimationLayer (*properties->rate, *properties->visible);
+}
+} // namespace
 
 namespace {
 bool updateDynamicValue (
@@ -109,12 +201,6 @@ bool updateDynamicValue (
 }
 } // namespace
 
-struct OpaqueScriptableObjectAdapter {
-    unsigned int magic;
-    ScriptableObjectAdapter& adapter;
-    WallpaperEngine::Scripting::ScriptableObject& object;
-};
-
 JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver) {
     JSClassID classId = 0;
 
@@ -132,11 +218,31 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 
     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
 
+    if (std::strcmp (name, "getAnimationLayer") == 0) {
+	return JS_NewCFunction (ctx, scriptableobject_get_animation_layer, "getAnimationLayer", 1);
+    }
+
     try {
 	// find the property inside, otherwise return undefined
 	auto& property = container->object.getProperty (name);
-	JSValue result = std::strcmp (name, "angles") == 0 ? container->adapter.getEngine ().anglesToJs (property)
-							   : container->adapter.getEngine ().dynamicToJs (property);
+	const auto& adapters = container->adapter.getEngine ().getAdapters ();
+	JSValue result = JS_UNDEFINED;
+	switch (property.getType ()) {
+	    case DynamicValue::Vec2:
+		result = adapters.vec2->instantiate (property, true);
+		break;
+	    case DynamicValue::Vec3:
+		result = std::strcmp (name, "angles") == 0 ? adapters.vec3->instantiateAngles (property, true)
+								     : adapters.vec3->instantiate (property, true);
+		break;
+	    case DynamicValue::Vec4:
+		result = adapters.vec4->instantiate (property, true);
+		break;
+	    default:
+		result = std::strcmp (name, "angles") == 0 ? container->adapter.getEngine ().anglesToJs (property)
+								   : container->adapter.getEngine ().dynamicToJs (property);
+		break;
+	}
 	return result;
     } catch (const std::exception& e) {
 	return JS_UNDEFINED;
@@ -178,7 +284,8 @@ int scriptableobject_property_set (
 }
 
 ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::string name) :
-    ObjectAdapter (engine), m_exoticMethods (), m_name (std::move (name)) {
+    ObjectAdapter (engine), m_exoticMethods (), m_animationLayerClassId (JS_INVALID_CLASS_ID),
+    m_name (std::move (name)) {
     this->m_exoticMethods = {
 	.get_property = scriptableobject_property_get,
 	.set_property = scriptableobject_property_set,
@@ -189,6 +296,11 @@ ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::str
 	    .exotic = &m_exoticMethods,
 	}
     );
+
+    JS_NewClassID (engine.getRuntime (), &this->m_animationLayerClassId);
+    JSClassDef animationLayerClass { .class_name = "WallpaperEngineAnimationLayer",
+				     .finalizer = animation_layer_finalizer };
+    JS_NewClass (engine.getRuntime (), this->m_animationLayerClassId, &animationLayerClass);
 }
 
 JSValue ScriptableObjectAdapter::instantiate (ScriptableObject& object) {
@@ -203,4 +315,30 @@ JSValue ScriptableObjectAdapter::instantiate (ScriptableObject& object) {
 
 JSValue ScriptableObjectAdapter::instantiate (DynamicValue& value) {
     throw std::runtime_error ("Cannot create a ScriptableObject instance from a DynamicValue");
+}
+
+JSValue ScriptableObjectAdapter::instantiateAnimationLayer (DynamicValue& rate, DynamicValue& visible) {
+    JSContext* ctx = this->m_engine.getContext ();
+    JSValue result = JS_NewObjectClass (ctx, this->m_animationLayerClassId);
+    auto* handle = new OpaqueAnimationLayer {
+	.magic = ANIMATION_LAYER_OPAQUE_MAGIC, .engine = this->m_engine, .rate = rate, .visible = visible
+    };
+    JS_SetOpaque (result, handle);
+
+    JSValue rateGetter = JS_NewCFunction2 (
+	ctx, reinterpret_cast<JSCFunction*> (animation_layer_get_rate), "get rate", 0, JS_CFUNC_getter, 0
+    );
+    JSValue rateSetter = JS_NewCFunction2 (
+	ctx, reinterpret_cast<JSCFunction*> (animation_layer_set_rate), "set rate", 1, JS_CFUNC_setter, 0
+    );
+    const JSAtom rateAtom = JS_NewAtom (ctx, "rate");
+    JS_DefinePropertyGetSet (ctx, result, rateAtom, rateGetter, rateSetter, JS_PROP_ENUMERABLE);
+    JS_FreeAtom (ctx, rateAtom);
+    JS_DefinePropertyValueStr (
+	ctx, result, "play", JS_NewCFunction (ctx, animation_layer_play, "play", 0), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	ctx, result, "stop", JS_NewCFunction (ctx, animation_layer_stop, "stop", 0), JS_PROP_ENUMERABLE
+    );
+    return result;
 }

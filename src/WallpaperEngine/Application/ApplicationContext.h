@@ -299,6 +299,20 @@ private:
     void registerPlaylist (PlaylistDefinition&& definition);
     [[nodiscard]] const PlaylistDefinition& getPlaylistFromConfig (const std::string& name);
 
+    void applyWindowGeometry (const std::string& value);
+    void selectScreenRoot (const std::string& value, std::string& lastScreen);
+    void selectScreenSpan (const std::string& value, std::string& lastScreen);
+    void applyScreenBackground (const std::string& value, const std::string& lastScreen);
+    void applyPlaylist (const std::string& value, const std::string& lastScreen);
+    void applyScaling (const std::string& value, const std::string& lastScreen);
+    void applyOffset (const std::string& value, const std::string& lastScreen, bool horizontal);
+    void applyClamp (const std::string& value, const std::string& lastScreen);
+    void applyWaylandLayer (const std::string& value);
+    void applyPostProcessValue (const std::string& value, const std::string& lastScreen, bool contrast);
+    void applyBorderColour (const std::string& value, const std::string& lastScreen);
+    void applyScreenProperty (const std::string& value, const std::string& lastScreen);
+    void applyRenderDebug (const std::string& value);
+
     std::map<std::string, PlaylistDefinition> m_configPlaylists;
     bool m_loadedConfigPlaylists = false;
 };

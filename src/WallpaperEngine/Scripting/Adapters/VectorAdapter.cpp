@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <exception>
 #include <variant>
 
 using namespace WallpaperEngine::Data::Utils;
@@ -432,7 +433,12 @@ JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, J
 
     auto value = vector_new<components> ();
     if (argc == 1) {
-	value = vector_get<components> (ctx, argv[0]);
+	try {
+	    value = vector_get<components> (ctx, argv[0]);
+	} catch (const std::exception& exception) {
+	    JS_FreeValue (ctx, result);
+	    return JS_ThrowTypeError (ctx, "%s", exception.what ());
+	}
     } else if (argc > 1) {
 	for (int componentIndex = 0; componentIndex < argc; ++componentIndex) {
 	    double component = 0.0;
@@ -536,7 +542,7 @@ JSValue vector_subtract (JSContext* ctx, JSValueConst this_val, int argc, JSValu
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	vector_get<components> (ctx, argv[0]) - vector_value (*container), DynamicValue::UpdateSource::Initialization
+	vector_value (*container) - vector_get<components> (ctx, argv[0]), DynamicValue::UpdateSource::Initialization
     );
 
     return newVector;
@@ -589,7 +595,7 @@ template <int components> JSValue vector_divide (JSContext* ctx, JSValueConst th
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	vector_get<components> (ctx, argv[0]) / vector_value (*container), DynamicValue::UpdateSource::Initialization
+	vector_value (*container) / vector_get<components> (ctx, argv[0]), DynamicValue::UpdateSource::Initialization
     );
 
     return newVector;
@@ -642,7 +648,7 @@ template <int components> JSValue vector_cross (JSContext* ctx, JSValueConst thi
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	glm::cross (vector_get<components> (ctx, argv[0]), vector_value (*container)),
+	glm::cross (vector_value (*container), vector_get<components> (ctx, argv[0])),
 	DynamicValue::UpdateSource::Initialization
     );
 
@@ -675,7 +681,7 @@ template <int components> JSValue vector_mix (JSContext* ctx, JSValueConst this_
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	glm::mix (vector_get<components> (ctx, argv[0]), vector_value (*container), amount),
+	glm::mix (vector_value (*container), vector_get<components> (ctx, argv[0]), amount),
 	DynamicValue::UpdateSource::Initialization
     );
 
@@ -1026,7 +1032,8 @@ template <int components> JSValue VectorAdapter<components>::instantiateAngles (
     }
 }
 
-template <int components> JSValue VectorAdapter<components>::instantiate (DynamicValue& source, bool temporal) {
+template <int components>
+JSValue VectorAdapter<components>::instantiate (DynamicValue& source, bool temporal, bool anglesInDegrees) {
     auto value = std::make_unique<DynamicValue> (source);
     uint32_t id = ++VectorInstanceId;
     JSValue result = this->ObjectAdapter::instantiate (*value);
@@ -1037,12 +1044,24 @@ template <int components> JSValue VectorAdapter<components>::instantiate (Dynami
 	    .adapter = *this,
 	    .value = *value,
 	    .id = id,
+	    .anglesInDegrees = anglesInDegrees,
 	}
     );
 
     this->m_values.emplace (id, std::move (value));
 
     return result;
+}
+
+template <int components>
+JSValue VectorAdapter<components>::instantiateAngles (DynamicValue& value, bool temporal) {
+    if constexpr (components != 3) {
+	return this->instantiate (value, temporal);
+    } else if (temporal) {
+	return this->instantiate (value, true, true);
+    } else {
+	return this->instantiateAngles (value);
+    }
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate () {

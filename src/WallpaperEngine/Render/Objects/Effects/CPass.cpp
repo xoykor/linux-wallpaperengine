@@ -122,6 +122,44 @@ std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
     return fbo;
 }
 
+std::shared_ptr<const TextureProvider> CPass::getTexture (const int index) const {
+    if (const auto binding = this->m_binds.find (index);
+	binding != this->m_binds.end () && binding->second == "previous") {
+	return nullptr;
+    }
+
+    const auto texture = this->m_textures.find (index);
+    if (texture == this->m_textures.end ()) {
+	return nullptr;
+    }
+
+    for (auto entry = texture->second; entry != nullptr; entry = entry->next) {
+	if (entry->texture != nullptr) {
+	    return entry->texture;
+	}
+    }
+
+    return nullptr;
+}
+
+void CPass::setTextureOverride (const int index, std::shared_ptr<const TextureProvider> texture) {
+    if (texture == nullptr) {
+	return;
+    }
+
+    this->m_textureOverrides.insert_or_assign (index, texture);
+    if (!this->m_textures.contains (index)) {
+	this->m_textures.emplace (
+	    index,
+	    std::make_shared<TextureChainEntry> (TextureChainEntry { .texture = std::move (texture), .next = nullptr })
+	);
+    }
+
+    this->addUniform (
+	"g_Texture" + std::to_string (index) + "Resolution", this->m_textureOverrides.at (index)->getResolution ()
+    );
+}
+
 void CPass::setupRenderFramebuffer () const {
     // set the framebuffer we're drawing to; scene output may be redirected while
     // rendering a composition-layer subtree.
@@ -423,8 +461,10 @@ void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const
 	if (expectedTexture == nullptr) {
 	    expectedTexture = this->m_input;
 	}
-	expectedTexture = index == 0 ? texture0
-				     : this->avoidRenderTargetFeedback (std::move (expectedTexture), index);
+	if (const auto override = this->m_textureOverrides.find (index); override != this->m_textureOverrides.end ()) {
+	    expectedTexture = override->second;
+	}
+	expectedTexture = index == 0 ? texture0 : this->avoidRenderTargetFeedback (std::move (expectedTexture), index);
 
 	this->bindTextureUnit (index, expectedTexture, index == 0 ? currentTexture : 0);
 
@@ -856,7 +896,6 @@ void CPass::setupAttributes () {
 }
 
 void CPass::setupTextureUniforms () {
-
     // Material usertextures name a wallpaper property, not necessarily an
     // asset path. SceneTexture properties resolve to the selected texture;
     // an empty selection leaves the shader's existing texture chain intact.

@@ -8,6 +8,7 @@
 
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
+#include "WallpaperEngine/Render/SpanInfo.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/Render/PostProcessSettings.h"
 
@@ -39,11 +40,7 @@ class CWallpaper : public Helpers::ContextAware, public FBOProvider, public Type
     friend class WallpaperEngine::Application::WallpaperApplication;
 
 public:
-    /** Information for span-mode rendering: one wallpaper across multiple viewports */
-    struct SpanInfo {
-	/** Bounding box of the entire span group (x, y, width, height) in global desktop coordinates */
-	glm::ivec4 totalBounds;
-    };
+    using SpanInfo = WallpaperEngine::Render::SpanInfo;
 
     virtual ~CWallpaper () override;
 

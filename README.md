@@ -19,6 +19,9 @@ other app images show the running state indicated in the app.
 
 ![Wallpaper rendered on a KDE Plasma desktop](docs/screenshots/desktop-wallpaper-running.png)
 
+For the complete change inventory and upstream review notes, see
+[`docs/FORK_CHANGES.md`](docs/FORK_CHANGES.md).
+
 ### GTK desktop controller
 
 ![Settings page while the wallpaper engine is running](docs/screenshots/settings-engine-running.png)

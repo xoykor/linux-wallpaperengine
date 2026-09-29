@@ -45,6 +45,8 @@ public:
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
+    [[nodiscard]] std::shared_ptr<const TextureProvider> getTexture (int index) const;
+    void setTextureOverride (int index, std::shared_ptr<const TextureProvider> texture);
 
     [[nodiscard]] std::shared_ptr<const FBOProvider> getFBOProvider () const;
     [[nodiscard]] const CRenderable& getRenderable () const;
@@ -198,6 +200,7 @@ private:
      * Contains the final map of textures to be used
      */
     std::map<int, std::shared_ptr<TextureChainEntry>> m_textures = {};
+    std::map<int, std::shared_ptr<const TextureProvider>> m_textureOverrides = {};
 
     Render::Shaders::Shader* m_shader = nullptr;
 

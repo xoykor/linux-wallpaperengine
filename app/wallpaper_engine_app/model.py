@@ -108,6 +108,84 @@ def normalize_language(value: Any) -> str:
     return canonical[normalized]
 
 
+def _validate_scalar_config(result: dict[str, Any]) -> None:
+    for key in ("rotation_enabled", "shuffle", "only_favorites", "mute"):
+        if type(result[key]) is not bool:
+            raise ValueError(tr("{key} deve ser verdadeiro ou falso.", key=key))
+
+    numeric_ranges = (
+        ("interval_minutes", 1, 1440, "O intervalo deve estar entre 1 e 1440 minutos."),
+        ("fps", 1, 240, "FPS deve estar entre 1 e 240."),
+        ("ui_hue", 0, 360, "Matiz da interface deve estar entre 0 e 360."),
+        ("ui_intensity", 35, 100, "Intensidade da interface deve estar entre 35 e 100."),
+    )
+    for key, low, high, message in numeric_ranges:
+        value = result[key]
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError(tr(message))
+
+    if not isinstance(result["scaling"], str) or result["scaling"] not in _SCALING:
+        raise ValueError(tr("Escala inválida."))
+    result["language"] = normalize_language(result["language"])
+
+
+def _normalize_playlists(raw_playlists: Any) -> dict[str, list[str]]:
+    if not isinstance(raw_playlists, dict):
+        raise ValueError(tr("Playlists deve ser um objeto de nomes e listas de IDs."))
+    playlists: dict[str, list[str]] = {}
+    seen_names: set[str] = set()
+    for raw_name, raw_ids in raw_playlists.items():
+        name = normalize_playlist_name(raw_name)
+        folded_name = name.casefold()
+        if folded_name in seen_names:
+            raise ValueError(tr("Nome de playlist duplicado: {name}.", name=name))
+        seen_names.add(folded_name)
+        if not isinstance(raw_ids, list):
+            raise ValueError(tr("A playlist {name} deve conter uma lista de IDs.", name=name))
+        playlists[name] = list(dict.fromkeys(normalize_id(value) for value in raw_ids))
+    return playlists
+
+
+def _normalize_active_playlist(active: Any, playlists: dict[str, list[str]]) -> str | None:
+    if active is None:
+        return None
+    normalized = normalize_playlist_name(active)
+    matching = [name for name in playlists if name.casefold() == normalized.casefold()]
+    if not matching:
+        raise ValueError(tr("Playlist ativa não encontrada: {name}.", name=normalized))
+    return matching[0]
+
+
+def _normalize_wallpaper_properties(raw_value: Any) -> dict[str, dict[str, bool]]:
+    if not isinstance(raw_value, dict):
+        raise ValueError(tr("As opções dos wallpapers devem ser um objeto."))
+
+    wallpaper_properties: dict[str, dict[str, bool]] = {}
+    for raw_id, raw_properties in raw_value.items():
+        wallpaper_id = normalize_id(raw_id)
+        if not isinstance(raw_properties, dict) or len(raw_properties) > 256:
+            raise ValueError(tr("As opções de cada wallpaper devem ser um objeto válido."))
+
+        properties: dict[str, bool] = {}
+        for name, value in raw_properties.items():
+            if not isinstance(name, str) or not _PROPERTY_PATTERN.fullmatch(name):
+                raise ValueError(tr("Nome de opção de wallpaper inválido."))
+            if type(value) is not bool:
+                raise ValueError(tr("As opções de wallpaper devem ser verdadeiras ou falsas."))
+            properties[name] = value
+        if properties:
+            wallpaper_properties[wallpaper_id] = properties
+    return wallpaper_properties
+
+
+def _validate_renderer_path(renderer: Any) -> str:
+    if not isinstance(renderer, str) or not renderer or len(renderer) > 4096:
+        raise ValueError(tr("Caminho do renderizador inválido."))
+    if renderer != "auto" and (not Path(renderer).is_absolute() or "\x00" in renderer):
+        raise ValueError(tr("O caminho do renderizador deve ser absoluto ou 'auto'."))
+    return renderer
+
+
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError(tr("A configuração deve ser um objeto JSON."))
@@ -117,53 +195,16 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
 
     result = dict(DEFAULT_CONFIG)
     result.update(config)
-    for key in ("rotation_enabled", "shuffle", "only_favorites", "mute"):
-        if type(result[key]) is not bool:
-            raise ValueError(tr("{key} deve ser verdadeiro ou falso.", key=key))
-
-    minutes = result["interval_minutes"]
-    if type(minutes) is not int or not 1 <= minutes <= 1440:
-        raise ValueError(tr("O intervalo deve estar entre 1 e 1440 minutos."))
-    fps = result["fps"]
-    if type(fps) is not int or not 1 <= fps <= 240:
-        raise ValueError(tr("FPS deve estar entre 1 e 240."))
-    hue = result["ui_hue"]
-    if type(hue) is not int or not 0 <= hue <= 360:
-        raise ValueError(tr("Matiz da interface deve estar entre 0 e 360."))
-    intensity = result["ui_intensity"]
-    if type(intensity) is not int or not 35 <= intensity <= 100:
-        raise ValueError(tr("Intensidade da interface deve estar entre 35 e 100."))
-    if not isinstance(result["scaling"], str) or result["scaling"] not in _SCALING:
-        raise ValueError(tr("Escala inválida."))
-    result["language"] = normalize_language(result["language"])
+    _validate_scalar_config(result)
 
     favorites = result["favorites"]
     if not isinstance(favorites, list):
         raise ValueError(tr("Favoritos deve ser uma lista de IDs."))
     result["favorites"] = list(dict.fromkeys(normalize_id(value) for value in favorites))
 
-    raw_playlists = result["playlists"]
-    if not isinstance(raw_playlists, dict):
-        raise ValueError(tr("Playlists deve ser um objeto de nomes e listas de IDs."))
-    playlists: dict[str, list[str]] = {}
-    seen_names: set[str] = set()
-    for raw_name, raw_ids in raw_playlists.items():
-        name = normalize_playlist_name(raw_name)
-        if name.casefold() in seen_names:
-            raise ValueError(tr("Nome de playlist duplicado: {name}.", name=name))
-        seen_names.add(name.casefold())
-        if not isinstance(raw_ids, list):
-            raise ValueError(tr("A playlist {name} deve conter uma lista de IDs.", name=name))
-        playlists[name] = list(dict.fromkeys(normalize_id(value) for value in raw_ids))
+    playlists = _normalize_playlists(result["playlists"])
     result["playlists"] = playlists
-
-    active = result["active_playlist"]
-    if active is not None:
-        normalized = normalize_playlist_name(active)
-        matching = [name for name in playlists if name.casefold() == normalized.casefold()]
-        if not matching:
-            raise ValueError(tr("Playlist ativa não encontrada: {name}.", name=normalized))
-        result["active_playlist"] = matching[0]
+    result["active_playlist"] = _normalize_active_playlist(result["active_playlist"], playlists)
 
     selected = result["selected_id"]
     result["selected_id"] = None if selected is None else normalize_id(selected)
@@ -176,32 +217,9 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
         for screen, wallpaper_id in assignments.items()
     }
 
-    raw_wallpaper_properties = result["wallpaper_properties"]
-    if not isinstance(raw_wallpaper_properties, dict):
-        raise ValueError(tr("As opções dos wallpapers devem ser um objeto."))
-    wallpaper_properties: dict[str, dict[str, bool]] = {}
-    for raw_id, raw_properties in raw_wallpaper_properties.items():
-        wallpaper_id = normalize_id(raw_id)
-        if not isinstance(raw_properties, dict) or len(raw_properties) > 256:
-            raise ValueError(tr("As opções de cada wallpaper devem ser um objeto válido."))
-        properties: dict[str, bool] = {}
-        for name, value in raw_properties.items():
-            if not isinstance(name, str) or not _PROPERTY_PATTERN.fullmatch(name):
-                raise ValueError(tr("Nome de opção de wallpaper inválido."))
-            if type(value) is not bool:
-                raise ValueError(tr("As opções de wallpaper devem ser verdadeiras ou falsas."))
-            properties[name] = value
-        if properties:
-            wallpaper_properties[wallpaper_id] = properties
-    result["wallpaper_properties"] = wallpaper_properties
-
-    renderer = result["renderer_path"]
-    if not isinstance(renderer, str) or not renderer or len(renderer) > 4096:
-        raise ValueError(tr("Caminho do renderizador inválido."))
-    if renderer != "auto" and (not Path(renderer).is_absolute() or "\x00" in renderer):
-        raise ValueError(tr("O caminho do renderizador deve ser absoluto ou 'auto'."))
+    result["wallpaper_properties"] = _normalize_wallpaper_properties(result["wallpaper_properties"])
+    result["renderer_path"] = _validate_renderer_path(result["renderer_path"])
     return result
-
 
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -362,25 +380,29 @@ def _request_daemon(socket_path: Path, command: str) -> dict[str, Any] | None:
 
 
 def stop_previous_appimage_daemons(timeout: float = 4.0) -> bool:
-    """Stop renderers supervised by earlier AppImage versions before upgrade."""
+    """Retire earlier AppImage daemons and their mounted runtimes before upgrade."""
     if not _appimage_mode:
         return True
 
     previous = set(_socket_dir.glob("linux-wallpaperengine-appimage-*-app.sock"))
     previous.add(LEGACY_APPIMAGE_SOCKET_FILE)
     previous.discard(SOCKET_FILE)
-    pending: set[Path] = set()
+    pending: dict[Path, bool] = {}
     for socket_path in previous:
+        if _request_daemon(socket_path, "shutdown") is not None:
+            pending[socket_path] = True
+            continue
+        # AppImages before the shutdown command only know how to stop playback.
         status = _request_daemon(socket_path, "stop")
         if status is not None and status.get("renderer_pid") is not None:
-            pending.add(socket_path)
+            pending[socket_path] = False
 
     deadline = time.monotonic() + max(0.0, timeout)
     while pending and time.monotonic() < deadline:
-        for socket_path in tuple(pending):
+        for socket_path, shutting_down in tuple(pending.items()):
             status = _request_daemon(socket_path, "status")
-            if status is None or status.get("renderer_pid") is None:
-                pending.discard(socket_path)
+            if status is None or (not shutting_down and status.get("renderer_pid") is None):
+                pending.pop(socket_path, None)
         if pending:
             time.sleep(0.1)
     return not pending
@@ -448,6 +470,71 @@ def steamapps_roots() -> list[Path]:
     return roots
 
 
+def _consume_quoted_vdf_token(source: str, position: int) -> tuple[str, int]:
+    position += 1
+    value: list[str] = []
+    while position < len(source) and source[position] != '"':
+        if (
+            source[position] == "\\"
+            and position + 1 < len(source)
+            and source[position + 1] in ('"', "\\")
+        ):
+            position += 1
+        value.append(source[position])
+        position += 1
+    return "".join(value), position + 1
+
+
+def _consume_bare_vdf_token(source: str, position: int) -> tuple[str, int]:
+    end = position
+    while end < len(source) and not source[end].isspace() and source[end] not in '{}"':
+        end += 1
+    return source[position:end], end
+
+
+def _tokenize_vdf(source: str) -> list[str]:
+    tokens: list[str] = []
+    position = 0
+    while position < len(source):
+        char = source[position]
+        if char.isspace():
+            position += 1
+            continue
+        if source.startswith("//", position):
+            end = source.find("\n", position)
+            position = len(source) if end < 0 else end + 1
+            continue
+        if char in "{}":
+            tokens.append(char)
+            position += 1
+            continue
+        if char == '"':
+            token, position = _consume_quoted_vdf_token(source, position)
+        else:
+            token, position = _consume_bare_vdf_token(source, position)
+        tokens.append(token)
+    return tokens
+
+def _read_vdf_object(tokens: list[str], index: int, depth: int = 0) -> tuple[dict[str, Any], int]:
+    if depth > 16:
+        return {}, len(tokens)
+    values: dict[str, Any] = {}
+    while index < len(tokens):
+        key = tokens[index]
+        index += 1
+        if key == "}" or index >= len(tokens):
+            break
+        value = tokens[index]
+        index += 1
+        if value == "{":
+            values[key], index = _read_vdf_object(tokens, index, depth + 1)
+        elif value == "}":
+            break
+        else:
+            values[key] = value
+    return values, index
+
+
 def _steam_library_paths(listing: Path) -> list[Path]:
     """Read both current and older Steam libraryfolders.vdf layouts."""
     try:
@@ -455,59 +542,11 @@ def _steam_library_paths(listing: Path) -> list[Path]:
     except (OSError, UnicodeError):
         return []
 
-    tokens: list[str] = []
-    position = 0
-    while position < len(source):
-        char = source[position]
-        if char.isspace():
-            position += 1
-        elif source.startswith("//", position):
-            end = source.find("\n", position)
-            position = len(source) if end < 0 else end + 1
-        elif char in "{}":
-            tokens.append(char)
-            position += 1
-        elif char == '"':
-            position += 1
-            value: list[str] = []
-            while position < len(source) and source[position] != '"':
-                if source[position] == "\\" and position + 1 < len(source) and source[position + 1] in ('"', "\\"):
-                    position += 1
-                value.append(source[position])
-                position += 1
-            tokens.append("".join(value))
-            position += 1
-        else:
-            end = position
-            while end < len(source) and not source[end].isspace() and source[end] not in '{}"':
-                end += 1
-            tokens.append(source[position:end])
-            position = end
-
-    def read_object(index: int, depth: int = 0) -> tuple[dict[str, Any], int]:
-        if depth > 16:
-            return {}, len(tokens)
-        values: dict[str, Any] = {}
-        while index < len(tokens):
-            key = tokens[index]
-            index += 1
-            if key == "}":
-                break
-            if index >= len(tokens):
-                break
-            value = tokens[index]
-            index += 1
-            if value == "{":
-                values[key], index = read_object(index, depth + 1)
-            elif value == "}":
-                break
-            else:
-                values[key] = value
-        return values, index
-
+    tokens = _tokenize_vdf(source)
     if len(tokens) < 2 or tokens[0].casefold() != "libraryfolders" or tokens[1] != "{":
         return []
-    entries, _ = read_object(2)
+
+    entries, _ = _read_vdf_object(tokens, 2)
     libraries: list[Path] = []
     for key, value in entries.items():
         if not key.isdigit():
@@ -516,7 +555,6 @@ def _steam_library_paths(listing: Path) -> list[Path]:
         if isinstance(raw, str) and raw:
             libraries.append(Path(raw).expanduser())
     return libraries
-
 
 def _libraryfolders_paths(steamapps: Path) -> list[Path]:
     """Return Steam library roots for the existing catalog callers."""
@@ -626,31 +664,36 @@ def _boolean_properties(project: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
-def detect_outputs() -> list[str]:
-    """Discover active outputs using an available desktop/session backend."""
-    if shutil.which("kscreen-doctor"):
-        try:
-            result = subprocess.run(
-                ["kscreen-doctor", "-j"], capture_output=True, text=True,
-                timeout=5, check=True,
-            )
-            data = json.loads(result.stdout)
-            names = [
-                output["name"] for output in data.get("outputs", [])
-                if isinstance(output, dict) and output.get("enabled")
-                and output.get("connected") and isinstance(output.get("name"), str)
-            ]
-            if names:
-                return list(dict.fromkeys(names))
-        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
-            pass
-
-    session_type = os.environ.get("XDG_SESSION_TYPE")
-    if session_type == "wayland" or (
-        session_type != "x11"
-        and (not os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-    ):
+def _kscreen_outputs() -> list[str]:
+    if not shutil.which("kscreen-doctor"):
         return []
+    try:
+        result = subprocess.run(
+            ["kscreen-doctor", "-j"], capture_output=True, text=True,
+            timeout=5, check=True,
+        )
+        data = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    names = [
+        output["name"] for output in data.get("outputs", [])
+        if isinstance(output, dict) and output.get("enabled")
+        and output.get("connected") and isinstance(output.get("name"), str)
+    ]
+    return list(dict.fromkeys(names))
+
+
+def _native_wayland_session() -> bool:
+    session_type = os.environ.get("XDG_SESSION_TYPE")
+    return session_type == "wayland" or (
+        session_type != "x11"
+        and (not os.environ.get("DISPLAY") or bool(os.environ.get("WAYLAND_DISPLAY")))
+    )
+
+
+def _xrandr_outputs() -> list[str]:
     if not shutil.which("xrandr"):
         return []
     try:
@@ -666,3 +709,13 @@ def detect_outputs() -> list[str]:
         if len(parts) >= 2 and parts[1] == "connected":
             names.append(parts[0])
     return list(dict.fromkeys(names))
+
+
+def detect_outputs() -> list[str]:
+    """Discover active outputs using an available desktop/session backend."""
+    names = _kscreen_outputs()
+    if names:
+        return names
+    if _native_wayland_session():
+        return []
+    return _xrandr_outputs()

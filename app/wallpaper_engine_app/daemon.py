@@ -40,6 +40,7 @@ class WallpaperDaemon:
         self.current_id: str | None = None
         self.screens: dict[str, str] = {}
         self.pending_id: str | None = None
+        self.skip_requested = False
         self.next_change_mono: float | None = None
         self.next_change_at: float | None = None
         self.retry_at = 0.0
@@ -95,10 +96,11 @@ class WallpaperDaemon:
         old_outputs = self.outputs
         self.catalog = new_catalog
         self.outputs = new_outputs
-        if self.child is not None and old_outputs != new_outputs:
-            self._request_switch(self.current_id)
-        if self.current_id and self.current_id not in new_catalog:
-            self._request_switch(None)
+        if self.child is not None and not self.terminating:
+            if self.current_id and self.current_id not in new_catalog:
+                self._request_switch(None)
+            elif old_outputs != new_outputs:
+                self._request_switch(self.current_id)
 
     def _available(self, wallpaper_id: str | None, *, now: float | None = None) -> bool:
         if wallpaper_id is None or wallpaper_id not in self.catalog:
@@ -165,36 +167,42 @@ class WallpaperDaemon:
             raise RuntimeError(tr("Renderizador linux-wallpaperengine não encontrado ou sem permissão de execução."))
         return path
 
-    def _build_command(self, wallpaper_id: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    def _screen_wallpapers(self, wallpaper_id: str) -> dict[str, str]:
         if wallpaper_id not in self.catalog:
             raise ValueError(tr("Wallpaper selecionado não está mais instalado."))
         if not self.outputs:
             raise RuntimeError(tr("Nenhum monitor ativo detectado."))
-        screens = {}
+
+        screens: dict[str, str] = {}
         for screen in self.outputs:
             assigned = self.config["screen_assignments"].get(screen)
             # An unavailable fixed wallpaper must not crash the renderer on
             # every display while its cooldown is active.
             screens[screen] = assigned if self._available(assigned) else wallpaper_id
+        return screens
 
-        renderer = self._resolve_renderer()
-        command = [
-            renderer, "--disable-mouse", "--fps", str(self.config["fps"]),
-            "--layer", "bottom", "--no-fullscreen-pause",
-        ]
+    def _renderer_environment(self) -> dict[str, str]:
         environment = os.environ.copy()
+        bundled_libraries = environment.get("LINUX_WALLPAPERENGINE_LIBRARY_PATH")
+        if bundled_libraries:
+            existing_libraries = environment.get("LD_LIBRARY_PATH")
+            environment["LD_LIBRARY_PATH"] = (
+                f"{bundled_libraries}:{existing_libraries}" if existing_libraries else bundled_libraries
+            )
         if self.config["mute"]:
-            command.extend(("--silent", "--noautomute", "--no-audio-processing"))
             environment.update(
                 SDL_AUDIODRIVER="dummy", PULSE_SERVER="none", PIPEWIRE_REMOTE="none"
             )
+        return environment
 
+    def _append_asset_directory(self, command: list[str], screens: dict[str, str]) -> None:
         assets = [self.catalog[selected]["assets"] for selected in screens.values()]
         existing_assets = [path for path in assets if Path(path).is_dir()]
         if existing_assets:
             # The renderer has one global assets directory for all screens.
             command.extend(("--assets-dir", existing_assets[0]))
 
+    def _append_screen_options(self, command: list[str], screens: dict[str, str]) -> None:
         for screen, selected in screens.items():
             command.extend((
                 "--screen-root", screen,
@@ -206,6 +214,19 @@ class WallpaperDaemon:
             for name, value in overrides.items():
                 if name in supported:
                     command.extend(("--screen-property", f"{name}={'true' if value else 'false'}"))
+
+    def _build_command(self, wallpaper_id: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+        screens = self._screen_wallpapers(wallpaper_id)
+        renderer = self._resolve_renderer()
+        command = [
+            renderer, "--disable-mouse", "--fps", str(self.config["fps"]),
+            "--layer", "bottom", "--no-fullscreen-pause",
+        ]
+        environment = self._renderer_environment()
+        if self.config["mute"]:
+            command.extend(("--silent", "--noautomute", "--no-audio-processing"))
+        self._append_asset_directory(command, screens)
+        self._append_screen_options(command, screens)
         return command, environment, screens
 
     def _request_switch(self, wallpaper_id: str | None) -> None:
@@ -288,50 +309,92 @@ class WallpaperDaemon:
             self.next_change_at = None
         print(f"Wallpaper: {wallpaper_id} — {self.catalog[wallpaper_id]['title']}", flush=True)
 
+    def _advance_rotation_if_due(self, now: float) -> None:
+        if self.child is None or self.terminating or self.next_change_mono is None:
+            return
+        if now < self.next_change_mono:
+            return
+        selected = self._next_id()
+        if selected and selected != self.current_id:
+            self._request_switch(selected)
+            return
+        interval = self.config["interval_minutes"] * 60
+        self.next_change_mono = now + interval
+        self.next_change_at = time.time() + interval
+
+    def _restore_fixed_assignments(self) -> None:
+        if self.child is None or self.terminating:
+            return
+        for screen in self.outputs:
+            assigned = self.config["screen_assignments"].get(screen)
+            if (
+                assigned in self.catalog
+                and self.screens.get(screen) != assigned
+                and self._available(assigned)
+            ):
+                # A fixed wallpaper that crashed is temporarily replaced
+                # while it is cooling down. Rebuild the renderer once the
+                # cooldown expires so the fixed assignment is restored.
+                self._request_switch(self.current_id)
+                return
+
+    def _pending_wallpaper(self) -> str | None:
+        pending_allowed = self._available(self.pending_id)
+        if self.config["rotation_enabled"]:
+            pending_allowed = pending_allowed and self.pending_id in self._eligible()
+        selected = self.pending_id if pending_allowed else self._first_id()
+        if selected is not None:
+            return selected
+
+        assignments = self.config["screen_assignments"]
+        all_outputs_fixed = self.outputs and all(
+            screen in assignments and self._available(assignments[screen])
+            for screen in self.outputs
+        )
+        if all_outputs_fixed:
+            return assignments[self.outputs[0]]
+        return None
+
+    def _set_selection_error(self, now: float) -> None:
+        if self.config["active_playlist"] is not None:
+            self.error = tr(
+                "A playlist '{playlist}' não contém wallpapers instalados e disponíveis para rotação.",
+                playlist=self.config["active_playlist"],
+            )
+        elif self.catalog:
+            self.error = tr(
+                "Nenhum wallpaper elegível encontrado. Confira as assinaturas da Steam e o filtro de favoritos."
+            )
+        else:
+            self.error = tr("Nenhum wallpaper scene ou video do Workshop encontrado.")
+        self.retry_at = now + _SCAN_SECONDS
+
+    def _start_child_if_ready(self, now: float) -> None:
+        if self.child is not None or now < self.retry_at:
+            return
+        selected = self._pending_wallpaper()
+        if selected is None:
+            self._set_selection_error(now)
+        elif not self.outputs:
+            self.error = tr("Nenhum monitor ativo detectado.")
+            self.retry_at = now + _SCAN_SECONDS
+        else:
+            self._start_child(selected)
+
     def _tick(self) -> None:
+        if self.skip_requested:
+            self.skip_requested = False
+            self._request_switch(self._next_id())
         self._reap_child()
         self._refresh()
         if not self.active:
             self._publish()
             return
+
         now = time.monotonic()
-        if self.child is not None and not self.terminating and self.next_change_mono is not None:
-            if now >= self.next_change_mono:
-                selected = self._next_id()
-                if selected and selected != self.current_id:
-                    self._request_switch(selected)
-                else:
-                    interval = self.config["interval_minutes"] * 60
-                    self.next_change_mono = now + interval
-                    self.next_change_at = time.time() + interval
-        if self.child is None and now >= self.retry_at:
-            pending_allowed = self._available(self.pending_id)
-            if self.config["rotation_enabled"]:
-                pending_allowed = pending_allowed and self.pending_id in self._eligible()
-            selected = self.pending_id if pending_allowed else self._first_id()
-            assignments = self.config["screen_assignments"]
-            if selected is None and self.outputs and all(
-                screen in assignments and self._available(assignments[screen])
-                for screen in self.outputs
-            ):
-                # Every display has a fixed, currently healthy wallpaper.
-                selected = assignments[self.outputs[0]]
-            if selected is None:
-                if self.config["active_playlist"] is not None:
-                    self.error = tr(
-                        "A playlist '{playlist}' não contém wallpapers instalados e disponíveis para rotação.",
-                        playlist=self.config["active_playlist"],
-                    )
-                elif self.catalog:
-                    self.error = tr("Nenhum wallpaper elegível encontrado. Confira as assinaturas da Steam e o filtro de favoritos.")
-                else:
-                    self.error = tr("Nenhum wallpaper scene ou video do Workshop encontrado.")
-                self.retry_at = now + _SCAN_SECONDS
-            elif not self.outputs:
-                self.error = tr("Nenhum monitor ativo detectado.")
-                self.retry_at = now + _SCAN_SECONDS
-            else:
-                self._start_child(selected)
+        self._advance_rotation_if_due(now)
+        self._restore_fixed_assignments()
+        self._start_child_if_ready(now)
         self._publish()
 
     def _validate_known_id(self, value: Any) -> str:
@@ -364,7 +427,7 @@ class WallpaperDaemon:
                     wallpaper_id=wallpaper_id, names=", ".join(sorted(unknown)),
                 ))
 
-    def _dispatch(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _validate_request(self, message: dict[str, Any]) -> str:
         if not isinstance(message, dict):
             raise ValueError(tr("Solicitação inválida."))
         command = message.get("command")
@@ -373,138 +436,169 @@ class WallpaperDaemon:
         expected = {
             "status": set(), "next": set(), "select": {"id"},
             "set": {"settings"}, "assign": {"screen", "id"},
-            "start": set(), "stop": set(), "reload": set(),
+            "start": set(), "stop": set(), "reload": set(), "shutdown": set(),
         }
         if command not in expected:
             raise ValueError(tr("Comando desconhecido: {command}.", command=command))
         supplied = set(message) - {"command"}
         if supplied != expected[command]:
             raise ValueError(tr("Argumentos inválidos para {command}.", command=command))
+        return command
 
-        if command == "status":
-            pass
-        elif command == "next":
-            self._refresh(force=True)
-            selected = self._next_id()
-            if selected is None:
-                if self.config["active_playlist"] is not None:
-                    raise ValueError(tr("A playlist ativa não contém wallpapers instalados e disponíveis."))
-                raise ValueError(tr("Nenhum wallpaper elegível para avançar."))
-            self.config = model.save_config(dict(self.config, selected_id=selected))
-            self.active = True
+    def _command_status(self, _message: dict[str, Any]) -> None:
+        return
+
+    def _command_next(self, _message: dict[str, Any]) -> None:
+        self._refresh(force=True)
+        selected = self._next_id()
+        if selected is None:
+            if self.config["active_playlist"] is not None:
+                raise ValueError(tr("A playlist ativa não contém wallpapers instalados e disponíveis."))
+            raise ValueError(tr("Nenhum wallpaper elegível para avançar."))
+        self.config = model.save_config(dict(self.config, selected_id=selected))
+        self.active = True
+        self.retry_at = 0.0
+        self._request_switch(selected)
+
+    def _command_select(self, message: dict[str, Any]) -> None:
+        self._refresh(force=True)
+        selected = self._validate_known_id(message["id"])
+        self.config = model.save_config(dict(
+            self.config, selected_id=selected, rotation_enabled=False,
+            active_playlist=None, screen_assignments={},
+        ))
+        self.queue = []
+        self.active = True
+        self.retry_at = 0.0
+        self._request_switch(selected)
+
+    def _prepare_settings_update(self, raw_settings: Any) -> dict[str, Any]:
+        if not isinstance(raw_settings, dict):
+            raise ValueError(tr("As configurações devem ser um objeto."))
+        settings = dict(raw_settings)
+        # Turning rotation off keeps the wallpaper currently on screen
+        # across daemon and desktop session restarts.
+        if (
+            settings.get("rotation_enabled") is False
+            and self.config["rotation_enabled"]
+            and "selected_id" not in settings
+            and self.current_id in self.catalog
+        ):
+            settings["selected_id"] = self.current_id
+        return model.validate_config(dict(self.config, **settings))
+
+    def _requires_eligible_wallpaper(self, changed: set[str]) -> bool:
+        if not self.config["rotation_enabled"] or self.current_id in self._eligible():
+            return False
+        if "rotation_enabled" in changed or "active_playlist" in changed:
+            return True
+        if self.config["active_playlist"] is not None:
+            return "playlists" in changed
+        return bool(changed & {"favorites", "only_favorites"})
+
+    def _update_rotation_deadline(self, changed: set[str]) -> None:
+        if self.terminating or not changed & {"rotation_enabled", "interval_minutes"}:
+            return
+        rotating = any(screen not in self.config["screen_assignments"] for screen in self.outputs)
+        if self.child is not None and self.config["rotation_enabled"] and rotating:
+            interval = self.config["interval_minutes"] * 60
+            self.next_change_mono = time.monotonic() + interval
+            self.next_change_at = time.time() + interval
+            return
+        self.next_change_mono = None
+        self.next_change_at = None
+
+    def _apply_active_setting_changes(self, changed: set[str]) -> None:
+        restart_keys = {
+            "fps", "scaling", "mute", "renderer_path", "screen_assignments",
+            "wallpaper_properties",
+        }
+        selected_changed = "selected_id" in changed and self.config["selected_id"] != self.current_id
+        if changed & restart_keys or selected_changed:
+            selected = self.config["selected_id"] if selected_changed else self.current_id
             self.retry_at = 0.0
             self._request_switch(selected)
-        elif command == "select":
-            self._refresh(force=True)
-            selected = self._validate_known_id(message["id"])
-            self.config = model.save_config(dict(
-                self.config, selected_id=selected, rotation_enabled=False,
-                active_playlist=None, screen_assignments={},
-            ))
-            self.queue = []
-            self.active = True
+        elif self._requires_eligible_wallpaper(changed):
             self.retry_at = 0.0
-            self._request_switch(selected)
-        elif command == "set":
-            raw_settings = message["settings"]
-            if not isinstance(raw_settings, dict):
-                raise ValueError(tr("As configurações devem ser um objeto."))
-            settings = dict(raw_settings)
-            # Turning rotation off keeps the wallpaper currently on screen
-            # across daemon and desktop session restarts.
-            if (
-                settings.get("rotation_enabled") is False
-                and self.config["rotation_enabled"]
-                and "selected_id" not in settings
-                and self.current_id in self.catalog
-            ):
-                settings["selected_id"] = self.current_id
-            updated = model.validate_config(dict(self.config, **settings))
-            self._refresh(force=True)
-            self._validate_known_config(updated)
-            previous = self.config
-            self.config = model.save_config(updated)
-            changed = {key for key in updated if updated[key] != previous[key]}
-            if "language" in changed:
-                set_language(self.config["language"])
-                self.error = None
-                if self.child is None:
-                    self.retry_at = 0.0
-            if changed & {"shuffle", "favorites", "only_favorites", "playlists", "active_playlist"}:
-                self.queue = []
-            if self.active and changed:
-                restart_keys = {
-                    "fps", "scaling", "mute", "renderer_path", "screen_assignments",
-                    "wallpaper_properties",
-                }
-                selected_changed = (
-                    "selected_id" in changed and self.config["selected_id"] != self.current_id
-                )
-                if changed & restart_keys or selected_changed:
-                    selected = self.config["selected_id"] if selected_changed else self.current_id
-                    self.retry_at = 0.0
-                    self._request_switch(selected)
-                elif self.config["rotation_enabled"] and self.current_id not in self._eligible() and (
-                    "rotation_enabled" in changed
-                    or "active_playlist" in changed
-                    or (
-                        self.config["active_playlist"] is not None
-                        and "playlists" in changed
-                    )
-                    or (
-                        self.config["active_playlist"] is None
-                        and changed & {"favorites", "only_favorites"}
-                    )
-                ):
-                    selected = self._next_id()
-                    self.retry_at = 0.0
-                    self._request_switch(selected)
-                if not self.terminating and changed & {"rotation_enabled", "interval_minutes"}:
-                    rotating = any(screen not in self.config["screen_assignments"] for screen in self.outputs)
-                    if self.child is not None and self.config["rotation_enabled"] and rotating:
-                        interval = self.config["interval_minutes"] * 60
-                        self.next_change_mono = time.monotonic() + interval
-                        self.next_change_at = time.time() + interval
-                    else:
-                        self.next_change_mono = None
-                        self.next_change_at = None
-        elif command == "assign":
-            self._refresh(force=True)
-            screen = model.validate_screen(message["screen"])
-            if screen not in self.outputs:
-                raise ValueError(tr("Monitor {screen} não está ativo.", screen=screen))
-            selected = message["id"]
-            assignments = dict(self.config["screen_assignments"])
-            if selected is None:
-                assignments.pop(screen, None)
-            else:
-                assignments[screen] = self._validate_known_id(selected)
-            self.config = model.save_config(dict(self.config, screen_assignments=assignments))
-            if self.active:
-                self.retry_at = 0.0
-                self._request_switch(self.current_id)
-        elif command == "start":
-            self.active = True
-            self.retry_at = 0.0
+            self._request_switch(self._next_id())
+        self._update_rotation_deadline(changed)
+
+    def _command_set(self, message: dict[str, Any]) -> None:
+        updated = self._prepare_settings_update(message["settings"])
+        self._refresh(force=True)
+        self._validate_known_config(updated)
+        previous = self.config
+        self.config = model.save_config(updated)
+        changed = {key for key in updated if updated[key] != previous[key]}
+
+        if "language" in changed:
+            set_language(self.config["language"])
+            self.error = None
             if self.child is None:
-                self.pending_id = (
-                    self._first_id() if self.config["rotation_enabled"]
-                    else self.config["selected_id"] or self.current_id
-                )
-        elif command == "stop":
-            self.active = False
-            self.pending_id = None
-            self.next_change_mono = None
-            self.next_change_at = None
-            if self.child is not None:
-                self._request_switch(None)
-        elif command == "reload":
-            self._refresh(force=True)
-            if self.active:
-                selected = self.current_id if self.current_id in self.catalog else None
                 self.retry_at = 0.0
-                self._request_switch(selected)
+        if changed & {"shuffle", "favorites", "only_favorites", "playlists", "active_playlist"}:
+            self.queue = []
+        if self.active and changed:
+            self._apply_active_setting_changes(changed)
 
+    def _command_assign(self, message: dict[str, Any]) -> None:
+        self._refresh(force=True)
+        screen = model.validate_screen(message["screen"])
+        if screen not in self.outputs:
+            raise ValueError(tr("Monitor {screen} não está ativo.", screen=screen))
+        selected = message["id"]
+        assignments = dict(self.config["screen_assignments"])
+        if selected is None:
+            assignments.pop(screen, None)
+        else:
+            assignments[screen] = self._validate_known_id(selected)
+        self.config = model.save_config(dict(self.config, screen_assignments=assignments))
+        if self.active:
+            self.retry_at = 0.0
+            self._request_switch(self.current_id)
+
+    def _command_start(self, _message: dict[str, Any]) -> None:
+        self.active = True
+        self.retry_at = 0.0
+        if self.child is None:
+            self.pending_id = (
+                self._first_id() if self.config["rotation_enabled"]
+                else self.config["selected_id"] or self.current_id
+            )
+
+    def _command_stop(self, _message: dict[str, Any]) -> None:
+        self.active = False
+        self.pending_id = None
+        self.next_change_mono = None
+        self.next_change_at = None
+        if self.child is not None:
+            self._request_switch(None)
+
+    def _command_shutdown(self, message: dict[str, Any]) -> None:
+        self._command_stop(message)
+        self.alive = False
+
+    def _command_reload(self, _message: dict[str, Any]) -> None:
+        self._refresh(force=True)
+        if self.active:
+            selected = self.current_id if self.current_id in self.catalog else None
+            self.retry_at = 0.0
+            self._request_switch(selected)
+
+    def _dispatch(self, message: dict[str, Any]) -> dict[str, Any]:
+        command = self._validate_request(message)
+        handlers = {
+            "status": self._command_status,
+            "next": self._command_next,
+            "select": self._command_select,
+            "set": self._command_set,
+            "assign": self._command_assign,
+            "start": self._command_start,
+            "stop": self._command_stop,
+            "shutdown": self._command_shutdown,
+            "reload": self._command_reload,
+        }
+        handlers[command](message)
         self._tick()
         return self._status()
 
@@ -590,7 +684,7 @@ class WallpaperDaemon:
         self.sock = self._open_socket()
         signal.signal(signal.SIGTERM, lambda _sig, _frame: setattr(self, "alive", False))
         signal.signal(signal.SIGINT, lambda _sig, _frame: setattr(self, "alive", False))
-        signal.signal(signal.SIGUSR1, lambda _sig, _frame: self._request_switch(self._next_id()))
+        signal.signal(signal.SIGUSR1, lambda _sig, _frame: setattr(self, "skip_requested", True))
         try:
             self._refresh(force=True)
             while self.alive:

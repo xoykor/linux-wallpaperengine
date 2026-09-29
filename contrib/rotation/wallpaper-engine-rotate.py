@@ -14,6 +14,8 @@ import json
 import os
 from pathlib import Path
 import random
+import re
+import shutil
 import signal
 import subprocess
 import time
@@ -45,13 +47,13 @@ signal.signal(signal.SIGUSR1, next_wallpaper)
 
 def save(name, data):
     temp = STATE / (name + ".tmp")
-    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(STATE / name)
 
 
 def load(name, default):
     try:
-        return json.loads((STATE / name).read_text())
+        return json.loads((STATE / name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
 
@@ -69,7 +71,45 @@ def steamapps_roots():
     for root in candidates:
         if root not in roots:
             roots.append(root)
+    for steamapps in tuple(roots):
+        for listing in (
+            steamapps / "libraryfolders.vdf",
+            steamapps.parent / "config/libraryfolders.vdf",
+        ):
+            try:
+                contents = listing.read_text(encoding="utf-8-sig")
+            except (OSError, UnicodeError):
+                continue
+            entries = re.finditer(r'^\s*"path"\s*"((?:\\.|[^"])*)"', contents, re.MULTILINE)
+            legacy_entries = re.finditer(r'^\s*"\d+"\s*"((?:\\.|[^"])*)"', contents, re.MULTILINE)
+            for match in (*entries, *legacy_entries):
+                try:
+                    library_path = Path(json.loads(f'"{match.group(1)}"')).expanduser()
+                except (ValueError, OSError):
+                    continue
+                if not library_path.is_absolute():
+                    continue
+                library = library_path if library_path.name == "steamapps" else library_path / "steamapps"
+                if library not in roots:
+                    roots.append(library)
     return roots
+
+
+def renderer_path():
+    candidates = (
+        os.environ.get("LINUX_WALLPAPERENGINE_RENDERER_PATH"),
+        shutil.which("linux-wallpaperengine"),
+        str(Path.home() / ".local/bin/linux-wallpaperengine"),
+        str(Path.home() / ".local/opt/linux-wallpaperengine/linux-wallpaperengine"),
+        "/usr/local/bin/linux-wallpaperengine",
+        "/usr/bin/linux-wallpaperengine",
+    )
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    raise FileNotFoundError(
+        "Could not find linux-wallpaperengine; set LINUX_WALLPAPERENGINE_RENDERER_PATH or add it to PATH."
+    )
 
 
 def installations():
@@ -112,10 +152,13 @@ def outputs():
         data = json.loads(result.stdout)
     except (OSError, subprocess.SubprocessError, ValueError):
         return []
+    if not isinstance(data, dict):
+        return []
     return [
         output["name"]
         for output in data.get("outputs", [])
-        if output.get("enabled") and output.get("connected") and output.get("name")
+        if isinstance(output, dict) and output.get("enabled") and output.get("connected")
+        and isinstance(output.get("name"), str)
     ]
 
 
@@ -167,7 +210,7 @@ try:
         selected_data = items[selected]
         save("queue.json", queue)
         cmd = [
-            "/usr/bin/linux-wallpaperengine",
+            renderer_path(),
             "--silent",
             # Avoid waiting for PulseAudio when PULSE_SERVER is disabled below.
             "--noautomute",

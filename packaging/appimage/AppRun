@@ -3,7 +3,7 @@ set -euo pipefail
 
 APPDIR="${APPDIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
 ENGINE_DIR="${APPDIR}/usr/lib/linux-wallpaperengine"
-ENGINE_LIBRARY_PATH="${ENGINE_DIR}:${ENGINE_DIR}/lib:${ENGINE_DIR}/lib64"
+ENGINE_LIBRARY_PATH="${APPDIR}/usr/lib:${ENGINE_DIR}:${ENGINE_DIR}/lib:${ENGINE_DIR}/lib64"
 
 for candidate in "${ENGINE_DIR}"/lib/* "${ENGINE_DIR}"/lib64/*; do
     [[ -d "${candidate}" ]] && ENGINE_LIBRARY_PATH+=":${candidate}"
@@ -11,7 +11,7 @@ done
 
 export PATH="${ENGINE_DIR}:${PATH}"
 export PYTHONPATH="${APPDIR}/usr/lib${PYTHONPATH:+:${PYTHONPATH}}"
-export LD_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LINUX_WALLPAPERENGINE_LIBRARY_PATH="${ENGINE_LIBRARY_PATH}"
 export PYTHONDONTWRITEBYTECODE=1
 export LINUX_WALLPAPERENGINE_APPIMAGE=1
 export LINUX_WALLPAPERENGINE_APPIMAGE_VERSION="@APPIMAGE_VERSION@"
@@ -22,6 +22,11 @@ export LINUX_WALLPAPERENGINE_RENDERER_PATH="${ENGINE_DIR}/linux-wallpaperengine"
 # the large preview gallery. Cairo keeps the frontend stable; honor an explicit
 # user override when one is already set.
 export GSK_RENDERER="${GSK_RENDERER:-cairo}"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    printf 'Usage: %s [--help]\nLaunch the Linux Wallpaper Engine desktop application.\n' "$(basename -- "$0")"
+    exit 0
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
     printf 'Linux Wallpaper Engine requires Python 3 and GTK 4 introspection (PyGObject).\n' >&2
@@ -59,23 +64,66 @@ socket_ready() {
         >/dev/null 2>&1
 }
 
-# Reuse an existing user daemon, otherwise keep one alive for this GUI session.
-if ! socket_ready; then
-    python3 -m wallpaper_engine_app --daemon >/dev/null 2>&1 &
-    DAEMON_PID=$!
-    cleanup_daemon() {
-        if kill -0 "${DAEMON_PID}" 2>/dev/null; then
-            kill -TERM "${DAEMON_PID}" 2>/dev/null || true
-        fi
-        wait "${DAEMON_PID}" 2>/dev/null || true
-    }
-    trap cleanup_daemon EXIT
+wait_for_daemon() {
+    python3 - <<'PY'
+import json
+import socket
+import sys
+import time
 
-    for _ in {1..100}; do
-        kill -0 "${DAEMON_PID}" 2>/dev/null || break
-        socket_ready && break
-        sleep 0.1
-    done
+from wallpaper_engine_app.model import SOCKET_FILE
+
+deadline = time.monotonic() + 45
+while time.monotonic() < deadline:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1.0)
+            client.connect(str(SOCKET_FILE))
+            client.sendall(b'{"command":"status"}\n')
+            with client.makefile("rb") as reader:
+                response = json.loads(reader.readline(1024 * 1024 + 1))
+        if response.get("ok") is True and isinstance(response.get("status"), dict):
+            sys.exit(0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    time.sleep(0.1)
+sys.exit(1)
+PY
+}
+
+# Reuse an existing user daemon. A new daemon must own a separate AppImage
+# runtime: this window's runtime unmounts its AppDir when the GUI exits.
+if ! socket_ready; then
+    python3 - <<'PY'
+import os
+import subprocess
+import sys
+
+image = os.environ.get("APPIMAGE")
+if image and os.path.isfile(image) and os.access(image, os.X_OK):
+    command = [image, "--daemon"]
+    environment = os.environ.copy()
+    # The second runtime must select its own mount, not inherit this GUI's.
+    for name in ("APPDIR", "PYTHONPATH", "LINUX_WALLPAPERENGINE_LIBRARY_PATH",
+                 "LINUX_WALLPAPERENGINE_RENDERER_PATH"):
+        environment.pop(name, None)
+else:
+    # Support launching an unpacked AppDir during development.
+    command = [sys.executable, "-m", "wallpaper_engine_app", "--daemon"]
+    environment = os.environ.copy()
+
+subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                 start_new_session=True, close_fds=True)
+PY
+
+    if ! wait_for_daemon; then
+        printf 'The Wallpaper Engine daemon could not start.\n' >&2
+        exit 1
+    fi
+elif ! wait_for_daemon; then
+    printf 'The Wallpaper Engine daemon did not become ready.\n' >&2
+    exit 1
 fi
 
-python3 -m wallpaper_engine_app
+exec python3 -m wallpaper_engine_app
