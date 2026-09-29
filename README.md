@@ -63,13 +63,34 @@ its library. It does not download Workshop content itself or replace Steam.
 
 ## Install
 
-Install or build the `linux-wallpaperengine` renderer first. The desktop app
-looks for it in `PATH` or `~/.local/bin`. Follow the upstream instructions for
-renderer dependencies and Steam asset discovery.
+Choose the prebuilt AppImage or build the renderer and desktop app from source.
 
-### Build the renderer from this checkout
+### AppImage release (x86_64)
 
-Clone with submodules, configure, and build:
+Download the latest `.AppImage` and matching `.sha256` file from the
+[Releases page](https://github.com/xoykor/linux-wallpaperengine/releases/latest).
+Save both into the same directory, with only the version you are installing
+there. Verify the download, make it executable, and launch it:
+
+```bash
+sha256sum --check linux-wallpaperengine-desktop-v*-x86_64.AppImage.sha256
+chmod +x linux-wallpaperengine-desktop-v*-x86_64.AppImage
+./linux-wallpaperengine-desktop-v*-x86_64.AppImage
+```
+
+The AppImage bundles the GTK frontend, renderer, and CEF runtime. The host still
+needs Python 3, PyGObject, GTK 4/GdkPixbuf introspection, GTK 3/NSS, OpenGL
+drivers, and shared libraries used by the renderer. See the
+[AppImage runtime notes](packaging/appimage/README.md) for details. Steam and
+the wallpapers downloaded through Steam are not included.
+
+### Build from source
+
+The desktop app uses a `linux-wallpaperengine` renderer installed in `PATH` or
+`~/.local/bin`. Follow the
+[upstream instructions](https://github.com/Almamu/linux-wallpaperengine#readme)
+for renderer dependencies and Steam asset discovery. To build the renderer
+from this checkout, clone with submodules, configure, and build:
 
 ```bash
 git clone --recurse-submodules https://github.com/xoykor/linux-wallpaperengine.git
@@ -89,8 +110,8 @@ ln -s "$HOME/.local/opt/linux-wallpaperengine/linux-wallpaperengine" \
 ```
 
 The CMake configure step downloads the matching Chromium Embedded Framework
-distribution. It needs network access. If a package manager already installed
-the renderer, skip the build and install steps.
+distribution and needs network access. If a package manager already installed
+the renderer, skip the renderer build and install steps.
 
 ### Install the desktop app
 
