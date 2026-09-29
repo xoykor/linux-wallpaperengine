@@ -776,6 +776,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         gallery_scroll = Gtk.ScrolledWindow()
         gallery_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._gallery_scroll = gallery_scroll
         gallery_scroll.get_vadjustment().connect(
             "value-changed", self._gallery_scrolled
         )
@@ -805,7 +806,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         )
         wheel_scroll.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         wheel_scroll.connect("scroll", self._gallery_wheel_scrolled)
-        self.gallery.add_controller(wheel_scroll)
+        gallery_scroll.add_controller(wheel_scroll)
         gallery_click = Gtk.GestureClick()
         gallery_click.set_button(1)
         gallery_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
@@ -912,7 +913,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         if get_unit is None or get_unit() != Gdk.ScrollUnit.WHEEL or dy == 0:
             return False
 
-        adjustment = self.gallery.get_vadjustment()
+        adjustment = self._gallery_scroll.get_vadjustment()
         current = adjustment.get_value()
         upper = adjustment.get_upper() - adjustment.get_page_size()
         lower = adjustment.get_lower()
@@ -926,7 +927,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._gallery_wheel_target = target
         if not active:
             self._gallery_wheel_last_frame_time = 0.0
-            self._gallery_wheel_tick_id = self.gallery.add_tick_callback(
+            self._gallery_wheel_tick_id = self._gallery_scroll.add_tick_callback(
                 self._animate_gallery_wheel
             )
         return True
@@ -934,7 +935,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
     def _animate_gallery_wheel(
         self, _widget: Gtk.Widget, frame_clock: Gdk.FrameClock, _data: object
     ) -> bool:
-        adjustment = self.gallery.get_vadjustment()
+        adjustment = self._gallery_scroll.get_vadjustment()
         current = adjustment.get_value()
         target = self._gallery_wheel_target
         frame_time = frame_clock.get_frame_time() / 1_000_000.0
