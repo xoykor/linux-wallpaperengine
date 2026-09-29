@@ -62,6 +62,9 @@ PYTHON_BIN="$(command -v python3 || true)"
 [[ -n "${PYTHON_BIN}" ]] || die 'Python 3 is required.'
 "${PYTHON_BIN}" -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("GdkPixbuf", "2.0"); from gi.repository import Gtk, GdkPixbuf' 2>/dev/null || \
     die 'Python gi with GTK 4/GdkPixbuf introspection is required (Debian/Ubuntu: python3-gi + gir1.2-gtk-4.0; Fedora: python3-gobject + gtk4).'
+if ! "${PYTHON_BIN}" -c 'import gi; gi.require_version("Gtk", "3.0"); gi.require_version("AyatanaAppIndicator3", "0.1"); from gi.repository import Gtk, AyatanaAppIndicator3' 2>/dev/null; then
+    printf 'Warning: minimize-to-tray needs GTK 3 and Ayatana AppIndicator Python introspection; the rest of the app works without it.\n' >&2
+fi
 
 # Display discovery is session-specific. XRandR cannot discover native Wayland
 # outputs, so it must never satisfy the KDE Wayland requirement by itself.
@@ -176,6 +179,7 @@ cat > "${STAGING}/app_bin" <<EOF
 set -euo pipefail
 export PYTHONPATH="\${HOME}/.local/lib/linux-wallpaperengine-app\${PYTHONPATH:+:\${PYTHONPATH}}"
 export PATH="\${HOME}/.local/bin:\${PATH}"
+export LINUX_WALLPAPERENGINE_ICON_FILE="\${HOME}/.local/share/icons/hicolor/scalable/apps/linux-wallpaperengine-app.svg"
 export PYTHONDONTWRITEBYTECODE=1
 exec ${PYTHON_QUOTED} -m wallpaper_engine_app "\$@"
 EOF

@@ -267,7 +267,15 @@ button.nav-item-active:hover {
 .library-tools { padding: 10px; }
 .library-tools searchentry { min-height: 38px; }
 .library-page { padding: 0; }
-flowboxchild.wallpaper-card {
+gridview.wallpaper-gallery > child {
+  margin: 5px;
+  padding: 0;
+  background: transparent;
+}
+gridview.wallpaper-gallery > child:selected {
+  background: transparent;
+}
+.wallpaper-card {
   min-width: 240px;
   min-height: 0;
   padding: 0;
@@ -276,13 +284,12 @@ flowboxchild.wallpaper-card {
   background: rgba(35,29,27,0.48);
   box-shadow: 0 5px 18px rgba(0,0,0,0.22);
 }
-flowboxchild.wallpaper-card:hover {
+.wallpaper-card:hover {
   border-color: rgba(255,255,255,0.18);
   background: #191310;
 }
-flowboxchild.wallpaper-card:selected,
-flowboxchild.wallpaper-card-selected,
-flowboxchild.wallpaper-card-selected:hover {
+.wallpaper-card.wallpaper-card-selected,
+.wallpaper-card.wallpaper-card-selected:hover {
   border: 2px solid #ff8e31;
   background: #191310;
   box-shadow: 0 0 0 1px rgba(255,173,31,0.28), 0 7px 24px rgba(255,100,31,0.2);
@@ -464,14 +471,13 @@ window.glass-window .playlist-entry {
   background: rgba(30,25,37,0.92);
   border-color: rgba(225,211,255,0.12);
 }
-window.glass-window flowboxchild.wallpaper-card {
+window.glass-window .wallpaper-card {
   min-width: 240px;
   background: rgba(20,17,24,0.97);
   border-color: rgba(225,211,255,0.12);
 }
-window.glass-window flowboxchild.wallpaper-card:hover,
-window.glass-window flowboxchild.wallpaper-card:selected,
-window.glass-window flowboxchild.wallpaper-card-selected {
+window.glass-window .wallpaper-card:hover,
+window.glass-window .wallpaper-card.wallpaper-card-selected {
   background: rgba(26,21,31,0.98);
 }
 window.glass-window headerbar.topbar {
