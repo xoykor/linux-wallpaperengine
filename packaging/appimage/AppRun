@@ -18,10 +18,9 @@ export LINUX_WALLPAPERENGINE_APPIMAGE_VERSION="@APPIMAGE_VERSION@"
 export LINUX_WALLPAPERENGINE_APPIMAGE_PATH="${APPIMAGE:-}"
 export LINUX_WALLPAPERENGINE_ICON_FILE="${APPDIR}/usr/share/icons/hicolor/scalable/apps/linux-wallpaperengine-app.svg"
 export LINUX_WALLPAPERENGINE_RENDERER_PATH="${ENGINE_DIR}/linux-wallpaperengine"
-# Some Mesa/KWin combinations crash GTK's GL scene renderer while repainting
-# the large preview gallery. Cairo keeps the frontend stable; honor an explicit
-# user override when one is already set.
-export GSK_RENDERER="${GSK_RENDERER:-cairo}"
+# Render the large preview gallery on the GPU. GTK can fall back if Vulkan is
+# unavailable; honor an explicit override for systems that need another backend.
+export GSK_RENDERER="${GSK_RENDERER:-vulkan}"
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     printf 'Usage: %s [--help]\nLaunch the Linux Wallpaper Engine desktop application.\n' "$(basename -- "$0")"

@@ -8,6 +8,8 @@ The AppImage includes the project binaries, Python frontend, and shared librarie
 
 The bundled renderer takes precedence over paths saved by an earlier system installation. On KDE X11/XWayland, the window requests native compositor backdrop blur; other compositors retain the tinted dark surface without the compositor blur effect.
 
+The frontend requests GTK's Vulkan renderer so the preview gallery uses the GPU. Set `GSK_RENDERER=cairo` when launching the AppImage if the host graphics driver needs software rendering.
+
 ## Build
 
 Configure and build the CMake target first, then install `appimagetool` 1.9.1 and `linuxdeploy`, or pass their executable paths:

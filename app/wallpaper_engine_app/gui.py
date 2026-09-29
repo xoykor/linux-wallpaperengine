@@ -804,13 +804,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         # Keep click-to-apply separate from the view's built-in multi-selection.
         self.gallery.set_single_click_activate(False)
         self.gallery.connect("activate", self._card_activated)
-        wheel_scroll = Gtk.EventControllerScroll.new(
-            Gtk.EventControllerScrollFlags.VERTICAL
-        )
-        # Catch detents after card targets, before the scrolled window handles them.
-        wheel_scroll.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
-        wheel_scroll.connect("scroll", self._gallery_wheel_scrolled)
-        self.gallery.add_controller(wheel_scroll)
         gallery_click = Gtk.GestureClick()
         gallery_click.set_button(1)
         gallery_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
@@ -822,6 +815,13 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.gallery_state.set_hhomogeneous(False)
         self.gallery_state.set_vhomogeneous(False)
         self.gallery_state.add_named(gallery_scroll, "gallery")
+        wheel_scroll = Gtk.EventControllerScroll.new(
+            Gtk.EventControllerScrollFlags.VERTICAL
+        )
+        # Observe every gallery scroll before the grid and scroller handle it.
+        wheel_scroll.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        wheel_scroll.connect("scroll", self._gallery_wheel_scrolled)
+        self.gallery_state.add_controller(wheel_scroll)
         empty = _box(vertical=True, spacing=12)
         empty.add_css_class("gallery-empty")
         empty.set_halign(Gtk.Align.CENTER)
@@ -909,20 +909,9 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         return item.get_string() if isinstance(item, Gtk.StringObject) else None
 
     def _gallery_wheel_scrolled(
-        self, controller: Gtk.EventControllerScroll, _dx: float, dy: float
+        self, _controller: Gtk.EventControllerScroll, _dx: float, dy: float
     ) -> bool:
-        # Ease mouse-wheel detents, while leaving touchpad scrolling to GTK.
-        get_unit = getattr(controller, "get_unit", None)
-        unit = get_unit() if get_unit is not None else None
-        get_device = getattr(controller, "get_current_event_device", None)
-        device = get_device() if get_device is not None else None
-        is_mouse = (
-            device is not None and device.get_source() == Gdk.InputSource.MOUSE
-        )
-        # Some high-resolution mouse wheels report continuous surface deltas.
-        if unit != Gdk.ScrollUnit.WHEEL and not is_mouse:
-            self._cancel_gallery_wheel_animation()
-            return False
+        # Ease native scrolling for both wheel detents and continuous deltas.
         if dy == 0:
             return False
 
