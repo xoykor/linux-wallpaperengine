@@ -25,8 +25,8 @@ from .tray import TrayBridge
 
 
 SERVICE = "linux-wallpaperengine-app.service"
-CARD_WIDTH = 196
-# Workshop preview files are commonly square; a 16:9 frame letterboxes them.
+# Keep the v0.0.15 card dimensions and square preview tile.
+CARD_WIDTH = 240
 CARD_PREVIEW_HEIGHT = CARD_WIDTH
 CARD_HEIGHT = CARD_PREVIEW_HEIGHT + 56
 FILTERS = ("Todos", "Cenas", "Vídeos", "Favoritos")

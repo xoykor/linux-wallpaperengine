@@ -225,8 +225,24 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     try {
 	// find the property inside, otherwise return undefined
 	auto& property = container->object.getProperty (name);
-	JSValue result = std::strcmp (name, "angles") == 0 ? container->adapter.getEngine ().anglesToJs (property)
-							   : container->adapter.getEngine ().dynamicToJs (property);
+	const auto& adapters = container->adapter.getEngine ().getAdapters ();
+	JSValue result = JS_UNDEFINED;
+	switch (property.getType ()) {
+	    case DynamicValue::Vec2:
+		result = adapters.vec2->instantiate (property, true);
+		break;
+	    case DynamicValue::Vec3:
+		result = std::strcmp (name, "angles") == 0 ? adapters.vec3->instantiateAngles (property, true)
+								     : adapters.vec3->instantiate (property, true);
+		break;
+	    case DynamicValue::Vec4:
+		result = adapters.vec4->instantiate (property, true);
+		break;
+	    default:
+		result = std::strcmp (name, "angles") == 0 ? container->adapter.getEngine ().anglesToJs (property)
+								   : container->adapter.getEngine ().dynamicToJs (property);
+		break;
+	}
 	return result;
     } catch (const std::exception& e) {
 	return JS_UNDEFINED;

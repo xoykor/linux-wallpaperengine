@@ -65,6 +65,8 @@ private:
     void addObjectToRenderOrder (const Object& object);
     void updateActiveCamera ();
 
+    float m_startTime = 0.0f;
+    bool m_hasStarted = false;
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
     std::unique_ptr<Camera> m_camera;
     ObjectUniquePtr m_bloomObjectData;

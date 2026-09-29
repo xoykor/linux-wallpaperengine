@@ -115,6 +115,7 @@ CScene::CScene (
     const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode, const glm::vec2& uvOffset,
     const PostProcessSettings& postProcess
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode, uvOffset, postProcess) {
+    this->m_startTime = g_Time;
     // caller should check this, if not a std::bad_cast is good to throw
     auto scene = wallpaper.as<Scene> ();
 
@@ -462,6 +463,11 @@ ScriptEngine& CScene::getScriptEngine () const { return *this->m_scriptEngine; }
 Camera& CScene::getCamera () const { return *this->m_camera; }
 
 void CScene::renderFrame (const glm::ivec4& viewport) {
+    if (!this->m_hasStarted) {
+	this->m_startTime = g_Time;
+	this->m_hasStarted = true;
+    }
+
     // ensure the virtual mouse position is up to date
     this->updateMouse (viewport);
 
@@ -779,7 +785,7 @@ int CScene::getWidth () const { return this->m_camera->getWidth (); }
 
 int CScene::getHeight () const { return this->m_camera->getHeight (); }
 
-float CScene::getTime () const { return g_Time; }
+float CScene::getTime () const { return g_Time - this->m_startTime; }
 
 float CScene::getDeltaTime () const { return g_Time - g_TimeLast; }
 

@@ -329,7 +329,9 @@ void CModel::updateSkinning () {
 	return;
     }
 
-    m_puppetModel->evaluateSkinning (m_activeAnimationLayers, static_cast<double> (g_Time), m_skinMatrices);
+    m_puppetModel->evaluateSkinning (
+	m_activeAnimationLayers, static_cast<double> (this->getScene ().getTime ()), m_skinMatrices
+    );
     for (auto& submesh : m_submeshes) {
 	if (!submesh.skinned || submesh.bindVertices.empty ()) {
 	    continue;
@@ -526,7 +528,7 @@ glm::vec3 CModel::effectiveAngles () const {
 	return authored;
     }
 
-    const float frame = std::fmod (g_Time * PropertyAnimation::FPS, animation->maxFrame);
+    const float frame = std::fmod (this->getScene ().getTime () * PropertyAnimation::FPS, animation->maxFrame);
     return {
 	evalChannel (animation->channels[0], frame, authored.x),
 	evalChannel (animation->channels[1], frame, authored.y),

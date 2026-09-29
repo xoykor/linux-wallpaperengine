@@ -80,7 +80,7 @@ window {
 .wallpaper-card {
   padding: 0;
   border-radius: 14px;
-  min-width: 196px;
+  min-width: 244px;
   min-height: 192px;
   border: 1px solid rgba(255,255,255,0.075);
   background: #15110f;

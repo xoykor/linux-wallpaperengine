@@ -866,7 +866,7 @@ bool findSkinnedMesh (const std::vector<char>& data, MeshBlock& mesh) {
     if (scanMeshRange (data, materialsEnd, materialsEnd + 128, skeletonStart, mesh)) {
 	return true;
     }
-    return scanMeshRange (data, 9, skeletonStart, mesh);
+    return scanMeshRange (data, 9, skeletonStart, skeletonStart, mesh);
 }
 
 bool decodeSkinnedMesh (
@@ -994,6 +994,8 @@ void PuppetModel::evaluateWorldPose (
 	if (hasPose[b]) {
 	    const auto& key = accumulated[b];
 	    local = glm::translate (glm::mat4 (1.0f), key.position);
+	    // Keep rotations in the model's authored coordinate space; CImage reflects
+	    // final puppet vertices when it uploads them into scene space.
 	    local = glm::rotate (local, key.rotation.z, glm::vec3 (0, 0, 1));
 	    local = glm::rotate (local, key.rotation.y, glm::vec3 (0, 1, 0));
 	    local = glm::rotate (local, key.rotation.x, glm::vec3 (1, 0, 0));

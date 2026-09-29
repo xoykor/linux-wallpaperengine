@@ -12,6 +12,8 @@
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <glm/vec3.hpp>
+#include <map>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -86,9 +88,12 @@ protected:
     [[nodiscard]] static ResolvedTransform localTransform (const WallpaperEngine::Data::Model::Object& object);
 
 private:
-    bool loadPuppetMesh (const glm::vec2& size);
+    bool loadPuppetMesh (glm::vec2& size);
+    [[nodiscard]] glm::vec2 computePuppetCanvasSize (const glm::vec2& size) const;
     void updatePuppetPositionBuffer (const glm::vec2& size);
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
+    bool setupPuppetOpacityPass (Effects::CPass* pass);
+    void setupPuppetMaskPass (Effects::CPass* effectPass, int textureIndex);
     void uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::vec2& size);
     void updatePuppetAnimation ();
     void updateAlphaAnimation ();
@@ -131,6 +136,20 @@ private:
     std::vector<glm::mat4> m_puppetSkinMatrices = {};
     std::vector<glm::vec3> m_puppetSkinnedPositions = {};
     std::vector<GLfloat> m_puppetSkinnedFlat = {};
+    struct PuppetMaskPass {
+	std::shared_ptr<const TextureProvider> source;
+	std::shared_ptr<CFBO> target;
+	std::unique_ptr<Effects::CPass> pass;
+    };
+    struct PuppetOpacityPass {
+	std::shared_ptr<const TextureProvider> mask;
+	std::unique_ptr<Effects::CPass> pass;
+    };
+    std::map<const TextureProvider*, size_t> m_puppetMaskPassBySource = {};
+    std::vector<PuppetMaskPass> m_puppetMaskPasses = {};
+    std::vector<PuppetOpacityPass> m_puppetOpacityPasses = {};
+    std::shared_ptr<const TextureProvider> m_prePuppetTexture = nullptr;
+    glm::vec4 m_whiteMaskColor = glm::vec4 (1.0f);
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};
@@ -157,6 +176,7 @@ private:
     glm::vec3 m_sceneCenter = {};
     glm::vec2 m_size = {};
     float m_animatedAlpha = 1.0f;
+    mutable float m_normalizedAlpha = 1.0f;
 
     bool m_initialized = false;
 
@@ -165,6 +185,7 @@ private:
 	    MaterialUniquePtr material;
 	    ImageEffectPassOverrideUniquePtr override;
 	} colorBlending;
+	MaterialUniquePtr puppetMaskMaterial;
 	std::vector<MaterialUniquePtr> compatibilityMaterials = {};
 	std::vector<ImageEffectPassOverrideUniquePtr> compatibilityOverrides = {};
     } m_materials;

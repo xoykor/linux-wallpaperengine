@@ -9,9 +9,25 @@ using namespace WallpaperEngine::Scripting;
 JSValue get_cursor_world_position (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     JSClassID classId;
     auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
+    const auto& scene = input->getScene ();
+    const auto& camera = scene.getCamera ();
+    JSValue result = scene.getScriptEngine ().getAdapters ().vec3->instantiate ();
 
-    // TODO: PROPERLY IMPLEMENT THIS
-    return input->getScene ().getScriptEngine ().getAdapters ().vec3->instantiate ();
+    if (!camera.isOrthogonal ()) {
+	return result;
+    }
+
+    // CScene stores the cursor in visible wallpaper UVs, including any crop.
+    // Convert the output's texture orientation to the scene's top-left coordinates.
+    const auto* position = scene.getMousePosition ();
+    const double x = position->x * camera.getWidth ();
+    const bool flipY = scene.getContext ().getOutput ().renderVFlip ();
+    const double y = (flipY ? 1.0 - position->y : position->y) * camera.getHeight ();
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, x));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, y));
+    JS_SetPropertyStr (ctx, result, "z", JS_NewFloat64 (ctx, 0.0));
+
+    return result;
 }
 
 JSValue get_cursor_screen_position (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
