@@ -123,9 +123,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._gallery_click_on_button = False
         self._gallery_scroll_timer = 0
         self._gallery_is_scrolling = False
-        self._gallery_wheel_tick_id = 0
-        self._gallery_wheel_target = 0.0
-        self._gallery_wheel_last_frame_time = 0.0
         self._selection_rebuilding = False
         self._toast_timer = 0
         self.filter_index = 0
@@ -776,7 +773,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
         gallery_scroll = Gtk.ScrolledWindow()
         gallery_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self._gallery_scroll = gallery_scroll
         gallery_scroll.get_vadjustment().connect(
             "value-changed", self._gallery_scrolled
         )
@@ -801,12 +797,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         # Keep click-to-apply separate from the view's built-in multi-selection.
         self.gallery.set_single_click_activate(False)
         self.gallery.connect("activate", self._card_activated)
-        wheel_scroll = Gtk.EventControllerScroll.new(
-            Gtk.EventControllerScrollFlags.VERTICAL
-        )
-        wheel_scroll.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        wheel_scroll.connect("scroll", self._gallery_wheel_scrolled)
-        gallery_scroll.add_controller(wheel_scroll)
+        # Leave wheel input to GTK's native scrolled-window handler.
         gallery_click = Gtk.GestureClick()
         gallery_click.set_button(1)
         gallery_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
@@ -903,59 +894,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
     def _gallery_item_id_at(self, position: int) -> str | None:
         item = self._gallery_filtered_model.get_item(position)
         return item.get_string() if isinstance(item, Gtk.StringObject) else None
-
-    def _gallery_wheel_scrolled(
-        self, controller: Gtk.EventControllerScroll, _dx: float, dy: float
-    ) -> bool:
-        # GTK already handles high-resolution surface scrolling smoothly. Ease
-        # only discrete wheel detents, keeping the same distance as GTK itself.
-        get_unit = getattr(controller, "get_unit", None)
-        if get_unit is None or get_unit() != Gdk.ScrollUnit.WHEEL or dy == 0:
-            return False
-
-        adjustment = self._gallery_scroll.get_vadjustment()
-        current = adjustment.get_value()
-        upper = adjustment.get_upper() - adjustment.get_page_size()
-        lower = adjustment.get_lower()
-        active = bool(self._gallery_wheel_tick_id)
-        target = self._gallery_wheel_target if active else current
-        step = math.pow(max(1.0, adjustment.get_page_size()), 2.0 / 3.0)
-        target = min(upper, max(lower, target + dy * step))
-        if target == (self._gallery_wheel_target if active else current):
-            return active
-
-        self._gallery_wheel_target = target
-        if not active:
-            self._gallery_wheel_last_frame_time = 0.0
-            self._gallery_wheel_tick_id = self._gallery_scroll.add_tick_callback(
-                self._animate_gallery_wheel
-            )
-        return True
-
-    def _animate_gallery_wheel(
-        self, _widget: Gtk.Widget, frame_clock: Gdk.FrameClock, _data: object
-    ) -> bool:
-        adjustment = self._gallery_scroll.get_vadjustment()
-        current = adjustment.get_value()
-        target = self._gallery_wheel_target
-        frame_time = frame_clock.get_frame_time() / 1_000_000.0
-        if self._gallery_wheel_last_frame_time:
-            elapsed = min(0.05, max(0.0, frame_time - self._gallery_wheel_last_frame_time))
-        else:
-            elapsed = 1.0 / 60.0
-        self._gallery_wheel_last_frame_time = frame_time
-
-        remaining = target - current
-        if abs(remaining) < 0.5:
-            adjustment.set_value(target)
-            self._gallery_wheel_tick_id = 0
-            self._gallery_wheel_last_frame_time = 0.0
-            return False
-
-        # Exponential easing follows the monitor's frame clock without adding
-        # a fixed 60 FPS cap or delaying continuous touchpad scrolling.
-        adjustment.set_value(current + remaining * (1.0 - math.exp(-elapsed / 0.04)))
-        return True
 
     def _gallery_scrolled(self, _adjustment: Gtk.Adjustment) -> None:
         if not self._gallery_is_scrolling:
