@@ -220,14 +220,13 @@ def preview(
             "last_frame": None,
             "loading": False,
             "hovering": False,
-            "scrolling": False,
             "released": False,
         }
 
         def start_animation(
             animation: GdkPixbuf.PixbufAnimation, *, reset: bool = True
         ) -> None:
-            if not state["hovering"] or state["scrolling"]:
+            if not state["hovering"]:
                 return
             ticker = state.get("ticker")
             if isinstance(ticker, int) and ticker:
@@ -255,7 +254,7 @@ def preview(
 
             def advance_frame() -> bool:
                 state["ticker"] = 0
-                if not state["hovering"] or state["scrolling"]:
+                if not state["hovering"]:
                     return False
                 current = state["iterator"]
                 target = state["animated_picture"]
@@ -306,8 +305,7 @@ def preview(
         def begin_animation_load() -> bool:
             state["hover_timer"] = 0
             if (
-                not state["hovering"] or state["scrolling"]
-                or state["released"] or state["loading"]
+                not state["hovering"] or state["released"] or state["loading"]
             ):
                 return False
             if not _gif_decode_lock.acquire(blocking=False):
@@ -327,30 +325,12 @@ def preview(
 
         def schedule_animation_load() -> None:
             if (
-                state["hovering"] and not state["scrolling"]
-                and not state["loading"] and not state["hover_timer"]
+                state["hovering"] and not state["loading"]
+                and not state["hover_timer"]
             ):
                 state["hover_timer"] = GLib.timeout_add(
                     _GIF_HOVER_DELAY_MS, begin_animation_load
                 )
-
-        def set_scrolling(scrolling: bool) -> None:
-            if state["scrolling"] == scrolling:
-                return
-            state["scrolling"] = scrolling
-            if scrolling:
-                ticker = state.get("ticker")
-                if isinstance(ticker, int) and ticker:
-                    GLib.source_remove(ticker)
-                state["ticker"] = 0
-                if stack.get_child_by_name("preview") is not None:
-                    stack.set_visible_child_name("preview")
-                return
-            animation = state["animation"]
-            if isinstance(animation, GdkPixbuf.PixbufAnimation):
-                start_animation(animation, reset=False)
-            else:
-                schedule_animation_load()
 
         def enter(_controller: Gtk.EventControllerMotion, _x: float, _y: float) -> None:
             state["hovering"] = True
@@ -358,8 +338,8 @@ def preview(
             if isinstance(animation, GdkPixbuf.PixbufAnimation):
                 start_animation(animation)
                 return
-            # Ignore brief pointer crossings during fast scrolling; load only
-            # when the pointer settles over this preview.
+            # Ignore brief pointer crossings while scrolling; load only when
+            # the pointer stays over this preview for the hover delay.
             schedule_animation_load()
 
         def leave(_controller: Gtk.EventControllerMotion) -> None:
@@ -387,7 +367,6 @@ def preview(
         stack._preview_controller = controller
         stack._preview_hover_target = target
         stack._preview_animation_state = state
-        stack._preview_set_scrolling = set_scrolling
 
     # Attach hover handling before cache/pending early returns, so duplicate
     # requests for the same preview behave exactly like the first one.
@@ -447,7 +426,6 @@ def release(stack: Gtk.Stack) -> None:
         state["hover_timer"] = 0
         state["iterator"] = None
         state["animation"] = None
-    stack._preview_set_scrolling = None
 
     controller = getattr(stack, "_preview_controller", None)
     target = getattr(stack, "_preview_hover_target", None)
