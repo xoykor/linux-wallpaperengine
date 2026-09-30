@@ -176,6 +176,10 @@ private:
     GLint g_Texture0 = GL_NONE;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
+    GLint u_FitBlurEnabled = GL_NONE;
+    GLint u_FitUVBounds = GL_NONE;
+    GLint u_FillUVBounds = GL_NONE;
+    GLint u_FitBlurStep = GL_NONE;
     /** The framebuffer to draw the background to */
     GLuint m_destFramebuffer = GL_NONE;
     /** Setups OpenGL's shaders for this wallpaper backbuffer */
@@ -186,6 +190,8 @@ private:
     AudioContext& m_audioContext;
     /** Current Wallpaper state */
     WallpaperState m_state;
+    /** Fill mapping used behind fit-scaled output. */
+    WallpaperState m_fillState;
     PostProcessSettings m_postProcess;
     /** Span info for multi-monitor spanning (optional) */
     std::optional<SpanInfo> m_spanInfo = std::nullopt;
