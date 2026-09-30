@@ -59,6 +59,12 @@ card. The gallery spacing is intentionally tight so maximized windows show more
 wallpapers per row. Visual behavior still depends on GTK's FlowBox allocation
 and should be checked on the target desktop.
 
+Gallery scrolling uses GTK's native scroll path instead of a second wheel
+animation that competes with the scroller's adjustment. The AppImage defaults
+GTK's scene-graph renderer to Vulkan while honoring an explicit
+`GSK_RENDERER` override. A hovered GIF keeps playing while the gallery scrolls;
+scrolling alone does not suspend preview animation.
+
 ### Catalog, state and engine control
 
 `model.py` locates Steam roots, parses library-folder metadata, scans the local
@@ -222,7 +228,7 @@ system libraries. Steam and downloaded wallpaper content stay on the host.
 
 `.github/workflows/appimage.yml` builds AppImages for `v*` tags and uploads
 the image and checksum to GitHub Releases. `workflow_dispatch` builds an
-artifact without publishing a release. The current release is `v0.0.26`; the
+artifact without publishing a release. The current release is `v0.0.36`; the
 release process targets x86_64.
 The AppImage bundles the project executable, CEF runtime, and renderer shared
 libraries such as GLEW, FFmpeg, mpv, and KissFFT. GTK/Python introspection,
@@ -270,9 +276,13 @@ behavior rather than embedding rules for particular Workshop items:
   flow maps are kept out of the mask-warp path.
 - Puppet image effect ordering preserves the authored eye-layer order and
   applies source-UV masks consistently with the image geometry.
+- In `fit` scaling mode, the wallpaper renderer draws the fitted image over a
+  GPU-generated, blurred zoom-fill of the same wallpaper. The extra fill pass
+  runs only for `fit`, keeps the main image unchanged, and maps correctly across
+  spanned displays; its blur radius stays consistent in output pixels.
 
-The renderer and AppImage were built successfully for `v0.0.26`, and the
-release workflow completed. Targeted visual checks of animated puppet scenes
+The renderer and AppImage were built successfully for `v0.0.36`, and its
+GitHub release workflow completed. Targeted visual checks of animated scenes
 were successful, but they are not an exhaustive pass over all Workshop
 content. Parser and packaging success alone do not prove that every scene
 matches its preview on every graphics driver.
@@ -408,7 +418,7 @@ packaging, renderer changes, this document, and the SceneScript API header.
 ## Current state
 
 The renderer, desktop application, and packaging changes described here are
-consolidated on the fork's `main`. Release `v0.0.26` contains the integrated
+consolidated on the fork's `main`. Release `v0.0.36` contains the integrated
 engine and frontend AppImage. This document describes the fork's current net
 changes against upstream; it does not claim that every Workshop scene has
 received an exhaustive visual audit.
