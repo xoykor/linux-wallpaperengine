@@ -145,6 +145,43 @@ SceneScript through a common `ScriptableObject` contract
 objects provide the lookup, so scripts can control puppet animation without
 wallpaper-specific branches.
 
+#### Reusable workflow for Puppet deformation issues
+
+Use this workflow when a facial feature, hair strand, limb or other part drifts,
+detaches or jitters during animation. It separates asset/parser problems from
+render-order and coordinate-space problems without adding item-specific rules:
+
+1. Compare the Workshop preview and packaged source assets with a repeatable
+   renderer capture at the same output size and animation time. If the asset is
+   already absent in the source, investigate package/asset lookup; if it moves
+   only during playback, inspect animation, transforms and effects.
+2. Trace the affected image through its parent and attachment chain, puppet
+   mesh, bone weights and animation layers. Validate that weighted bone indices
+   resolve against the selected skeleton and that parent transforms are updated
+   for each frame.
+3. Isolate a suspected effect or layer with controlled A/B runs, changing one
+   input at a time and recording the time and settings. This identifies which
+   stage causes the displacement while keeping the final correction in the
+   shared renderer pipeline.
+4. Check each effect's coordinate space and ordering. A source-UV displacement
+   that belongs to a skinned image must run before skinning so the displaced
+   pixels follow the mesh. Opacity and source-UV masks must use the same image
+   geometry; displacement vectors must remain vector data rather than being
+   treated as masks. Preserve the authored order of image/effect layers.
+5. Verify the fix over time and with structurally different Puppet content.
+   Keep the effect enabled, compare moving features against stable landmarks,
+   and check that alpha edges and masks stay attached. Disabling an effect or
+   adding an item-ID exception is useful only as a diagnostic, not as a generic
+   correction.
+
+These steps reflect the renderer invariants implemented in `CImage`: source-
+space effects run before skinning, opacity follows the source pixels, auxiliary
+maps are reprojected through the live puppet mesh when needed, and vector fields
+are not accidentally warped as opacity masks. Skeleton parsing separately
+validates layouts and bone indices, while invalid optional rig data falls back
+to bind-pose rendering. Together these rules make the fixes reusable across
+Puppet wallpapers that share the same failure mode.
+
 ### SceneScript runtime and render behavior
 
 The scripting changes expand SceneScript built-ins, vector/math/color adapters,
