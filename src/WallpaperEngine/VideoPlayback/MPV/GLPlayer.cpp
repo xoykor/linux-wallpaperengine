@@ -2,10 +2,10 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 
-#include <mpv/render_gl.h>
-#include <mpv/stream_cb.h>
 #include <algorithm>
 #include <cmath>
+#include <mpv/render_gl.h>
+#include <mpv/stream_cb.h>
 #include <utility>
 
 using namespace WallpaperEngine::VideoPlayback::MPV;
@@ -289,9 +289,8 @@ void GLPlayer::play () {
     if (this->m_file.has_value ()) {
 	// build the path to the video file
 	const std::string startOption = "start=" + std::to_string (this->m_startPosition);
-	const char* command[] = {
-	    "loadfile", this->m_file.value ().c_str (), "replace", startOption.c_str (), nullptr
-	};
+	const char* command[]
+	    = { "loadfile", this->m_file.value ().c_str (), "replace", startOption.c_str (), nullptr };
 
 	if (mpv_command (this->m_handle, command) < 0) {
 	    sLog.exception ("Cannot load video to play");
@@ -327,8 +326,7 @@ double GLPlayer::getPlaybackPosition () const {
     }
 
     double position = 0.0;
-    if (mpv_get_property (this->m_handle, "time-pos", MPV_FORMAT_DOUBLE, &position) < 0
-	|| !std::isfinite (position)) {
+    if (mpv_get_property (this->m_handle, "time-pos", MPV_FORMAT_DOUBLE, &position) < 0 || !std::isfinite (position)) {
 	return this->m_startPosition;
     }
 
