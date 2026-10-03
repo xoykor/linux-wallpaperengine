@@ -4,6 +4,9 @@
 
 #include <mpv/render_gl.h>
 #include <mpv/stream_cb.h>
+#include <algorithm>
+#include <cmath>
+#include <utility>
 
 using namespace WallpaperEngine::VideoPlayback::MPV;
 
@@ -109,6 +112,13 @@ void GLPlayer::setAudioEnabled (bool enabled) {
 	sLog.exception ("Cannot change mpv audio selection after playback has started");
     }
     this->m_audioEnabled = enabled;
+}
+
+void GLPlayer::setStartPosition (const double seconds) {
+    if (this->m_handle) {
+	sLog.exception ("Cannot change the start position after playback has started");
+    }
+    this->m_startPosition = std::isfinite (seconds) ? std::max (0.0, seconds) : 0.0;
 }
 
 void GLPlayer::setPaused () {
@@ -278,7 +288,10 @@ void GLPlayer::play () {
 
     if (this->m_file.has_value ()) {
 	// build the path to the video file
-	const char* command[] = { "loadfile", this->m_file.value ().c_str (), nullptr };
+	const std::string startOption = "start=" + std::to_string (this->m_startPosition);
+	const char* command[] = {
+	    "loadfile", this->m_file.value ().c_str (), "replace", startOption.c_str (), nullptr
+	};
 
 	if (mpv_command (this->m_handle, command) < 0) {
 	    sLog.exception ("Cannot load video to play");
@@ -306,4 +319,19 @@ void GLPlayer::stop () {
 	mpv_terminate_destroy (this->m_handle);
 	this->m_handle = nullptr;
     }
+}
+
+double GLPlayer::getPlaybackPosition () const {
+    if (!this->m_handle) {
+	return this->m_startPosition;
+    }
+
+    double position = 0.0;
+    if (mpv_get_property (this->m_handle, "time-pos", MPV_FORMAT_DOUBLE, &position) < 0
+	|| !std::isfinite (position)) {
+	return this->m_startPosition;
+    }
+
+    this->m_startPosition = std::max (0.0, position);
+    return this->m_startPosition;
 }

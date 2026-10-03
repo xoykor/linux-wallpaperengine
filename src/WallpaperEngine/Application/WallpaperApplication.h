@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <random>
+#include <unordered_map>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
@@ -72,6 +73,7 @@ public:
      * Gets the output
      */
     [[nodiscard]] const WallpaperEngine::Render::Drivers::Output::Output& getOutput () const;
+    [[nodiscard]] double getVideoResumePosition (const Wallpaper& wallpaper) const;
     /**
      * Sets the destination framebuffer for rendering. If not called, the default framebuffer will be used.
      */
@@ -178,6 +180,7 @@ private:
     /** Maps screens to backgrounds */
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};
     std::map<std::string, ActivePlaylist> m_activePlaylists {};
+    std::unordered_map<const Wallpaper*, double> m_videoResumePositions {};
 
     std::unique_ptr<WallpaperEngine::Audio::Drivers::Detectors::AudioPlayingDetector> m_audioDetector = nullptr;
     std::unique_ptr<WallpaperEngine::Audio::AudioContext> m_audioContext = nullptr;

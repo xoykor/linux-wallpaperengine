@@ -8,6 +8,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/RenderContext.h"
+#include "WallpaperEngine/Render/Wallpapers/CVideo.h"
 
 #include "WallpaperEngine/Data/Dumpers/StringPrinter.h"
 #include "WallpaperEngine/Data/Parsers/ProjectParser.h"
@@ -807,6 +808,12 @@ void WallpaperApplication::prepareOutputs () {
     // initialize render context
     m_renderContext
 	= std::make_unique<WallpaperEngine::Render::RenderContext> (*m_videoDriver, *this, *this->m_mediaSource);
+
+    if (!this->makeAnyViewportCurrent ()) {
+	sLog.error ("Cannot prepare wallpaper resources without an active output");
+	return;
+    }
+
     // create a new background for each screen
 
     // set all the specific wallpapers required (skip span group synthetic keys)
@@ -962,7 +969,18 @@ void WallpaperApplication::render () {
 	if (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
 	    return;
 	}
-	m_renderContext->setPause (false);
+	if (!this->m_context.state.general.keepRunning) {
+	    return;
+	}
+	if (!this->makeAnyViewportCurrent ()) {
+	    return;
+	}
+
+	// The covered desktop does not need the wallpaper's scene textures or framebuffers.
+	// Recreate them only after the covering window is gone. The process and audio
+	// event loop stay alive; this deliberately avoids suspending the process.
+	this->prepareOutputs ();
+	this->m_videoResumePositions.clear ();
 
 	// account for paused duration in playlist timers
 	const auto pausedNow = std::chrono::steady_clock::now ();
@@ -1032,8 +1050,16 @@ void WallpaperApplication::render () {
 	if (this->m_fullScreenDetector->anythingFullscreen () && this->m_context.state.general.keepRunning) {
 	    this->m_isPaused = true;
 	    this->m_pauseStart = std::chrono::steady_clock::now ();
+	    this->m_videoResumePositions.clear ();
+	    for (const auto& wallpaper : this->m_renderContext->getWallpapers () | std::views::values) {
+		if (const auto* video = dynamic_cast<const Render::Wallpapers::CVideo*> (wallpaper.get ())) {
+		    this->m_videoResumePositions[&video->getWallpaperData ()] = video->getPlaybackPosition ();
+		}
+	    }
 
 	    m_renderContext->setPause (true);
+	    m_renderContext.reset ();
+	    glFinish ();
 	    return;
 	}
     }
@@ -1071,6 +1097,10 @@ void WallpaperApplication::show () {
 }
 
 void WallpaperApplication::update (Render::Drivers::Output::OutputViewport* viewport) {
+    if (!this->m_renderContext) {
+	return;
+    }
+
     // render the scene
     m_renderContext->render (viewport);
 }
@@ -1088,6 +1118,11 @@ ApplicationContext& WallpaperApplication::getContext () const { return this->m_c
 
 const WallpaperEngine::Render::Drivers::Output::Output& WallpaperApplication::getOutput () const {
     return this->m_renderContext->getOutput ();
+}
+
+double WallpaperApplication::getVideoResumePosition (const Wallpaper& wallpaper) const {
+    const auto it = this->m_videoResumePositions.find (&wallpaper);
+    return it != this->m_videoResumePositions.end () ? it->second : 0.0;
 }
 
 void WallpaperApplication::setDestinationFramebuffer (GLuint framebuffer) {

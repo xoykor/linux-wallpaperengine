@@ -18,6 +18,7 @@ public:
     ~CVideo () override;
 
     const Data::Model::Video& getVideo () const;
+    [[nodiscard]] double getPlaybackPosition () const;
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;

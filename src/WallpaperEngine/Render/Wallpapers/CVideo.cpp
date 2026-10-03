@@ -1,5 +1,6 @@
 #include "CVideo.h"
 
+#include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
@@ -31,6 +32,7 @@ CVideo::CVideo (
     const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
     this->m_player->setAudioEnabled (audioSettings.enabled);
     this->m_player->setVolume (audioSettings.enabled ? audioSettings.volume * 100.0 / 128.0 : 0.0);
+    this->m_player->setStartPosition (context.getApp ().getVideoResumePosition (wallpaper));
     // make sure the video has at least one usage marked, this ensures the video plays
     this->m_player->incrementUsageCount ();
 }
@@ -54,6 +56,8 @@ void CVideo::renderFrame (const glm::ivec4& viewport) {
 }
 
 const Data::Model::Video& CVideo::getVideo () const { return *this->getWallpaperData ().as<Data::Model::Video> (); }
+
+double CVideo::getPlaybackPosition () const { return this->m_player->getPlaybackPosition (); }
 
 void CVideo::setPause (bool newState) {
     if (newState) {

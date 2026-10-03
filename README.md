@@ -60,6 +60,10 @@ its library. It does not download Workshop content itself or replace Steam.
   `wlr-layer-shell` protocol, so wallpaper rendering there is not supported.
 - On X11, monitor discovery uses `xrandr`. A compositor or desktop that paints
   over the root background can hide the rendered wallpaper.
+- When another app is maximized or fullscreen, the renderer releases the
+  wallpaper scene's textures and framebuffers, then recreates them when the
+  app is restored. It keeps the renderer process alive; the GPU driver still
+  controls the VRAM clock and may keep display buffers allocated.
 - The renderer requires a working OpenGL setup. The specific dependencies and
   supported options are documented by the
   [upstream project](https://github.com/Almamu/linux-wallpaperengine#readme).
