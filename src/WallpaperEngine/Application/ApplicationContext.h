@@ -124,7 +124,7 @@ public:
 	    WINDOW_MODE mode;
 	    /** Maximum FPS */
 	    int maximumFPS;
-	    /** Indicates if pausing should happen when something goes fullscreen */
+	    /** Indicates if pausing should happen when an app is maximized or fullscreen */
 	    bool pauseOnFullscreen;
 	    /**
 	     * Wayland-only: if true, only consider fullscreen toplevels that are also activated.

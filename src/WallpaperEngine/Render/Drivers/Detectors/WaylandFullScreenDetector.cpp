@@ -46,6 +46,8 @@ namespace {
     struct FullscreenState {
 	bool pending = false;
 	bool current = false;
+	bool pendingMaximized = false;
+	bool currentMaximized = false;
 	bool pendingActivated = false;
 	bool currentActivated = false;
 	std::string appId {};
@@ -73,9 +75,13 @@ namespace {
 	const auto begin = static_cast<uint32_t*> (state->data);
 
 	toplevel->pending = false;
+	toplevel->pendingMaximized = false;
 	toplevel->pendingActivated = false;
 
 	for (auto it = begin; it < begin + state->size / sizeof (uint32_t); ++it) {
+	    if (*it == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED) {
+		toplevel->pendingMaximized = true;
+	    }
 	    if (*it == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN) {
 		toplevel->pending = true;
 	    }
@@ -124,7 +130,9 @@ namespace {
     void toplevelHandleDone (void* data, struct zwlr_foreign_toplevel_handle_v1* handle) {
 	const auto toplevel = static_cast<FullscreenState*> (data);
 
-	const bool pendingRelevant = isFullscreenRelevant (*toplevel);
+	const bool pendingRelevant = isFullscreenRelevant (*toplevel)
+	    || isRelevant (toplevel->data->detector->getApplicationContext (), toplevel->pendingMaximized,
+		   toplevel->pendingActivated, toplevel->appId);
 	const bool currentRelevant = isCurrentlyRelevant (*toplevel);
 
 	if (currentRelevant != pendingRelevant) {
@@ -140,6 +148,7 @@ namespace {
 	}
 
 	toplevel->current = toplevel->pending;
+	toplevel->currentMaximized = toplevel->pendingMaximized;
 	toplevel->currentActivated = toplevel->pendingActivated;
     }
 
@@ -147,7 +156,9 @@ namespace {
 	const auto toplevel = static_cast<FullscreenState*> (data);
 
 	// If it was counted as relevant fullscreen, remove it.
-	const bool currentRelevant = isCurrentlyRelevant (*toplevel);
+	const bool currentRelevant = isCurrentlyRelevant (*toplevel)
+	    || isRelevant (toplevel->data->detector->getApplicationContext (), toplevel->currentMaximized,
+		   toplevel->currentActivated, toplevel->appId);
 
 	if (currentRelevant) {
 	    if (*toplevel->data->fullscreenCount == 0) {
@@ -180,6 +191,8 @@ namespace {
 	const auto toplevel = new FullscreenState {
 	    .pending = false,
 	    .current = false,
+	    .pendingMaximized = false,
+	    .currentMaximized = false,
 	    .pendingActivated = false,
 	    .currentActivated = false,
 	    .appId = {},

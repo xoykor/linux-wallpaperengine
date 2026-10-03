@@ -771,7 +771,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.store_into (this->settings.render.maximumFPS);
 
     performanceGroup.add_argument ("--no-fullscreen-pause")
-	.help ("Prevents the background pausing when an app is fullscreen")
+	.help ("Prevents the background pausing when an app is maximized or fullscreen")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.render.pauseOnFullscreen = false; });
 

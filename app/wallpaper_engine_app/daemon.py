@@ -220,7 +220,7 @@ class WallpaperDaemon:
         renderer = self._resolve_renderer()
         command = [
             renderer, "--disable-mouse", "--fps", str(self.config["fps"]),
-            "--layer", "bottom", "--no-fullscreen-pause",
+            "--layer", "bottom",
         ]
         environment = self._renderer_environment()
         if self.config["mute"]:
