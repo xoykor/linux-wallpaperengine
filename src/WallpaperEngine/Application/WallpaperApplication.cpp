@@ -972,14 +972,14 @@ void WallpaperApplication::render () {
 	if (!this->m_context.state.general.keepRunning) {
 	    return;
 	}
-	if (!this->makeAnyViewportCurrent ()) {
-	    return;
-	}
-
 	// The covered desktop does not need the wallpaper's scene textures or framebuffers.
 	// Recreate them only after the covering window is gone. The process and audio
 	// event loop stay alive; this deliberately avoids suspending the process.
 	this->prepareOutputs ();
+
+	if (!this->makeAnyViewportCurrent ()) {
+	    return;
+	}
 	this->m_videoResumePositions.clear ();
 
 	// account for paused duration in playlist timers
