@@ -10,7 +10,6 @@ import shutil
 import socket
 import subprocess
 import tempfile
-import time
 from typing import Any
 import unicodedata
 
@@ -30,17 +29,11 @@ def _xdg_dir(variable: str, fallback: Path) -> Path:
 CONFIG_DIR = _xdg_dir("XDG_CONFIG_HOME", Path.home() / ".config") / APP_NAME
 STATE_DIR = _xdg_dir("XDG_STATE_HOME", Path.home() / ".local/state") / APP_NAME
 _runtime = os.environ.get("XDG_RUNTIME_DIR")
-_appimage_mode = os.environ.get("LINUX_WALLPAPERENGINE_APPIMAGE") == "1"
 _socket_dir = Path(_runtime) if _runtime else STATE_DIR
-_appimage_version = re.sub(
-    r"[^A-Za-z0-9._-]+", "-", os.environ.get("LINUX_WALLPAPERENGINE_APPIMAGE_VERSION", "")
-).strip(".-_")[:48]
-_instance_suffix = f"-appimage-{_appimage_version or 'current'}" if _appimage_mode else ""
-SOCKET_FILE = _socket_dir / f"linux-wallpaperengine{_instance_suffix}-app.sock"
-LEGACY_APPIMAGE_SOCKET_FILE = _socket_dir / "linux-wallpaperengine-appimage-app.sock"
+SOCKET_FILE = _socket_dir / "linux-wallpaperengine-app.sock"
 CONFIG_FILE = CONFIG_DIR / "app.json"
 UI_PREFERENCES_FILE = CONFIG_DIR / "ui.json"
-STATUS_FILE = STATE_DIR / f"status{_instance_suffix}.json"
+STATUS_FILE = STATE_DIR / "status.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "rotation_enabled": True,
@@ -313,21 +306,13 @@ def set_app_autostart(enabled: bool) -> None:
         return
 
     launcher: Path | None = None
-    if _appimage_mode:
-        raw_launcher = (
-            os.environ.get("LINUX_WALLPAPERENGINE_APPIMAGE_PATH")
-            or os.environ.get("APPIMAGE")
-        )
-        if raw_launcher:
-            launcher = Path(raw_launcher).expanduser().resolve()
+    candidate = Path.home() / ".local/bin/linux-wallpaperengine-app"
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        launcher = candidate
     else:
-        candidate = Path.home() / ".local/bin/linux-wallpaperengine-app"
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            launcher = candidate
-        else:
-            located = shutil.which("linux-wallpaperengine-app")
-            if located:
-                launcher = Path(located).resolve()
+        located = shutil.which("linux-wallpaperengine-app")
+        if located:
+            launcher = Path(located).resolve()
     if launcher is None or not launcher.is_file() or not os.access(launcher, os.X_OK):
         raise RuntimeError(tr("Não foi possível localizar o inicializador do aplicativo."))
     if any(ord(character) < 32 for character in str(launcher)):
@@ -360,52 +345,6 @@ def set_app_autostart(enabled: bool) -> None:
 
 def save_status(status: dict[str, Any]) -> None:
     _write_json(STATUS_FILE, status)
-
-
-def _request_daemon(socket_path: Path, command: str) -> dict[str, Any] | None:
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(0.25)
-            client.connect(str(socket_path))
-            client.sendall(json.dumps({"command": command}).encode("utf-8") + b"\n")
-            with client.makefile("rb") as reader:
-                raw = reader.readline(1024 * 1024 + 1)
-        response = json.loads(raw)
-        if not isinstance(response, dict) or response.get("ok") is not True:
-            return None
-        status = response.get("status")
-        return status if isinstance(status, dict) else None
-    except (OSError, ValueError, UnicodeError, TypeError):
-        return None
-
-
-def stop_previous_appimage_daemons(timeout: float = 4.0) -> bool:
-    """Retire earlier AppImage daemons and their mounted runtimes before upgrade."""
-    if not _appimage_mode:
-        return True
-
-    previous = set(_socket_dir.glob("linux-wallpaperengine-appimage-*-app.sock"))
-    previous.add(LEGACY_APPIMAGE_SOCKET_FILE)
-    previous.discard(SOCKET_FILE)
-    pending: dict[Path, bool] = {}
-    for socket_path in previous:
-        if _request_daemon(socket_path, "shutdown") is not None:
-            pending[socket_path] = True
-            continue
-        # AppImages before the shutdown command only know how to stop playback.
-        status = _request_daemon(socket_path, "stop")
-        if status is not None and status.get("renderer_pid") is not None:
-            pending[socket_path] = False
-
-    deadline = time.monotonic() + max(0.0, timeout)
-    while pending and time.monotonic() < deadline:
-        for socket_path, shutting_down in tuple(pending.items()):
-            status = _request_daemon(socket_path, "status")
-            if status is None or (not shutting_down and status.get("renderer_pid") is None):
-                pending.pop(socket_path, None)
-        if pending:
-            time.sleep(0.1)
-    return not pending
 
 
 def read_status() -> dict[str, Any]:

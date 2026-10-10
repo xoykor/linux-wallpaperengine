@@ -95,7 +95,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.set_default_size(*self._initial_size)
         self.set_size_request(680, 440)
         self.add_css_class("glass-window")
-        self._appimage_renderer_path = os.environ.get("LINUX_WALLPAPERENGINE_RENDERER_PATH")
         # Apply the KWin hint once the X11/XWayland surface is mapped and has
         # a stable XID. The helper safely no-ops on other compositors.
         self.connect("map", lambda *_: enable_backdrop_blur(self))
@@ -1765,8 +1764,6 @@ class WallpaperWindow(Gtk.ApplicationWindow):
                             tr("Configure o serviço e o caminho do motor instalado neste computador."))
         self.autostart_switch = Gtk.Switch()
         self.autostart_switch.connect("notify::active", self._autostart_changed)
-        if os.environ.get("LINUX_WALLPAPERENGINE_APPIMAGE") == "1":
-            self.autostart_switch.set_sensitive(False)
         self._widget_row(
             application,
             tr("Ativar o serviço com a sessão"),
@@ -1800,13 +1797,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self.renderer_entry = Gtk.Entry()
         self.renderer_entry.set_placeholder_text(tr("Detectar linux-wallpaperengine no PATH"))
         self.renderer_entry.set_hexpand(True)
-        if self._appimage_renderer_path:
-            self.renderer_entry.set_text(tr("Motor incluído nesta AppImage"))
-            self.renderer_entry.set_editable(False)
-            self.renderer_entry.set_tooltip_text(self._appimage_renderer_path)
         renderer_save = Gtk.Button(label=tr("Salvar"))
-        if self._appimage_renderer_path:
-            renderer_save.set_visible(False)
         renderer_save.connect(
             "clicked",
             lambda *_: self._set_settings(
@@ -1819,7 +1810,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
         self._widget_row(
             application,
             tr("Executável do motor"),
-            tr("Motor integrado à AppImage." if self._appimage_renderer_path else "Caminho personalizado, se necessário."),
+            tr("Caminho personalizado, se necessário."),
             renderer_controls,
         )
 
@@ -2289,11 +2280,8 @@ class WallpaperWindow(Gtk.ApplicationWindow):
             self.scaling_drop.set_selected(SCALINGS.index(scaling) if scaling in SCALINGS else 0)
             self._refresh_language_choices(self.config.get("language", "auto"))
             if not self.renderer_entry.has_focus():
-                if self._appimage_renderer_path:
-                    self.renderer_entry.set_text(tr("Motor incluído nesta AppImage"))
-                else:
-                    renderer = str(self.config.get("renderer_path") or "auto")
-                    self.renderer_entry.set_text("" if renderer == "auto" else renderer)
+                renderer = str(self.config.get("renderer_path") or "auto")
+                self.renderer_entry.set_text("" if renderer == "auto" else renderer)
         finally:
             self._updating_controls = False
         self._theme_updating = True
@@ -2468,10 +2456,7 @@ class WallpaperWindow(Gtk.ApplicationWindow):
 
     def _toggle_power(self, _button: Gtk.Button) -> None:
         if not self.service_available:
-            if self._appimage_renderer_path:
-                self._command("start")
-            else:
-                self._systemctl("start")
+            self._systemctl("start")
         elif self.status.get("running"):
             self._command("stop")
         else:

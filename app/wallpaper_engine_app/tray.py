@@ -1,12 +1,16 @@
-"""Optional Ayatana tray helper kept in a GTK 3 subprocess.
+"""Optional tray helper kept in a GTK 3 subprocess.
 
 The control panel uses GTK 4. Keeping the status icon in a separate process
 avoids loading GTK 3 and GTK 4 introspection namespaces into one process.
+
+Either AyatanaAppIndicator3 or the legacy AppIndicator3 namespace satisfies
+the helper; only a system with neither reports an error.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 from pathlib import Path
 import secrets
@@ -14,6 +18,7 @@ import socket
 import subprocess
 import sys
 from threading import Event, Thread
+from types import ModuleType
 from typing import Callable
 
 from gi.repository import GLib
@@ -139,6 +144,30 @@ def _notify_parent(path: str, message: str) -> None:
         client.sendall(message.encode("utf-8"))
 
 
+def _require_indicator() -> ModuleType:
+    """Return the first available AppIndicator introspection namespace.
+
+    Distributions ship either AyatanaAppIndicator3 (ayatana) or the legacy
+    AppIndicator3; both expose the same Indicator API used below.
+    """
+    import gi
+
+    for namespace in ("AyatanaAppIndicator3", "AppIndicator3"):
+        try:
+            gi.require_version(namespace, "0.1")
+            return importlib.import_module(f"gi.repository.{namespace}")
+        except Exception:
+            # Missing typelib or introspection module: try the next namespace.
+            continue
+    raise RuntimeError(
+        tr(
+            "A bandeja precisa do Ayatana AppIndicator ou do AppIndicator3. "
+            "Instale: Debian/Ubuntu gir1.2-ayatanaappindicator3-0.1, "
+            "Fedora libayatana-appindicator-gtk3, Arch libayatana-appindicator."
+        )
+    )
+
+
 def _helper_main(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--helper", action="store_true")
@@ -152,9 +181,9 @@ def _helper_main(arguments: list[str]) -> int:
         import gi
 
         gi.require_version("Gtk", "3.0")
-        gi.require_version("AyatanaAppIndicator3", "0.1")
-        from gi.repository import AyatanaAppIndicator3, Gtk
+        from gi.repository import Gtk
 
+        AppIndicator = _require_indicator()
         if options.icon_file:
             icon = Path(options.icon_file)
             if icon.is_file():
@@ -164,12 +193,12 @@ def _helper_main(arguments: list[str]) -> int:
                     else icon.parent
                 )
                 Gtk.IconTheme.get_default().append_search_path(str(icon_theme_dir))
-        indicator = AyatanaAppIndicator3.Indicator.new(
+        indicator = AppIndicator.Indicator.new(
             "linux-wallpaperengine-app",
             "linux-wallpaperengine-app",
-            AyatanaAppIndicator3.IndicatorCategory.APPLICATION_STATUS,
+            AppIndicator.IndicatorCategory.APPLICATION_STATUS,
         )
-        indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
+        indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
         if options.icon_file:
             icon = Path(options.icon_file)
             icon_theme_dir = (

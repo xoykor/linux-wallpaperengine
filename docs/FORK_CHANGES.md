@@ -14,7 +14,7 @@ totals; the history includes imported and merged upstream work.
 
 ## Overview
 
-The fork adds four connected areas of work:
+The fork adds three connected areas of work:
 
 1. A GTK 4 desktop application for finding, previewing and controlling local
    Steam Workshop wallpapers, with favorites, playlists, per-display pins,
@@ -22,15 +22,13 @@ The fork adds four connected areas of work:
 2. Linux renderer and SceneScript compatibility work, including multi-display
    startup, camera and image composition handling, Workshop parsing, skeletal
    models, video playback and shader compatibility.
-3. A bundled AppImage path containing both the GTK application and the C++
-   renderer, with runtime selection that prefers the bundled engine.
-4. Documentation, installation helpers, CI checks and a playlist rotation
+3. Documentation, installation helpers, CI checks and a playlist rotation
    utility.
 
 The GTK application does not download wallpapers or authenticate to Steam. It
 reads the Steam installation and Workshop files already present on the machine.
-The AppImage includes the renderer and frontend, but intentionally uses the
-user's Steam Workshop content and host graphics/runtime libraries.
+The renderer and frontend intentionally reuse the user's Steam Workshop content
+and host graphics/runtime libraries.
 
 ## Desktop application
 
@@ -60,10 +58,9 @@ wallpapers per row. Visual behavior still depends on GTK's FlowBox allocation
 and should be checked on the target desktop.
 
 Gallery scrolling uses GTK's native scroll path instead of a second wheel
-animation that competes with the scroller's adjustment. The AppImage defaults
-GTK's scene-graph renderer to Vulkan while honoring an explicit
-`GSK_RENDERER` override. A hovered GIF keeps playing while the gallery scrolls;
-scrolling alone does not suspend preview animation.
+animation that competes with the scroller's adjustment. A hovered GIF keeps
+playing while the gallery scrolls; scrolling alone does not suspend preview
+animation.
 
 ### Catalog, state and engine control
 
@@ -80,10 +77,7 @@ assignments, advances playlists on a configurable interval, honors favorite
 and shuffle options, and reports renderer status to the GUI. `ipc.py` defines
 the local command channel; `__main__.py` starts the GUI/daemon entry points.
 The desktop systemd service keeps the renderer running after the control
-window closes. AppImage mode starts the daemon through a separate instance
-of the same AppImage so its bundled engine remains available when the control
-window closes. A later AppImage version shuts down the older daemon during
-upgrade. AppImage mode does not enable a system-wide or login autostart service.
+window closes.
 
 ### Appearance, localization and input
 
@@ -213,35 +207,20 @@ Linux display/input changes cover GLFW and Wayland mouse state, output viewports
 screen roots/spans and monitor geometry. They are intended to match the
 renderer’s per-screen surface and SceneScript coordinate spaces.
 
-## AppImage, install and release flow
-
-`packaging/appimage/build-appimage.sh` stages the GTK Python package, C++
-renderer, CEF files, desktop entry and icon in one AppDir. It strips CEF debug
-sections, runs pinned `linuxdeploy` to collect the renderer's shared-library
-dependencies, checks the resulting runtime search path, then runs
-`appimagetool` and writes a portable SHA-256 sidecar. Temporary AppDir files
-are removed when packaging ends. It does not install the engine into the host
-filesystem. `packaging/appimage/AppRun` selects the bundled renderer first,
-then starts the desktop frontend; bundled library paths are applied only to
-the renderer child so the host GTK Python bindings keep using their matching
-system libraries. Steam and downloaded wallpaper content stay on the host.
-
-`.github/workflows/appimage.yml` builds AppImages for `v*` tags and uploads
-the image and checksum to GitHub Releases. `workflow_dispatch` builds an
-artifact without publishing a release. The current release is `v0.0.36`; the
-release process targets x86_64.
-The AppImage bundles the project executable, CEF runtime, and renderer shared
-libraries such as GLEW, FFmpeg, mpv, and KissFFT. GTK/Python introspection,
-graphics drivers, and platform libraries still need to be available on the
-system. The exact host requirements are listed in
-[`packaging/appimage/README.md`](../packaging/appimage/README.md).
+## Install and release flow
 
 `app/install.sh` installs the optional desktop control app for the current
 user, creates its desktop entry and user service, and can remove those user
-files. It is separate from packaging the AppImage and does not install or
-replace the engine using a system package manager. `contrib/rotation/` contains
-an independent playlist rotation service/helper for users who do not use the
-GTK control app.
+files. It does not install or replace the engine using a system package
+manager. `contrib/rotation/` contains an independent playlist rotation
+service/helper for users who do not use the GTK control app.
+
+The former single-file bundle build, its runtime launcher, and the release
+workflow that published it were removed from the fork. Native installation is
+now the only supported distribution path: build the renderer from source and
+install the desktop app with `app/install.sh`, or install the renderer through
+the Arch PKGBUILD under `packaging/archlinux/`, which `.github/workflows/arch.yml`
+publishes to the AUR as `linux-wallpaperengine-git`.
 
 ## CI and regression coverage
 
@@ -281,21 +260,20 @@ behavior rather than embedding rules for particular Workshop items:
   runs only for `fit`, keeps the main image unchanged, and maps correctly across
   spanned displays; its blur radius stays consistent in output pixels.
 
-The renderer and AppImage were built successfully for `v0.0.36`, and its
-GitHub release workflow completed. Targeted visual checks of animated scenes
+The renderer was built successfully for `v0.0.36`, and its GitHub release
+workflow completed. Targeted visual checks of animated scenes
 were successful, but they are not an exhaustive pass over all Workshop
 content. Parser and packaging success alone do not prove that every scene
 matches its preview on every graphics driver.
 
 ## Complete net file inventory
 
-The following list is the complete 104-path inventory from the current net diff
+The following list is the path inventory from the current net diff
 against upstream `main`, including the desktop application, integrated
 packaging, renderer changes, this document, and the SceneScript API header.
 
 ### Build and automation
 
-- `.github/workflows/appimage.yml` — AppImage build and tag-release workflow.
 - `.github/workflows/codefactor-diagnostics.yml` — informational static-analysis diagnostics on branch pushes and pull requests.
 - `.github/workflows/cmake.yml` — desktop app checks, C++ build, formatting and CI.
 - `.github/workflows/tests.yml` — engine unit-test workflow.
@@ -323,14 +301,11 @@ packaging, renderer changes, this document, and the SceneScript API header.
 - `app/wallpaper_engine_app/theme.py` — GTK theme and accent preferences.
 - `app/wallpaper_engine_app/tray.py` — tray icon, menu and window visibility controls.
 
-### Optional playlist rotation and AppImage
+### Optional playlist rotation
 
 - `contrib/rotation/install.sh` — optional rotation service installer.
 - `contrib/rotation/linux-wallpaperengine-rotation.service` — systemd unit.
 - `contrib/rotation/wallpaper-engine-rotate.py` — standalone rotation helper.
-- `packaging/appimage/AppRun` — AppImage runtime launcher.
-- `packaging/appimage/README.md` — AppImage build/runtime documentation.
-- `packaging/appimage/build-appimage.sh` — AppDir staging and packaging.
 
 ### Fork documentation
 
@@ -418,7 +393,9 @@ packaging, renderer changes, this document, and the SceneScript API header.
 ## Current state
 
 The renderer, desktop application, and packaging changes described here are
-consolidated on the fork's `main`. Release `v0.0.36` contains the integrated
-engine and frontend AppImage. This document describes the fork's current net
+consolidated on the fork's `main`. Release `v0.0.36` was published as an
+integrated engine-and-frontend bundle; that bundle flow has since been removed
+and native installation is the only supported distribution path. This document
+describes the fork's current net
 changes against upstream; it does not claim that every Workshop scene has
 received an exhaustive visual audit.

@@ -70,46 +70,66 @@ its library. It does not download Workshop content itself or replace Steam.
 
 ## Install
 
-Choose the prebuilt AppImage or build the renderer and desktop app from source.
-
-### AppImage release (x86_64)
-
-Download the latest `.AppImage` and matching `.sha256` file from the
-[Releases page](https://github.com/xoykor/linux-wallpaperengine/releases/latest).
-Save both into the same directory, with only the version you are installing
-there. Verify the download, make it executable, and launch it:
+Native installation is the only supported distribution path. A single
+command installs everything: the required system packages (the only step
+that uses sudo, and only after it asks for confirmation), the renderer
+built from this checkout when it is not already in `PATH` or
+`~/.local/bin`, and the desktop app with its user service.
 
 ```bash
-sha256sum --check linux-wallpaperengine-desktop-v*-x86_64.AppImage.sha256
-chmod +x linux-wallpaperengine-desktop-v*-x86_64.AppImage
-./linux-wallpaperengine-desktop-v*-x86_64.AppImage
+./install.sh
 ```
 
-The AppImage bundles the GTK frontend, renderer, and CEF runtime. The host still
-needs Python 3, PyGObject, GTK 4/GdkPixbuf introspection, GTK 3/NSS, OpenGL
-drivers, and shared libraries used by the renderer. See the
-[AppImage runtime notes](packaging/appimage/README.md) for details. Steam and
-the wallpapers downloaded through Steam are not included.
+The package step understands pacman (Arch Linux / CachyOS), apt
+(Debian / Ubuntu), dnf (Fedora), and zypper (openSUSE), and lists the
+exact missing packages before installing them. The renderer build updates
+the git submodules and, on a first run, downloads the matching Chromium
+Embedded Framework distribution, so it needs network access and can take
+several minutes to compile. `./install.sh --dry-run` prints every step
+without changing anything; `./install.sh --help` shows the full usage.
 
-### Build from source
+Verify the install by launching **Linux Wallpaper Engine** from the
+application menu or by running `~/.local/bin/linux-wallpaperengine-app`,
+and check that the background service is running:
+
+```bash
+systemctl --user status linux-wallpaperengine-app.service
+```
+
+On Arch Linux, the renderer is also published to the AUR as
+`linux-wallpaperengine-git`, built from
+[`packaging/archlinux/PKGBUILD`](packaging/archlinux/PKGBUILD) by
+[`.github/workflows/arch.yml`](.github/workflows/arch.yml).
+
+To remove the app and — when `./install.sh` built it — the renderer as
+well:
+
+```bash
+./install.sh --uninstall
+```
+
+Both commands keep your preferences in `~/.config/linux-wallpaperengine`;
+the uninstall also keeps your `build` directory.
+
+### Manual installation
+
+Only needed if you prefer to run each step yourself; otherwise use
+`./install.sh` above.
+
+#### Build the renderer from source
 
 The desktop app uses a `linux-wallpaperengine` renderer installed in `PATH` or
 `~/.local/bin`. Follow the
 [upstream instructions](https://github.com/Almamu/linux-wallpaperengine#readme)
 for renderer dependencies and Steam asset discovery. To build the renderer
-from this checkout, clone with submodules, configure, and build:
+from this checkout, clone with submodules, configure, build, and install it
+under your home directory:
 
 ```bash
 git clone --recurse-submodules https://github.com/xoykor/linux-wallpaperengine.git
 cd linux-wallpaperengine
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
-```
-
-Install it under your home directory and make the executable discoverable by
-the app:
-
-```bash
 cmake --install build --prefix "$HOME/.local/opt/linux-wallpaperengine"
 mkdir -p "$HOME/.local/bin"
 ln -s "$HOME/.local/opt/linux-wallpaperengine/linux-wallpaperengine" \
@@ -120,53 +140,93 @@ The CMake configure step downloads the matching Chromium Embedded Framework
 distribution and needs network access. If a package manager already installed
 the renderer, skip the renderer build and install steps.
 
-### Install the desktop app
+#### Install the desktop app
 
-The app requires Python 3, PyGObject with GTK 4 introspection, and a working
-user `systemd` manager. Install monitor discovery for your session as well:
-`kscreen-doctor` on KDE Plasma Wayland or `xrandr` on X11.
+`./app/install.sh` installs only the desktop app for the current user. It
+copies everything into your home directory — run it as your normal desktop
+user, never with `sudo` — and `./app/install.sh --uninstall` removes it
+again.
 
-For example, on Debian or Ubuntu:
+Prerequisites:
+
+- The `linux-wallpaperengine` renderer in `PATH` or `~/.local/bin`
+  (see [Build the renderer from source](#build-the-renderer-from-source)
+  above).
+- Python 3 with PyGObject and the GTK 4 and GdkPixbuf introspection typelibs.
+- A working user `systemd` manager (`systemctl --user`).
+- Monitor discovery for your session: `kscreen-doctor` on KDE Plasma Wayland
+  or `xrandr` on X11.
+- Optional, needed only for minimize-to-tray: the GTK 3 introspection plus
+  the Ayatana AppIndicator (or `AppIndicator3`) package. Without it, the tray
+  icon is unavailable and the rest of the app works normally.
+
+Install the required packages for your distribution:
 
 ```bash
-sudo apt install python3 python3-gi gir1.2-gtk-4.0
-# KDE Plasma monitor discovery:
-sudo apt install kscreen
-# X11 monitor discovery instead:
-sudo apt install x11-xserver-utils
+# Arch Linux / CachyOS
+sudo pacman -S python python-gobject gtk4 gdk-pixbuf2
+
+# Debian / Ubuntu
+sudo apt install python3 python3-gi gir1.2-gtk-4.0 gir1.2-gdkpixbuf-2.0
+
+# Fedora
+sudo dnf install python3 python3-gobject gtk4 gdk-pixbuf2
 ```
 
-On Fedora, the corresponding packages are typically `python3-gobject`,
-`gtk4`, `kscreen`, and `xrandr`.
+Monitor discovery (pick what your session uses) and the optional tray
+dependency:
 
-From the repository root, install as your normal desktop user, without `sudo`:
+```bash
+# Arch Linux / CachyOS
+sudo pacman -S xorg-xrandr kscreen     # monitor discovery
+sudo pacman -S gtk3 libayatana-appindicator   # tray (optional)
+
+# Debian / Ubuntu
+sudo apt install x11-xserver-utils kscreen     # monitor discovery
+sudo apt install gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1   # tray (optional)
+
+# Fedora
+sudo dnf install xrandr kscreen         # monitor discovery
+sudo dnf install gtk3 libayatana-appindicator-gtk3   # tray (optional)
+```
+
+From the repository root:
 
 ```bash
 ./app/install.sh
 ```
 
-On a first install, this adds the app to your desktop menu and enables and
-starts `linux-wallpaperengine-app.service`. Launch **Linux Wallpaper Engine**
-from the application menu or run:
+On a first install this copies the Python package to
+`~/.local/lib/linux-wallpaperengine-app`, adds a launcher at
+`~/.local/bin/linux-wallpaperengine-app`, adds the **Linux Wallpaper Engine**
+menu entry with its icon, and enables and starts
+`linux-wallpaperengine-app.service`.
+
+Verify the install as described in [Install](#install) above. Other useful
+service commands:
 
 ```bash
-~/.local/bin/linux-wallpaperengine-app
-```
-
-Useful service commands:
-
-```bash
-systemctl --user status linux-wallpaperengine-app.service
 systemctl --user restart linux-wallpaperengine-app.service
 journalctl --user -u linux-wallpaperengine-app.service -e
 ```
 
-To remove the app, its menu entry, and its service while keeping your settings
-and renderer:
+`./app/install.sh --uninstall` removes the app package, the launcher, the
+menu entry, the icon, the `linux-wallpaperengine-app.service` unit, and the
+`~/.config/autostart/linux-wallpaperengine-app.desktop` entry created by
+**"Iniciar o aplicativo com o sistema"**. Your preferences in
+`~/.config/linux-wallpaperengine` and the renderer installation are kept.
 
-```bash
-./app/install.sh --uninstall
-```
+### Startup switches and the service
+
+The application settings contain two separate startup switches:
+
+- **"Ativar o serviço com a sessão"** ("Start the service with the session")
+  enables or disables the `linux-wallpaperengine-app.service` systemd user
+  unit (`systemctl --user enable|disable`), so wallpapers keep rendering
+  after you log in even when the app window is closed.
+- **"Iniciar o aplicativo com o sistema"** ("Start the app with the system")
+  creates or removes `~/.config/autostart/linux-wallpaperengine-app.desktop`,
+  so the control app window itself opens when you log in.
 
 ## Use the renderer directly
 

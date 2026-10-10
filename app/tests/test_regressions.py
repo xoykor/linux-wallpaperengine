@@ -72,7 +72,6 @@ class UiPreferenceTests(unittest.TestCase):
 
             with (
                 mock.patch.object(model, "CONFIG_DIR", config_dir),
-                mock.patch.object(model, "_appimage_mode", False),
                 mock.patch.object(Path, "home", return_value=home),
             ):
                 model.set_app_autostart(True)
